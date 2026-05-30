@@ -1,0 +1,60 @@
+# Build outputs
+bin/
+obj/
+artifacts/
+publish/
+
+# .NET user/local files
+*.user
+*.suo
+*.rsuser
+*.DotSettings.user
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+
+# Rider / Visual Studio / VS Code
+.idea/
+.vs/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Nuxt / Node
+frontend/node_modules/
+frontend/.nuxt/
+frontend/.output/
+frontend/.cache/
+frontend/.nitro/
+frontend/dist/
+frontend/coverage/
+frontend/.data/
+frontend/.vercel/
+frontend/.netlify/
+frontend/.eslintcache
+
+# Package manager caches
+.pnpm-store/
+.npm/
+.yarn/
+
+# Local env/secrets
+.env
+.env.*
+!.env.example
+
+# Docker/local runtime state
+docker-compose.override.yml
+*.pid
+*.log
+logs/
+tmp/
+temp/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,38 @@
+services:
+  awg-easy:
+    image: dihasi/awg-easy:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: awg-easy
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.src_valid_mark: "1"
+    ports:
+      - "${WEB_PORT:-8080}:${WEB_PORT:-8080}/tcp"
+      - "${AWG_PORT:-51820}:${AWG_PORT:-51820}/udp"
+    environment:
+      DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      ASPNETCORE_URLS: "http://0.0.0.0:${WEB_PORT:-8080}"
+      AWG_PORT: "${AWG_PORT:-51820}"
+      AWG_SUBNET: "${AWG_SUBNET:-10.8.0.0/24}"
+      AWG_CLIENT_ALLOWED_IPS: "${AWG_CLIENT_ALLOWED_IPS:-0.0.0.0/0, ::/0}"
+      AWG_ENDPOINT_HOST: "${AWG_ENDPOINT_HOST:-127.0.0.1}"
+      AWG_CLIENT_DNS: "${AWG_CLIENT_DNS:-1.1.1.1, 8.8.8.8}"
+      AWG_CONFIG_PATH: "/etc/awg-easy/state.json"
+      AWG_INTERFACE_CONFIG_PATH: "/etc/amnezia/amneziawg/awg0.conf"
+      AWG_INTERFACE: "awg0"
+    volumes:
+      - awg-easy-state:/etc/awg-easy
+      - awg-easy-config:/etc/amnezia/amneziawg
+
+volumes:
+  awg-easy-state:
+  awg-easy-config:
