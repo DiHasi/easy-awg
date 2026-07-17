@@ -16,10 +16,12 @@
     "@iconify-json/simple-icons": "^1.2.83",
     "@nuxt/ui": "^4.7.1",
     "nuxt": "^4.4.6",
+    "qrcode": "^1.5.4",
     "tailwindcss": "^4.3.0"
   },
   "devDependencies": {
     "@nuxt/eslint": "^1.15.2",
+    "@types/qrcode": "^1.5.6",
     "eslint": "^10.4.0",
     "typescript": "^6.0.3",
     "vue-tsc": "^3.3.0"

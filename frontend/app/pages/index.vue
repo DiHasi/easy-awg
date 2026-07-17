@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import QRCode from 'qrcode'
+
 type ClientObfuscationOverrides = {
   jc?: number | null
   jmin?: number | null
@@ -31,6 +33,10 @@ type CreateClientBody = {
   obfuscation?: ClientObfuscationOverrides
 }
 
+type UpdateClientBody = {
+  name: string
+}
+
 type ClientStats = {
   id: string
   latestHandshakeAt?: string | null
@@ -52,6 +58,13 @@ type ClientTrafficRate = {
   uploadBytesPerSecond: number
 }
 
+type ClientShare = {
+  token: string
+  clientId: string
+  clientName: string
+  expiresAt: string
+}
+
 const toast = useToast()
 const config = useRuntimeConfig()
 
@@ -63,7 +76,15 @@ const saving = ref(false)
 const actionId = ref<string | null>(null)
 const errorMessage = ref<string | null>(null)
 const statsConnected = ref(false)
+const expandedClientIds = ref<Set<string>>(new Set())
 const createOpen = ref(false)
+const editOpen = ref(false)
+const qrOpen = ref(false)
+const qrLoading = ref(false)
+const qrClient = ref<Client | null>(null)
+const qrDataUrl = ref<string | null>(null)
+const editingClient = ref<Client | null>(null)
+const editName = ref('')
 const useObfuscation = ref(false)
 let statsSource: EventSource | null = null
 let previousStatsSnapshot: Record<string, ClientStats> | null = null
@@ -277,6 +298,51 @@ async function createClient() {
   }
 }
 
+function openEditClient(client: Client) {
+  editingClient.value = client
+  editName.value = client.name
+  editOpen.value = true
+}
+
+async function saveClientName() {
+  const client = editingClient.value
+  const name = editName.value.trim()
+
+  if (!client) {
+    return
+  }
+
+  if (!name) {
+    toast.add({ title: 'Name is required', color: 'error', icon: 'i-lucide-circle-alert' })
+    return
+  }
+
+  actionId.value = client.id
+
+  try {
+    const body: UpdateClientBody = { name }
+    const next = await apiFetch<Client>(`/clients/${client.id}`, {
+      method: 'PUT',
+      body: JSON.stringify(body)
+    })
+
+    clients.value = clients.value.map(item => item.id === next.id ? next : item)
+    editOpen.value = false
+    editingClient.value = null
+    editName.value = ''
+    toast.add({ title: 'Client renamed', color: 'success', icon: 'i-lucide-check' })
+  } catch (error) {
+    toast.add({
+      title: 'Could not rename client',
+      description: error instanceof Error ? error.message : undefined,
+      color: 'error',
+      icon: 'i-lucide-circle-alert'
+    })
+  } finally {
+    actionId.value = null
+  }
+}
+
 async function toggleClient(client: Client) {
   actionId.value = client.id
 
@@ -326,21 +392,67 @@ async function deleteClient(client: Client) {
   }
 }
 
+function isClientExpanded(client: Client) {
+  return expandedClientIds.value.has(client.id)
+}
+
+function toggleClientExpanded(client: Client) {
+  const next = new Set(expandedClientIds.value)
+  if (next.has(client.id)) {
+    next.delete(client.id)
+  } else {
+    next.add(client.id)
+  }
+
+  expandedClientIds.value = next
+}
+
+async function shareConfig(client: Client) {
+  actionId.value = client.id
+
+  try {
+    const share = await apiFetch<ClientShare>(`/clients/${client.id}/share`, {
+      method: 'POST'
+    })
+    const url = `${window.location.origin}/share/${share.token}`
+    window.open(url, '_blank', 'noopener,noreferrer')
+    toast.add({ title: 'Share link created', color: 'success', icon: 'i-lucide-share-2' })
+  } catch (error) {
+    toast.add({
+      title: 'Could not create share link',
+      description: error instanceof Error ? error.message : undefined,
+      color: 'error',
+      icon: 'i-lucide-circle-alert'
+    })
+  } finally {
+    actionId.value = null
+  }
+}
+
+function configFileName(client: Client, extension: string) {
+  const name = client.name.replace(/[^a-z0-9_.-]+/gi, '-')
+  return `${name}.${extension}`
+}
+
+async function fetchClientConfig(client: Client) {
+  const response = await fetch(apiUrl(`/clients/${client.id}/config`))
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`)
+  }
+
+  return await response.text()
+}
+
 async function downloadConfig(client: Client) {
   actionId.value = client.id
 
   try {
-    const response = await fetch(apiUrl(`/clients/${client.id}/config`))
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`)
-    }
-
-    const configText = await response.text()
+    const configText = await fetchClientConfig(client)
     const blob = new Blob([configText], { type: 'text/plain;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `${client.name.replace(/[^a-z0-9_.-]+/gi, '-')}.conf`
+    link.download = configFileName(client, 'conf')
     document.body.appendChild(link)
     link.click()
     link.remove()
@@ -355,6 +467,47 @@ async function downloadConfig(client: Client) {
   } finally {
     actionId.value = null
   }
+}
+
+async function openQrCode(client: Client) {
+  qrOpen.value = true
+  qrLoading.value = true
+  qrClient.value = client
+  qrDataUrl.value = null
+  actionId.value = client.id
+
+  try {
+    const configText = await fetchClientConfig(client)
+    qrDataUrl.value = await QRCode.toDataURL(configText, {
+      errorCorrectionLevel: 'M',
+      margin: 2,
+      width: 320
+    })
+  } catch (error) {
+    qrOpen.value = false
+    toast.add({
+      title: 'Could not generate QR code',
+      description: error instanceof Error ? error.message : undefined,
+      color: 'error',
+      icon: 'i-lucide-circle-alert'
+    })
+  } finally {
+    qrLoading.value = false
+    actionId.value = null
+  }
+}
+
+function downloadQrCode() {
+  if (!qrClient.value || !qrDataUrl.value) {
+    return
+  }
+
+  const link = document.createElement('a')
+  link.href = qrDataUrl.value
+  link.download = configFileName(qrClient.value, 'png')
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
 }
 
 function formatRelativeTime(value?: string | null) {
@@ -532,10 +685,15 @@ onBeforeUnmount(() => {
               :key="client.id"
               class="p-4"
             >
-              <div class="flex items-start justify-between gap-3">
+              <button
+                type="button"
+                class="flex w-full min-w-0 items-start justify-between gap-3 text-left"
+                :aria-expanded="isClientExpanded(client)"
+                @click="toggleClientExpanded(client)"
+              >
                 <div class="min-w-0">
                   <div class="flex min-w-0 items-center gap-2">
-                    <h2 class="truncate text-base font-medium text-highlighted">
+                    <h2 class="min-w-0 break-words text-base font-medium text-highlighted">
                       {{ client.name }}
                     </h2>
                     <UBadge
@@ -551,33 +709,71 @@ onBeforeUnmount(() => {
                     {{ client.address }}
                   </p>
                 </div>
+                <UIcon
+                  name="i-lucide-chevron-down"
+                  class="mt-1 size-5 shrink-0 text-muted transition-transform"
+                  :class="isClientExpanded(client) ? 'rotate-180' : ''"
+                />
+              </button>
 
-                <div class="flex shrink-0 gap-1">
-                  <UButton
-                    icon="i-lucide-download"
-                    color="neutral"
-                    variant="ghost"
-                    :loading="actionId === client.id"
-                    aria-label="Download config"
-                    @click="downloadConfig(client)"
-                  />
-                  <UButton
-                    :icon="client.enabled ? 'i-lucide-power-off' : 'i-lucide-power'"
-                    :color="client.enabled ? 'warning' : 'success'"
-                    variant="ghost"
-                    :loading="actionId === client.id"
-                    :aria-label="client.enabled ? 'Disable client' : 'Enable client'"
-                    @click="toggleClient(client)"
-                  />
-                  <UButton
-                    icon="i-lucide-trash-2"
-                    color="error"
-                    variant="ghost"
-                    :loading="actionId === client.id"
-                    aria-label="Delete client"
-                    @click="deleteClient(client)"
-                  />
-                </div>
+              <div
+                v-if="isClientExpanded(client)"
+                class="mt-4 grid grid-cols-3 gap-2"
+              >
+                <UButton
+                  icon="i-lucide-pencil"
+                  color="neutral"
+                  variant="subtle"
+                  block
+                  :loading="actionId === client.id"
+                  aria-label="Edit client name"
+                  @click="openEditClient(client)"
+                />
+                <UButton
+                  icon="i-lucide-download"
+                  color="neutral"
+                  variant="subtle"
+                  block
+                  :loading="actionId === client.id"
+                  aria-label="Download config"
+                  @click="downloadConfig(client)"
+                />
+                <UButton
+                  icon="i-lucide-share-2"
+                  color="neutral"
+                  variant="subtle"
+                  block
+                  :loading="actionId === client.id"
+                  aria-label="Share config"
+                  @click="shareConfig(client)"
+                />
+                <UButton
+                  icon="i-lucide-qr-code"
+                  color="neutral"
+                  variant="subtle"
+                  block
+                  :loading="actionId === client.id"
+                  aria-label="Generate QR code"
+                  @click="openQrCode(client)"
+                />
+                <UButton
+                  :icon="client.enabled ? 'i-lucide-power-off' : 'i-lucide-power'"
+                  :color="client.enabled ? 'warning' : 'success'"
+                  variant="subtle"
+                  block
+                  :loading="actionId === client.id"
+                  :aria-label="client.enabled ? 'Disable client' : 'Enable client'"
+                  @click="toggleClient(client)"
+                />
+                <UButton
+                  icon="i-lucide-trash-2"
+                  color="error"
+                  variant="subtle"
+                  block
+                  :loading="actionId === client.id"
+                  aria-label="Delete client"
+                  @click="deleteClient(client)"
+                />
               </div>
 
               <div class="mt-4 grid grid-cols-2 gap-3">
@@ -668,7 +864,9 @@ onBeforeUnmount(() => {
                 <th class="px-4 py-3 text-left font-medium text-muted">
                   Last handshake
                 </th>
-                <th class="px-4 py-3 text-right font-medium text-muted">
+                <th
+                  class="px-4 py-3 text-right font-medium text-muted"
+                >
                   Actions
                 </th>
               </tr>
@@ -740,8 +938,18 @@ onBeforeUnmount(() => {
                 <td class="px-4 py-3 text-muted">
                   {{ formatRelativeTime(stats[client.id]?.latestHandshakeAt) }}
                 </td>
-                <td class="px-4 py-3">
+                <td
+                  class="px-4 py-3"
+                >
                   <div class="flex justify-end gap-1">
+                    <UButton
+                      icon="i-lucide-pencil"
+                      color="neutral"
+                      variant="ghost"
+                      :loading="actionId === client.id"
+                      aria-label="Edit client name"
+                      @click="openEditClient(client)"
+                    />
                     <UButton
                       icon="i-lucide-download"
                       color="neutral"
@@ -749,6 +957,22 @@ onBeforeUnmount(() => {
                       :loading="actionId === client.id"
                       aria-label="Download config"
                       @click="downloadConfig(client)"
+                    />
+                    <UButton
+                      icon="i-lucide-share-2"
+                      color="neutral"
+                      variant="ghost"
+                      :loading="actionId === client.id"
+                      aria-label="Share config"
+                      @click="shareConfig(client)"
+                    />
+                    <UButton
+                      icon="i-lucide-qr-code"
+                      color="neutral"
+                      variant="ghost"
+                      :loading="actionId === client.id"
+                      aria-label="Generate QR code"
+                      @click="openQrCode(client)"
                     />
                     <UButton
                       :icon="client.enabled ? 'i-lucide-power-off' : 'i-lucide-power'"
@@ -893,6 +1117,124 @@ onBeforeUnmount(() => {
             @click="createClient"
           >
             Create
+          </UButton>
+        </div>
+      </div>
+    </div>
+
+    <div
+      v-if="qrOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
+      @click.self="qrOpen = false"
+    >
+      <div class="w-full max-w-sm rounded-lg border border-default bg-default shadow-xl">
+        <div class="flex items-center justify-between border-b border-default px-5 py-4">
+          <div class="min-w-0">
+            <h2 class="truncate text-base font-semibold text-highlighted">
+              {{ qrClient?.name }} QR
+            </h2>
+            <p class="mt-1 text-sm text-muted">
+              Client configuration
+            </p>
+          </div>
+          <UButton
+            icon="i-lucide-x"
+            color="neutral"
+            variant="ghost"
+            aria-label="Close"
+            @click="qrOpen = false"
+          />
+        </div>
+
+        <div class="flex min-h-80 items-center justify-center px-5 py-5">
+          <div
+            v-if="qrLoading"
+            class="flex items-center gap-3 text-sm text-muted"
+          >
+            <UIcon
+              name="i-lucide-loader-circle"
+              class="size-5 animate-spin"
+            />
+            Generating QR code
+          </div>
+          <img
+            v-else-if="qrDataUrl"
+            :src="qrDataUrl"
+            :alt="`${qrClient?.name} configuration QR code`"
+            class="size-80 max-w-full rounded-md bg-white p-3"
+          >
+        </div>
+
+        <div class="flex justify-end gap-2 border-t border-default px-5 py-4">
+          <UButton
+            color="neutral"
+            variant="subtle"
+            @click="qrOpen = false"
+          >
+            Close
+          </UButton>
+          <UButton
+            icon="i-lucide-download"
+            :disabled="!qrDataUrl"
+            @click="downloadQrCode"
+          >
+            Download PNG
+          </UButton>
+        </div>
+      </div>
+    </div>
+
+    <div
+      v-if="editOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
+      @click.self="editOpen = false"
+    >
+      <div class="w-full max-w-md rounded-lg border border-default bg-default shadow-xl">
+        <div class="flex items-center justify-between border-b border-default px-5 py-4">
+          <div>
+            <h2 class="text-base font-semibold text-highlighted">
+              Edit client
+            </h2>
+            <p class="mt-1 text-sm text-muted">
+              Only the display name is changed.
+            </p>
+          </div>
+          <UButton
+            icon="i-lucide-x"
+            color="neutral"
+            variant="ghost"
+            aria-label="Close"
+            @click="editOpen = false"
+          />
+        </div>
+
+        <div class="px-5 py-5">
+          <UFormField
+            label="Name"
+            required
+          >
+            <UInput
+              v-model="editName"
+              autofocus
+              @keyup.enter="saveClientName"
+            />
+          </UFormField>
+        </div>
+
+        <div class="flex justify-end gap-2 border-t border-default px-5 py-4">
+          <UButton
+            color="neutral"
+            variant="subtle"
+            @click="editOpen = false"
+          >
+            Cancel
+          </UButton>
+          <UButton
+            icon="i-lucide-save"
+            :loading="actionId === editingClient?.id"
+            @click="saveClientName"
+          >
+            Save
           </UButton>
         </div>
       </div>

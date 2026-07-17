@@ -34,6 +34,7 @@ builder.Services.AddSingleton<AwgStateStore>();
 builder.Services.AddSingleton<AwgKeyGenerator>();
 builder.Services.AddSingleton<AwgConfigWriter>();
 builder.Services.AddSingleton<AwgRuntime>();
+builder.Services.AddSingleton<ClientShareStore>();
 builder.Services.AddHostedService<AwgStartupService>();
 
 var app = builder.Build();
@@ -226,6 +227,58 @@ api.MapDelete("/clients/{id}", async Task<Results<NoContent, NotFound<ApiError>>
     .Produces(StatusCodes.Status204NoContent)
     .Produces<ApiError>(StatusCodes.Status404NotFound);
 
+api.MapPut("/clients/{id}", async Task<Results<Ok<ClientResponse>, BadRequest<ApiError>, NotFound<ApiError>>> (
+    string id,
+    UpdateClientRequest request,
+    AwgStateStore store,
+    AwgConfigWriter configWriter,
+    CancellationToken cancellationToken) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Name))
+    {
+        return TypedResults.BadRequest(new ApiError("client_name_required", "Client name is required."));
+    }
+
+    var result = store.Update(state =>
+    {
+        var client = state.Clients.FirstOrDefault(item => item.Id == id);
+        if (client is null)
+        {
+            return StoreUpdateResult<AwgClient>.Fail(new ApiError("client_not_found", "Client was not found."));
+        }
+
+        var normalizedName = request.Name.Trim();
+        if (state.Clients.Any(item =>
+            item.Id != id && string.Equals(item.Name, normalizedName, StringComparison.OrdinalIgnoreCase)))
+        {
+            return StoreUpdateResult<AwgClient>.Fail(new ApiError("client_name_exists", "Client with this name already exists."));
+        }
+
+        client.Name = normalizedName;
+        client.UpdatedAt = DateTimeOffset.UtcNow;
+        state.UpdatedAt = client.UpdatedAt;
+        return StoreUpdateResult<AwgClient>.Ok(client);
+    });
+
+    if (!result.Success)
+    {
+        if (result.Error.Code == "client_not_found")
+        {
+            return TypedResults.NotFound(result.Error);
+        }
+
+        return TypedResults.BadRequest(result.Error);
+    }
+
+    await configWriter.ApplyAsync(cancellationToken);
+    return TypedResults.Ok(ClientResponse.From(result.Value));
+})
+    .WithName("UpdateClient")
+    .Accepts<UpdateClientRequest>("application/json")
+    .Produces<ClientResponse>()
+    .Produces<ApiError>(StatusCodes.Status400BadRequest)
+    .Produces<ApiError>(StatusCodes.Status404NotFound);
+
 api.MapPost("/clients/{id}/disable", async Task<Results<Ok<ClientResponse>, NotFound<ApiError>>> (
     string id,
     AwgStateStore store,
@@ -283,6 +336,132 @@ api.MapGet("/clients/{id}/config", Results<ContentHttpResult, NotFound<ApiError>
     .Produces<string>(contentType: "text/plain")
     .Produces<ApiError>(StatusCodes.Status404NotFound);
 
+api.MapPost("/clients/{id}/share", Results<Ok<ClientShareResponse>, NotFound<ApiError>> (
+    string id,
+    AwgStateStore store,
+    ClientShareStore shares) =>
+{
+    var state = store.Read();
+    var client = state.Clients.FirstOrDefault(item => item.Id == id);
+    if (client is null)
+    {
+        return TypedResults.NotFound(new ApiError("client_not_found", "Client was not found."));
+    }
+
+    var share = shares.Create(client.Id);
+    return TypedResults.Ok(ClientShareResponse.From(share, client));
+})
+    .WithName("CreateClientShare")
+    .Produces<ClientShareResponse>()
+    .Produces<ApiError>(StatusCodes.Status404NotFound);
+
+api.MapGet("/shares/{token}", Results<Ok<ClientShareResponse>, NotFound<ApiError>> (
+    string token,
+    AwgStateStore store,
+    ClientShareStore shares) =>
+{
+    if (!shares.TryGet(token, out var share))
+    {
+        return TypedResults.NotFound(new ApiError("share_not_found", "Share link was not found or has expired."));
+    }
+
+    var state = store.Read();
+    var client = state.Clients.FirstOrDefault(item => item.Id == share.ClientId);
+    return client is null
+        ? TypedResults.NotFound(new ApiError("client_not_found", "Client was not found."))
+        : TypedResults.Ok(ClientShareResponse.From(share, client));
+})
+    .WithName("GetClientShare")
+    .Produces<ClientShareResponse>()
+    .Produces<ApiError>(StatusCodes.Status404NotFound);
+
+api.MapGet("/shares/{token}/config", Results<FileContentHttpResult, NotFound<ApiError>> (
+    string token,
+    AwgStateStore store,
+    AwgEasyOptions options,
+    ClientShareStore shares) =>
+{
+    if (!shares.TryGet(token, out var share))
+    {
+        return TypedResults.NotFound(new ApiError("share_not_found", "Share link was not found or has expired."));
+    }
+
+    var state = store.Read();
+    var client = state.Clients.FirstOrDefault(item => item.Id == share.ClientId);
+    if (client is null)
+    {
+        return TypedResults.NotFound(new ApiError("client_not_found", "Client was not found."));
+    }
+
+    var config = AwgConfigRenderer.RenderClient(state, client, options);
+    var bytes = Encoding.UTF8.GetBytes(config);
+    var fileName = ConfigFileName(client.Name);
+    return TypedResults.File(bytes, "text/plain; charset=utf-8", fileName);
+})
+    .WithName("DownloadSharedClientConfig")
+    .Produces(StatusCodes.Status200OK, contentType: "text/plain")
+    .Produces<ApiError>(StatusCodes.Status404NotFound);
+
+api.MapGet("/backups/export", Results<FileContentHttpResult, BadRequest<ApiError>> (
+    AwgStateStore store,
+    AwgEasyOptions options) =>
+{
+    var state = store.Read();
+    var backup = new AwgBackup(1, DateTimeOffset.UtcNow, options, state);
+    var bytes = JsonSerializer.SerializeToUtf8Bytes(backup, AppJsonSerializerContext.Default.AwgBackup);
+    var fileName = $"awg-easy-backup-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}.json";
+
+    return TypedResults.File(bytes, "application/json", fileName);
+})
+    .WithName("ExportBackup")
+    .Produces(StatusCodes.Status200OK, contentType: "application/json")
+    .Produces<ApiError>(StatusCodes.Status400BadRequest);
+
+api.MapPost("/backups/import", async Task<Results<Ok<BackupImportResponse>, BadRequest<ApiError>>> (
+    AwgBackup backup,
+    AwgStateStore store,
+    AwgConfigWriter configWriter,
+    AwgEasyOptions options,
+    CancellationToken cancellationToken) =>
+{
+    if (!AwgBackupValidator.TryValidate(backup, options, out var warnings, out var validationError))
+    {
+        return TypedResults.BadRequest(validationError);
+    }
+
+    var now = DateTimeOffset.UtcNow;
+    backup.State.UpdatedAt = now;
+    store.Replace(backup.State);
+
+    await configWriter.ApplyAsync(cancellationToken);
+
+    var state = store.Read();
+    return TypedResults.Ok(new BackupImportResponse(
+        ServerResponse.From(state, options),
+        backup.Options,
+        options,
+        warnings));
+})
+    .WithName("ImportBackup")
+    .Accepts<AwgBackup>("application/json")
+    .Produces<BackupImportResponse>()
+    .Produces<ApiError>(StatusCodes.Status400BadRequest);
+
+app.MapGet("/secret", () => TypedResults.Redirect("/admin", permanent: true))
+    .ExcludeFromDescription();
+
+app.MapGet("/admin", Results<FileContentHttpResult, NotFound> (IWebHostEnvironment environment) =>
+{
+    var path = Path.Combine(environment.WebRootPath, "admin", "index.html");
+    if (!File.Exists(path))
+    {
+        return TypedResults.NotFound();
+    }
+
+    return TypedResults.File(File.ReadAllBytes(path), "text/html; charset=utf-8");
+})
+    .ExcludeFromDescription();
+
 app.MapFallbackToFile("index.html");
 
 app.Run();
@@ -312,6 +491,18 @@ static StoreUpdateResult<AwgClient> ToggleClient(AwgState state, string id, bool
     client.UpdatedAt = DateTimeOffset.UtcNow;
     state.UpdatedAt = client.UpdatedAt;
     return StoreUpdateResult<AwgClient>.Ok(client);
+}
+
+static string ConfigFileName(string clientName)
+{
+    var builder = new StringBuilder(clientName.Length);
+    foreach (var character in clientName)
+    {
+        builder.Append(char.IsAsciiLetterOrDigit(character) || character is '_' or '.' or '-' ? character : '-');
+    }
+
+    var name = builder.ToString().Trim('-', '.');
+    return string.IsNullOrWhiteSpace(name) ? "amneziawg.conf" : $"{name}.conf";
 }
 
 public sealed record AwgEasyOptions(
@@ -370,6 +561,14 @@ public sealed class AwgStateStore(AwgEasyOptions options)
 
             WriteUnsafe(state);
             return result;
+        }
+    }
+
+    public void Replace(AwgState state)
+    {
+        lock (_lock)
+        {
+            WriteUnsafe(state);
         }
     }
 
@@ -544,7 +743,9 @@ public sealed class AwgRuntime(AwgEasyOptions options, ILogger<AwgRuntime> logge
 
         var show = await RunStatusCommandAsync("awg", ["show", options.InterfaceName], cancellationToken);
         var ip = await RunStatusCommandAsync("ip", ["address", "show", "dev", options.InterfaceName], cancellationToken);
-        return new AwgRuntimeStatus(options.InterfaceName, show.ExitCode == 0, tools, show, ip);
+        var link = await RunStatusCommandAsync("ip", ["-d", "link", "show", "dev", options.InterfaceName], cancellationToken);
+        var backend = DetectBackend(show.ExitCode == 0, link, tools.UserspaceImplementation);
+        return new AwgRuntimeStatus(options.InterfaceName, show.ExitCode == 0, backend, tools, show, ip);
     }
 
     public async Task<ClientStatsResponse[]> GetClientStatsAsync(IEnumerable<AwgClient> clients, CancellationToken cancellationToken)
@@ -647,6 +848,74 @@ public sealed class AwgRuntime(AwgEasyOptions options, ILogger<AwgRuntime> logge
             return new AwgCommandStatus(fileName + " " + string.Join(' ', arguments), -1, string.Empty, ex.Message);
         }
     }
+
+    private static string? DetectBackend(bool isRunning, AwgCommandStatus link, string? userspaceImplementation)
+    {
+        if (!isRunning)
+        {
+            return null;
+        }
+
+        var linkText = link.Output + Environment.NewLine + link.Error;
+        if (link.ExitCode == 0
+            && (linkText.Contains("amneziawg", StringComparison.OrdinalIgnoreCase)
+                || linkText.Contains("wireguard", StringComparison.OrdinalIgnoreCase)))
+        {
+            return "Kernel module";
+        }
+
+        if (!string.IsNullOrWhiteSpace(userspaceImplementation))
+        {
+            return $"Userspace ({userspaceImplementation})";
+        }
+
+        return "Unknown";
+    }
+}
+
+public sealed class ClientShareStore
+{
+    private readonly ConcurrentDictionary<string, ClientShare> _shares = new(StringComparer.Ordinal);
+
+    public ClientShare Create(string clientId)
+    {
+        RemoveExpired();
+
+        var share = new ClientShare(
+            GenerateToken(),
+            clientId,
+            DateTimeOffset.UtcNow.AddDays(1));
+
+        _shares[share.Token] = share;
+        return share;
+    }
+
+    public bool TryGet(string token, out ClientShare share)
+    {
+        RemoveExpired();
+        if (_shares.TryGetValue(token, out share!) && share.ExpiresAt > DateTimeOffset.UtcNow)
+        {
+            return true;
+        }
+
+        share = default!;
+        return false;
+    }
+
+    private void RemoveExpired()
+    {
+        var now = DateTimeOffset.UtcNow;
+        foreach (var item in _shares)
+        {
+            if (item.Value.ExpiresAt <= now)
+            {
+                _shares.TryRemove(item.Key, out _);
+            }
+        }
+    }
+
+    private static string GenerateToken()
+        => Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
 }
 
 public sealed class AwgKeyGenerator
@@ -733,7 +1002,7 @@ public static class AwgConfigRenderer
         var builder = new StringBuilder();
         builder.AppendLine("[Interface]");
         builder.Append("PrivateKey = ").AppendLine(client.PrivateKey);
-        builder.Append("Address = ").Append(client.Address).AppendLine("/32");
+        builder.Append("Address = ").Append(client.Address).Append('/').AppendLine(Ipv4Network.Parse(options.TunnelSubnet).PrefixLength.ToString(CultureInfo.InvariantCulture));
         if (!string.IsNullOrWhiteSpace(options.ClientDns))
         {
             builder.Append("DNS = ").AppendLine(options.ClientDns);
@@ -880,6 +1149,128 @@ public static class AwgObfuscationValidator
     }
 }
 
+public static class AwgBackupValidator
+{
+    public static bool TryValidate(AwgBackup? backup, AwgEasyOptions currentOptions, out string[] warnings, out ApiError error)
+    {
+        var warningList = new List<string>();
+        warnings = [];
+        error = ApiError.Empty;
+
+        if (backup is null)
+        {
+            error = new ApiError("backup_required", "Backup file is required.");
+            return false;
+        }
+
+        if (backup.Version != 1)
+        {
+            error = new ApiError("unsupported_backup_version", "Backup version is not supported.");
+            return false;
+        }
+
+        if (!TryValidateState(backup.State, currentOptions, out warningList, out error))
+        {
+            return false;
+        }
+
+        AddOptionWarning(warningList, "AWG_INTERFACE", backup.Options.InterfaceName, currentOptions.InterfaceName);
+        AddOptionWarning(warningList, "AWG_PORT", backup.Options.AwgPort.ToString(CultureInfo.InvariantCulture), currentOptions.AwgPort.ToString(CultureInfo.InvariantCulture));
+        AddOptionWarning(warningList, "AWG_SUBNET", backup.Options.TunnelSubnet, currentOptions.TunnelSubnet);
+        AddOptionWarning(warningList, "AWG_CLIENT_ALLOWED_IPS", backup.Options.ClientAllowedIps, currentOptions.ClientAllowedIps);
+        AddOptionWarning(warningList, "AWG_ENDPOINT_HOST", backup.Options.EndpointHost, currentOptions.EndpointHost);
+        AddOptionWarning(warningList, "AWG_CLIENT_DNS", backup.Options.ClientDns ?? string.Empty, currentOptions.ClientDns ?? string.Empty);
+
+        warnings = warningList.ToArray();
+        return true;
+    }
+
+    private static bool TryValidateState(AwgState? state, AwgEasyOptions currentOptions, out List<string> warnings, out ApiError error)
+    {
+        warnings = [];
+        error = ApiError.Empty;
+
+        if (state is null)
+        {
+            error = new ApiError("invalid_backup", "Backup state is missing.");
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(state.ServerPrivateKey) || string.IsNullOrWhiteSpace(state.ServerPublicKey))
+        {
+            error = new ApiError("invalid_backup", "Backup does not contain server keys.");
+            return false;
+        }
+
+        if (!AwgObfuscationValidator.TryValidateServerProfile(state.ServerObfuscation, out error))
+        {
+            return false;
+        }
+
+        Ipv4Network currentNetwork;
+        try
+        {
+            currentNetwork = Ipv4Network.Parse(currentOptions.TunnelSubnet);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or FormatException)
+        {
+            error = new ApiError("invalid_current_subnet", exception.Message);
+            return false;
+        }
+
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var addresses = new HashSet<string>(StringComparer.Ordinal);
+        var publicKeys = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var client in state.Clients)
+        {
+            if (string.IsNullOrWhiteSpace(client.Id)
+                || string.IsNullOrWhiteSpace(client.Name)
+                || string.IsNullOrWhiteSpace(client.Address)
+                || string.IsNullOrWhiteSpace(client.PrivateKey)
+                || string.IsNullOrWhiteSpace(client.PublicKey)
+                || string.IsNullOrWhiteSpace(client.PresharedKey))
+            {
+                error = new ApiError("invalid_backup", "Backup contains a client with missing required fields.");
+                return false;
+            }
+
+            if (!ids.Add(client.Id) || !names.Add(client.Name) || !addresses.Add(client.Address) || !publicKeys.Add(client.PublicKey))
+            {
+                error = new ApiError("invalid_backup", "Backup contains duplicate clients, addresses or keys.");
+                return false;
+            }
+
+            if (!AwgObfuscationValidator.TryValidateClientOverrides(client.Obfuscation, out error))
+            {
+                return false;
+            }
+
+            if (!IPAddress.TryParse(client.Address, out var address) || address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+            {
+                error = new ApiError("invalid_backup", $"Client {client.Name} has an invalid IPv4 address.");
+                return false;
+            }
+
+            if (!currentNetwork.Contains(address))
+            {
+                warnings.Add($"Client {client.Name} address {client.Address} is outside current AWG_SUBNET {currentOptions.TunnelSubnet}.");
+            }
+        }
+
+        return true;
+    }
+
+    private static void AddOptionWarning(List<string> warnings, string name, string backupValue, string currentValue)
+    {
+        if (!string.Equals(backupValue, currentValue, StringComparison.Ordinal))
+        {
+            warnings.Add($"{name} differs: backup '{backupValue}', current '{currentValue}'.");
+        }
+    }
+}
+
 public sealed record StoreUpdateResult<T>(bool Success, T Value, ApiError Error)
 {
     public static StoreUpdateResult<T> Ok(T value) => new(true, value, ApiError.Empty);
@@ -904,6 +1295,7 @@ public sealed record AwgPeerStats(
 public sealed record AwgRuntimeStatus(
     string InterfaceName,
     bool IsRunning,
+    string? Backend,
     AwgToolStatus Tools,
     AwgCommandStatus AwgShow,
     AwgCommandStatus IpAddress);
@@ -926,6 +1318,21 @@ public sealed record ApiError(string Code, string Message)
 }
 
 public sealed record HealthResponse(string Status);
+
+public sealed record ClientShare(
+    string Token,
+    string ClientId,
+    DateTimeOffset ExpiresAt);
+
+public sealed record ClientShareResponse(
+    string Token,
+    string ClientId,
+    string ClientName,
+    DateTimeOffset ExpiresAt)
+{
+    public static ClientShareResponse From(ClientShare share, AwgClient client)
+        => new(share.Token, client.Id, client.Name, share.ExpiresAt);
+}
 
 public sealed record ServerResponse(
     string InterfaceName,
@@ -956,6 +1363,20 @@ public sealed record ClientResponse(
 }
 
 public sealed record CreateClientRequest(string Name, ClientObfuscationOverrides? Obfuscation);
+
+public sealed record UpdateClientRequest(string Name);
+
+public sealed record AwgBackup(
+    int Version,
+    DateTimeOffset ExportedAt,
+    AwgEasyOptions Options,
+    AwgState State);
+
+public sealed record BackupImportResponse(
+    ServerResponse Server,
+    AwgEasyOptions BackupOptions,
+    AwgEasyOptions CurrentOptions,
+    string[] Warnings);
 
 public sealed class AwgState
 {
@@ -1152,6 +1573,18 @@ public sealed record Ipv4Network(uint NetworkAddress, int PrefixLength)
 
     public string GetAddress(uint hostOffset) => UIntToIp(NetworkAddress + hostOffset).ToString();
 
+    public bool Contains(IPAddress address)
+    {
+        if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+        {
+            return false;
+        }
+
+        var value = IpToUInt(address);
+        var mask = uint.MaxValue << (32 - PrefixLength);
+        return (value & mask) == NetworkAddress;
+    }
+
     private static uint IpToUInt(IPAddress address)
     {
         var bytes = address.GetAddressBytes();
@@ -1198,10 +1631,14 @@ public sealed class StringOrNumberJsonConverter : JsonConverter<string?>
 [JsonSerializable(typeof(ServerObfuscationProfile))]
 [JsonSerializable(typeof(ClientObfuscationOverrides))]
 [JsonSerializable(typeof(CreateClientRequest))]
+[JsonSerializable(typeof(UpdateClientRequest))]
+[JsonSerializable(typeof(AwgBackup))]
+[JsonSerializable(typeof(BackupImportResponse))]
 [JsonSerializable(typeof(ClientResponse))]
 [JsonSerializable(typeof(ClientResponse[]))]
 [JsonSerializable(typeof(ServerResponse))]
 [JsonSerializable(typeof(HealthResponse))]
+[JsonSerializable(typeof(ClientShareResponse))]
 [JsonSerializable(typeof(ClientStatsResponse))]
 [JsonSerializable(typeof(ClientStatsResponse[]))]
 [JsonSerializable(typeof(AwgRuntimeStatus))]

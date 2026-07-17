@@ -22,7 +22,11 @@ useSeoMeta({
     <div class="min-h-screen bg-default">
       <header class="border-b border-default bg-muted/30">
         <UContainer class="flex h-14 items-center justify-between gap-4">
-          <div class="flex min-w-0 items-center gap-3">
+          <NuxtLink
+            to="/"
+            class="flex min-w-0 items-center gap-3 rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+            aria-label="Go to clients"
+          >
             <UIcon
               name="i-lucide-shield"
               class="size-6 text-primary"
@@ -35,9 +39,20 @@ useSeoMeta({
                 AmneziaWG clients
               </p>
             </div>
-          </div>
+          </NuxtLink>
 
-          <UColorModeButton />
+          <div class="flex items-center gap-2">
+            <UButton
+              to="/admin"
+              icon="i-lucide-settings"
+              color="neutral"
+              variant="subtle"
+              size="sm"
+            >
+              Admin
+            </UButton>
+            <UColorModeButton />
+          </div>
         </UContainer>
       </header>
 
