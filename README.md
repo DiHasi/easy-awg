@@ -203,8 +203,8 @@ Phase 1 — multi-server with manual switchover — is done. What comes next:
 - The Docker images have not been built yet, and the panel and agent have not been run together
   on a real server. Build and try them on a test host before relying on this.
 - The frontend has no automated tests.
-- The original single-server app still lives in `Program.cs` at the repository root, tagged
-  `v0.9-standalone`. It is superseded and will be removed.
+- The predecessor single-server app is preserved at tag `v0.9-standalone` and has been removed
+  from the tree.
 
 ---
 
@@ -403,5 +403,5 @@ awg-node --render-bundle bundle.json --control-key <base64url> --egress ens3
 - Docker-образы ещё ни разу не собирались, панель и агент вместе на настоящем сервере не
   запускались. Соберите и проверьте на тестовом хосте, прежде чем полагаться на это.
 - У фронтенда нет автоматических тестов.
-- Исходное одиночное приложение всё ещё лежит в `Program.cs` в корне репозитория под тегом
-  `v0.9-standalone`. Оно устарело и будет удалено.
+- Предшественник — одиночное приложение — сохранён под тегом `v0.9-standalone` и удалён из
+  дерева.

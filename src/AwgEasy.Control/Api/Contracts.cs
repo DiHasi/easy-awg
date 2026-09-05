@@ -2,53 +2,9 @@ using AwgEasy.Contracts;
 
 namespace AwgEasy.Control;
 
-public sealed record FleetRecord(
-    int Generation,
-    string ServerPrivateKey,
-    string ServerPublicKey,
-    string SigningPrivateKey,
-    string SigningPublicKey,
-    string SigningKeyId,
-    string Subnet,
-    int ListenPort,
-    string ClientAllowedIps,
-    string? ClientDns,
-    string EndpointHost,
-    ServerObfuscationProfile? Obfuscation,
-    long Revision);
-
-public sealed record ClientRecord(
-    string Id,
-    string Name,
-    string Address,
-    string PrivateKey,
-    string PublicKey,
-    string PresharedKey,
-    bool Enabled,
-    ClientObfuscationOverrides? Obfuscation,
-    DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
-
-public sealed record NodeRecord(
-    string Id,
-    string Name,
-    string? Hostname,
-    string? EndpointHost,
-    string AgentPublicKey,
-    string? AgentVersion,
-    string Status,
-    long AppliedRevision,
-    bool InterfaceUp,
-    string? Backend,
-    string? EgressInterface,
-    int? Mtu,
-    DateTimeOffset? LastSeenAt,
-    string? LastError,
-    bool Revoked,
-    DateTimeOffset EnrolledAt);
-
-// ---- API surface ----
-
+// What crosses the wire. Deliberately separate from the domain records above: an API type is a
+// promise to a caller, and the compiler should complain if a secret-bearing record is ever
+// returned where one of these is expected.
 public sealed record ClientResponse(
     string Id,
     string Name,

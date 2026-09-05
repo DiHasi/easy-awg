@@ -9,9 +9,12 @@ truth; agents on each VPN server converge onto the configuration it publishes. T
 fleet design is **seamless failover**: when a node is blocked or dies, traffic moves to another
 node without reissuing a single client config.
 
-The project is mid-migration from a single-server panel to the fleet architecture. Phase 1
-(multi-server with manual switchover) is complete. Phase 2 (health probes, blocked-vs-down
-detection, automatic failover) is not started.
+The project replaced a single-server panel with this architecture. Phase 1 (multi-server with
+manual switchover) is complete. Phase 2 (health probes, blocked-vs-down detection, automatic
+failover) is not started.
+
+The predecessor is preserved at tag `v0.9-standalone` and is no longer in the tree. When touching
+the legacy import path, that tag is where its `state.json` format is defined.
 
 ## Layout
 
@@ -23,7 +26,6 @@ frontend/                Nuxt 4 + Nuxt UI, generated to static files, served by 
 tests/AwgEasy.Tests/     xUnit. Unit tests plus integration tests hosting the real Control.
 docker/                  node.Dockerfile, control.Dockerfile
 scripts/install.sh       Node enrollment one-liner, served by Control at /install.sh
-Program.cs               LEGACY single-server app. Superseded; see "Legacy app" below.
 ```
 
 ## Commands
@@ -116,17 +118,6 @@ signed; it covers a hash of the body. Node revocation is a flag checked per requ
   The API models "unset" as `null`, form inputs need `undefined` — convert at the boundary.
 - Everything under `/api` requires an authenticated admin except `/health`, `/auth/*` and
   `/shares/*`. Do not add an endpoint to the anonymous set without a reason worth stating.
-
-## Legacy app
-
-`Program.cs` at the repository root is the original single-server panel. It still compiles and is
-tagged `v0.9-standalone` (the image currently in production), but it is superseded by
-`src/AwgEasy.Control` and is slated for removal once the fleet deployment is proven.
-
-Because it sits at the repo root, its default globs would compile everything under `src/` and
-`tests/` into it as well, so it declares `EnableDefaultCompileItems=false` and lists its single
-source file explicitly. Do not "fix" that by adding excludes — delete the project instead when
-the time comes.
 
 ## Testing expectations
 
