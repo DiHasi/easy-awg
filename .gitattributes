@@ -1,0 +1,29 @@
+# Normalize line endings in the repository regardless of each contributor's
+# core.autocrlf setting, so a Windows checkout cannot commit CRLF into files
+# that are consumed on Linux.
+* text=auto
+
+# These run inside containers or on the VPN servers themselves. CRLF breaks a
+# shell script outright ("bad interpreter"), so pin them to LF everywhere,
+# including in a Windows working tree.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.Dockerfile    text eol=lf
+*.yaml          text eol=lf
+*.yml           text eol=lf
+.env.example    text eol=lf
+.env.*.example  text eol=lf
+
+# Generated AmneziaWG configuration is written by the agent, never by a human.
+*.conf          text eol=lf
+
+# Do not touch binary content.
+*.ico           binary
+*.png           binary
+*.jpg           binary
+*.woff          binary
+*.woff2         binary
+
+# Lock files are noisy in review and machine-generated.
+pnpm-lock.yaml      linguist-generated=true
+package-lock.json   linguist-generated=true
