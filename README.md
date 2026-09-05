@@ -1,341 +1,407 @@
 # AWG Easy
 
-AWG Easy is a self-hosted web panel for managing AmneziaWG clients. The project follows the idea of `wg-easy`, but is built around AmneziaWG and includes support for traffic obfuscation parameters.
+A self-hosted control plane for a fleet of AmneziaWG VPN servers.
 
-The application is designed to run as a single Docker container: the backend manages the VPN configuration and API, while the frontend is built as static files and served by the same ASP.NET application.
+One panel is the source of truth for clients, keys and obfuscation settings. Agents on each VPN
+server pull that configuration and converge onto it. The point of the fleet design is **seamless
+failover**: when a server is blocked or dies, you move traffic to another one without reissuing a
+single client config.
 
-## What It Does
+> Status: the fleet architecture is in place with **manual switchover**. Automatic failover,
+> external probes and notifications are designed but not yet built. See [Roadmap](#roadmap).
 
-- Creates AmneziaWG client configurations.
-- Deletes clients that are no longer needed.
-- Temporarily disables and enables existing clients.
-- Generates downloadable client config files.
-- Stores state in a JSON file, without a database.
-- Applies server-side AmneziaWG obfuscation settings.
-- Allows optional client-side obfuscation overrides when creating a client.
-- Shows client status, last handshake, current traffic speed, and total traffic usage.
-- Provides a web UI for daily administration.
-- Provides OpenAPI documentation with Scalar.
+## How it works
 
-## Technology Stack
+Every node runs the **same AmneziaWG server identity** — the same key pair, subnet and obfuscation
+profile. A client config pins the server public key, so pointing DNS at a different node does not
+change what the client is talking to. It just keeps working.
 
-The backend is built with ASP.NET Core on .NET 10 and published with Native AOT. This keeps the runtime small and predictable for container deployment.
+```
+                    ┌─────────────────────────────┐
+                    │        awg-control          │
+                    │  source of truth + admin UI │
+                    └──┬───────────────────┬──────┘
+             pull HTTPS│                   │DNS / floating IP
+              ┌────────┴────────┐          ▼
+              ▼                 ▼      clients follow
+        ┌──────────┐      ┌──────────┐  the endpoint
+        │ awg-node │      │ awg-node │
+        │  + awg0  │      │  + awg0  │
+        └──────────┘      └──────────┘
+```
 
-The frontend is built with Nuxt 4 and Nuxt UI. It is generated as static files during the Docker build and then served directly by the backend from the application root.
+Nodes only ever make **outbound** calls, so they open no management port — just the UDP tunnel.
+And they are **fail-static**: if the panel is unreachable, an agent keeps serving traffic from its
+cached configuration indefinitely. Losing management never means losing the VPN.
 
-AmneziaWG integration is handled inside the container. The Docker image builds and includes:
+A node receives only what it needs to serve peers — public keys, preshared keys and addresses.
+Client private keys and client names never leave the control plane.
 
-- `awg`
-- `awg-quick`
-- `amneziawg-go`
+## What you need
 
-If the host kernel supports the AmneziaWG kernel module, the kernel implementation can be used. Otherwise, the container falls back to the userspace implementation through `amneziawg-go`.
+- **A host for the panel.** Any small VPS. Keep it off your VPN nodes: it holds the identity of
+  the whole fleet, and that should not sit on the servers most likely to be blocked or seized.
+- **At least one VPN node.** Root access, Docker, `/dev/net/tun`, and the UDP port open.
+- **A DNS record you control.** `AWG_ENDPOINT_HOST` goes into client configs, and failover means
+  repointing it. Set the TTL to 30–60 seconds ahead of time. If your provider offers a floating
+  IP, prefer it — reassignment is instant and completely invisible to clients.
+- **TLS in front of the panel.** Over plain HTTP it would hand the fleet private key to agents in
+  the clear. Put Caddy or nginx with Let's Encrypt in front of it.
 
-## Main Features
+## Running the control plane
 
-### Client Management
+```bash
+cp .env.control.example .env
+```
 
-Clients can be created, disabled, enabled, deleted, and downloaded as ready-to-use configuration files. Each client receives its own keys, address, preshared key, and config.
+Edit `.env`. At minimum set `AWG_ENDPOINT_HOST` and the bootstrap admin credentials.
 
-### Obfuscation Settings
+```bash
+docker compose -f compose.control.yaml up -d --build
+```
 
-Server obfuscation parameters are configured centrally and then applied to generated AmneziaWG server configuration. Client parameters can be optionally overridden during client creation.
+On first start it creates the database, generates the fleet identity and the bundle signing key,
+and creates the admin account. The panel is then at `http://<host>:8080`.
 
-This keeps the common server-side values consistent while still allowing per-client tuning where needed.
+Without `AWG_ADMIN_USER` / `AWG_ADMIN_PASSWORD` the panel still starts but refuses every admin
+request, with a loud warning in the log. That is deliberate: refusing to boot because of a typo in
+an environment variable would be worse than starting locked.
 
-### Live Client Statistics
+## Adding a node
 
-The frontend receives client statistics through a lightweight event stream from the backend. It shows:
+In the panel: **Nodes → Add node**. You get a ready-to-run command:
 
-- whether the client is online;
-- latest handshake time;
-- current download and upload speed;
-- total downloaded traffic;
-- total uploaded traffic.
+```bash
+curl -fsSL https://panel.example.com/install.sh | sh -s -- --url https://panel.example.com --token <token>
+```
 
-The current speed is calculated from traffic changes between updates. Total traffic is shown separately, so offline clients do not look like they are actively transferring data.
+The enrollment token is **shown once**, cannot be recovered, and expires in 30 minutes. The
+installer sets up Docker if needed, enables forwarding and starts the agent, which enrolls itself,
+pins the panel's signing key and pulls the fleet configuration. Re-running it is safe — it
+upgrades the agent in place and keeps the node's identity, so the tunnel is not disturbed.
 
-### Static Frontend
+If you prefer compose, use `.env.node.example` with `compose.node.yaml`.
 
-The Nuxt frontend is not deployed as a separate Node.js service. During the Docker build it is generated into static files and copied into the ASP.NET application. The backend serves it from `/`, while the API remains available under `/api`.
+## Migrating from a single-server deployment
+
+Existing users are not disconnected, because the import preserves the original server key pair.
+
+1. Export the backup from the old server: `GET /api/backups/export`.
+2. In the panel: **Fleet → Import**, enable *Replace existing clients*, upload the file.
+3. Check that **Server public key** on the Fleet page matches the old one.
+4. Replace the old container on that server with the agent (the install command above).
+5. The agent applies the configuration with `awg syncconf`, so the interface is never brought
+   down and existing tunnels survive.
+
+For a fresh panel you can instead point `AWG_IMPORT_LEGACY_STATE` at a mounted `state.json`.
 
 ## Configuration
 
-Configuration is provided through environment variables. A ready-to-edit example is available in `.env.example`.
+### Control plane
 
-```env
-WEB_PORT=8080
-AWG_PORT=51820
-AWG_SUBNET=10.8.0.0/24
-AWG_CLIENT_ALLOWED_IPS=0.0.0.0/0, ::/0
-AWG_ENDPOINT_HOST=vpn.example.com
-AWG_CLIENT_DNS=1.1.1.1, 8.8.8.8
-```
-
-### Environment Variables
-
-| Variable | Description |
+| Variable | Purpose |
 | --- | --- |
-| `WEB_PORT` | Port for the web interface and API. |
-| `AWG_PORT` | UDP port used by AmneziaWG clients. |
-| `AWG_SUBNET` | Internal VPN subnet used for client addresses. |
-| `AWG_CLIENT_ALLOWED_IPS` | `AllowedIPs` value placed into generated client configs. |
-| `AWG_ENDPOINT_HOST` | Public hostname or IP that clients use as the VPN endpoint. |
+| `AWG_ENDPOINT_HOST` | What clients use as the endpoint. **This is the failover switch.** |
+| `AWG_PORT` | UDP port clients connect to. |
+| `AWG_SUBNET` | Tunnel subnet; addresses are allocated fleet-wide from it. |
+| `AWG_CLIENT_ALLOWED_IPS` | `AllowedIPs` written into client configs. |
 | `AWG_CLIENT_DNS` | DNS servers written into client configs. |
+| `AWG_ADMIN_USER`, `AWG_ADMIN_PASSWORD` | Creates the first admin on an empty database. |
+| `AWG_CONTROL_DB` | SQLite file. Default `/etc/awg-control/control.db`. |
+| `AWG_BUNDLE_LIFETIME_MINUTES` | How long a signed bundle stays valid. Default 15. |
+| `AWG_IMPORT_LEGACY_STATE` | One-shot adoption of an old `state.json`. |
 
-## Running With Docker Compose
+### Node
 
-Create a local `.env` file:
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and set at least `AWG_ENDPOINT_HOST` to the public hostname or IP address of your server.
-
-Then build and start the container:
-
-```bash
-docker compose up -d --build
-```
-
-The web interface will be available at:
-
-```text
-http://localhost:8080
-```
-
-If `WEB_PORT` is changed, use that port instead.
-
-## Docker Requirements
-
-The container needs network administration permissions and access to `/dev/net/tun`. The included `compose.yaml` already configures this:
-
-- `NET_ADMIN`
-- `SYS_MODULE`
-- `/dev/net/tun`
-- IPv4 forwarding sysctls
-
-On a real server, make sure the chosen UDP port is open in the firewall.
-
-## API And Documentation
-
-The backend exposes the API under `/api`.
-
-Useful endpoints include:
-
-| Endpoint | Purpose |
+| Variable | Purpose |
 | --- | --- |
-| `GET /api/health` | Health check. |
-| `GET /api/server` | Current server configuration. |
-| `GET /api/server/runtime` | Runtime status of the AmneziaWG interface. |
-| `PUT /api/server/obfuscation` | Update server obfuscation settings. |
-| `GET /api/clients` | List clients. |
-| `POST /api/clients` | Create a client. |
-| `POST /api/clients/{id}/disable` | Disable a client. |
-| `POST /api/clients/{id}/enable` | Enable a client. |
-| `DELETE /api/clients/{id}` | Delete a client. |
-| `GET /api/clients/{id}/config` | Download a client config. |
-| `GET /api/clients/events` | Live client statistics event stream. |
+| `AWG_CONTROL_URL` | Where the panel lives. |
+| `AWG_ENROLLMENT_TOKEN` | Only needed for the first start. |
+| `AWG_EGRESS_INTERFACE` | Leave empty to detect the default-route interface. |
+| `AWG_POLL_INTERVAL_SECONDS` | How often to check for a new revision. Default 20. |
+| `AWG_NODE_STATE_PATH` | Agent identity and cached bundle. Default `/etc/awg-node`. |
+| `AWG_INTERFACE` | Interface name. Default `awg0`. |
 
-OpenAPI is available at:
+Obfuscation is **not** configured through environment variables. It is fleet-wide and lives in the
+panel under **Fleet**, so a change applies to every node at once.
 
-```text
-/openapi/v1.json
+## Using the panel
+
+- **Clients** — create, rename, enable, disable and delete clients; download a config, show a QR
+  code, or create a 24-hour share link for someone without an account. Live traffic and handshake
+  data is aggregated across every node.
+- **Nodes** — status of each agent, whether it has picked up the current revision, enrollment
+  commands, and revocation. Revoking a node cuts off its configuration on its very next request.
+- **Fleet** — the shared identity, obfuscation settings, and the legacy import.
+- **Events** — an audit trail of who changed what and which nodes fetched configuration.
+
+## Security model
+
+- The admin API requires an authenticated session. Only `/api/health`, `/api/auth/*` and
+  `/api/shares/*` are anonymous.
+- Agents authenticate by **signing each request** with a key generated on the node itself. The
+  private key never crosses the wire, and unlike mTLS this survives a TLS-terminating proxy or CDN
+  in front of the panel.
+- Configuration bundles are signed by the control plane and verified against a key the agent
+  pinned at enrollment. Signatures alone are not enough — a correctly signed bundle stays valid
+  forever — so bundles also carry a monotonic revision, a node binding and an expiry, and an agent
+  refuses anything older than what it has already applied.
+- Node revocation is a flag checked on every request, so it takes effect immediately. There is no
+  revocation list to distribute.
+- Enrollment and share tokens are stored only as hashes.
+
+Assume that a hosting provider can read a node's disk. Treat any seized node as a compromise of
+the whole fleet, since every node carries the shared identity.
+
+## Development
+
+```bash
+dotnet build Awg-easy.sln
+dotnet test Awg-easy.sln
+
+cd frontend
+pnpm install
+pnpm run dev        # against a locally running control plane
+pnpm run lint
+pnpm run typecheck
 ```
 
-Scalar API documentation is available at:
+| Project | Role |
+| --- | --- |
+| `src/AwgEasy.Contracts` | Wire contract shared by both sides. Changing it changes the fleet. |
+| `src/AwgEasy.Node` | Agent for each VPN server. Native AOT, privileged, no UI. |
+| `src/AwgEasy.Control` | Panel: database, admin API, agent API, serves the frontend. |
+| `frontend` | Nuxt 4 + Nuxt UI, generated to static files. |
+| `tests/AwgEasy.Tests` | Unit tests plus integration tests hosting the real control plane. |
 
-```text
-/scalar
+The agent can be inspected without a control plane, which is useful when debugging a node:
+
+```bash
+awg-node --render-bundle bundle.json --control-key <base64url> --egress ens3
 ```
 
-## State And Persistence
+It verifies the signature, runs the acceptance checks and prints the interface config it would
+apply, without touching anything.
 
-The application stores its state in a JSON file. By default in Docker this is mounted through the `awg-easy-state` volume.
+See [AGENTS.md](AGENTS.md) for the architectural invariants worth knowing before changing code.
 
-The generated AmneziaWG interface configuration is stored in a separate volume mounted to:
+## Roadmap
 
-```text
-/etc/amnezia/amneziawg
-```
+Phase 1 — multi-server with manual switchover — is done. What comes next:
 
-This means container rebuilds do not automatically remove clients or server keys, as long as the Docker volumes are kept.
+- **Health and blocking detection.** A blocked node looks perfectly healthy from the inside: the
+  agent reports in, the interface is up, and clients simply cannot reach it. Detecting that needs
+  probes from the networks users actually connect from, comparing agent heartbeats against real
+  AmneziaWG handshakes from several vantage points.
+- **Automatic failover** driven by that signal, with quorum and hysteresis, updating DNS or
+  reassigning a floating IP, and notifying the operator.
+- **Fleet identity rotation**, so a compromised or seized node is recoverable without rebuilding
+  everything by hand.
 
-## Notes
+## Known gaps
 
-This project is currently focused on practical single-server deployment. It intentionally avoids a database and keeps configuration in files. That makes backup, inspection, and recovery straightforward.
-
-The current synchronization model writes the AmneziaWG configuration and applies it to the running interface. The implementation is simple and reliable for this stage of the project. More advanced synchronization can be improved later if needed.
+- The Docker images have not been built yet, and the panel and agent have not been run together
+  on a real server. Build and try them on a test host before relying on this.
+- The frontend has no automated tests.
+- The original single-server app still lives in `Program.cs` at the repository root, tagged
+  `v0.9-standalone`. It is superseded and will be removed.
 
 ---
 
 # AWG Easy на русском
 
-AWG Easy - это self-hosted веб-панель для управления клиентами AmneziaWG. По идее проект похож на `wg-easy`, но ориентирован именно на AmneziaWG и поддерживает параметры обфускации трафика.
+Self-hosted панель управления флотом серверов AmneziaWG.
 
-Приложение рассчитано на запуск в одном Docker-контейнере. Backend управляет VPN-конфигурацией и API, а frontend собирается в статические файлы и отдается тем же ASP.NET-приложением.
+Одна панель — источник истины для клиентов, ключей и настроек обфускации. Агенты на каждом
+VPN-сервере забирают эту конфигурацию и приводят себя к ней. Смысл флота — **бесшовное
+переключение**: когда сервер блокируют или он падает, трафик переезжает на другой без
+перевыпуска хотя бы одного клиентского конфига.
 
-## Что Умеет Проект
+> Статус: архитектура флота готова, переключение **ручное**. Автофейловер, внешние пробы и
+> уведомления спроектированы, но ещё не построены. См. [Дорожную карту](#дорожная-карта).
 
-- Создавать конфигурации клиентов AmneziaWG.
-- Удалять клиентов.
-- Временно отключать и включать клиентов обратно.
-- Скачивать готовый клиентский конфиг.
-- Хранить состояние в JSON-файле, без базы данных.
-- Применять серверные параметры обфускации AmneziaWG.
-- Задавать клиентские параметры обфускации при создании клиента.
-- Показывать статус клиента, последний handshake, текущую скорость и общий расход трафика.
-- Давать удобный web-интерфейс для администрирования.
-- Показывать OpenAPI-документацию через Scalar.
+## Как это работает
 
-## Используемые Технологии
+Все ноды используют **одну и ту же серверную идентичность AmneziaWG** — общую ключевую пару,
+подсеть и профиль обфускации. Клиентский конфиг привязан к публичному ключу сервера, поэтому
+переключение DNS на другую ноду не меняет того, с чем разговаривает клиент. Он просто продолжает
+работать.
 
-Backend написан на ASP.NET Core под .NET 10 и публикуется через Native AOT. Это делает приложение более компактным и удобным для контейнерного запуска.
+Ноды делают только **исходящие** запросы, поэтому не открывают ни одного управляющего порта —
+наружу смотрит лишь UDP-туннель. И они **fail-static**: если панель недоступна, агент продолжает
+обслуживать трафик по закэшированной конфигурации сколько угодно долго. Потеря управления никогда
+не означает потерю VPN.
 
-Frontend сделан на Nuxt 4 и Nuxt UI. Во время Docker-сборки он генерируется в статические файлы, после чего backend отдает его с корня сайта.
+Нода получает только то, что нужно для обслуживания пиров, — публичные ключи, preshared-ключи и
+адреса. Приватные ключи клиентов и их имена панель не отдаёт никогда.
 
-Внутри Docker-образа собираются и используются инструменты AmneziaWG:
+## Что нужно для старта
 
-- `awg`
-- `awg-quick`
-- `amneziawg-go`
+- **Хост для панели.** Любой небольшой VPS. Держите его отдельно от VPN-нод: на нём лежит
+  идентичность всего флота, а ей не место на серверах, которые с наибольшей вероятностью
+  заблокируют или изымут.
+- **Хотя бы одна VPN-нода.** Root, Docker, `/dev/net/tun` и открытый UDP-порт.
+- **DNS-запись, которой вы управляете.** `AWG_ENDPOINT_HOST` попадает в клиентские конфиги, и
+  переключение — это смена этой записи. Поставьте TTL 30–60 секунд заранее. Если провайдер даёт
+  floating IP, он лучше: переезд мгновенный и совершенно незаметный для клиентов.
+- **TLS перед панелью.** По обычному HTTP она отдаст агенту приватный ключ флота в открытом виде.
+  Поставьте перед ней Caddy или nginx с Let's Encrypt.
 
-Если ядро хоста поддерживает модуль AmneziaWG, может использоваться kernel-реализация. Если модуль недоступен, контейнер может работать через userspace-реализацию `amneziawg-go`.
+## Запуск панели
 
-## Основной Функционал
+```bash
+cp .env.control.example .env
+```
 
-### Управление Клиентами
+Отредактируйте `.env` — как минимум `AWG_ENDPOINT_HOST` и учётные данные администратора.
 
-Клиентов можно создавать, отключать, включать, удалять и скачивать для них готовые конфигурационные файлы. Для каждого клиента генерируются ключи, адрес, preshared key и полноценный конфиг.
+```bash
+docker compose -f compose.control.yaml up -d --build
+```
 
-### Обфускация
+При первом старте создаётся база, генерируются идентичность флота и ключ подписи, заводится
+аккаунт администратора. Панель доступна на `http://<хост>:8080`.
 
-Серверные параметры обфускации задаются централизованно и применяются к конфигурации AmneziaWG-интерфейса. При создании клиента можно дополнительно указать клиентские параметры, если для конкретного устройства нужны отдельные значения.
+Без `AWG_ADMIN_USER` / `AWG_ADMIN_PASSWORD` панель запустится, но откажет во всех админских
+запросах и напишет об этом в лог. Так сделано намеренно: падать из-за опечатки в переменной
+окружения хуже, чем стартовать запертым.
 
-Такой подход сохраняет единые серверные настройки и при этом оставляет возможность гибкой настройки клиентов.
+## Подключение ноды
 
-### Live-Статистика
+В панели: **Nodes → Add node**. Вы получите готовую команду:
 
-Frontend получает статистику через легкий event stream от backend. В интерфейсе отображается:
+```bash
+curl -fsSL https://panel.example.com/install.sh | sh -s -- --url https://panel.example.com --token <token>
+```
 
-- online/offline статус клиента;
-- время последнего handshake;
-- текущая скорость скачивания и отправки;
-- общий скачанный трафик;
-- общий отправленный трафик.
+Токен показывается **один раз**, восстановить его нельзя, живёт 30 минут. Установщик при
+необходимости поставит Docker, включит форвардинг и запустит агента, который сам зарегистрируется,
+запомнит ключ подписи панели и заберёт конфигурацию. Повторный запуск безопасен — это обновление
+агента, идентичность ноды сохраняется, туннель не рвётся.
 
-Текущая скорость считается по изменению счетчиков между обновлениями. Общий трафик показывается отдельно, поэтому offline-клиенты не выглядят так, будто они продолжают активно передавать данные.
+Если предпочитаете compose — используйте `.env.node.example` вместе с `compose.node.yaml`.
 
-### Статический Frontend
+## Переезд с одиночного сервера
 
-Nuxt не запускается отдельным Node.js-сервисом в production. Он собирается в статику во время Docker build и копируется внутрь ASP.NET-приложения. Web-интерфейс доступен с `/`, а API остается на `/api`.
+Текущие пользователи не отваливаются, потому что импорт сохраняет исходную ключевую пару сервера.
+
+1. Выгрузите бэкап со старого сервера: `GET /api/backups/export`.
+2. В панели: **Fleet → Import**, включите *Replace existing clients*, загрузите файл.
+3. Убедитесь, что **Server public key** на странице Fleet совпадает со старым.
+4. Замените на этом сервере старый контейнер агентом (командой выше).
+5. Агент применит конфигурацию через `awg syncconf` — интерфейс не опускается, существующие
+   туннели переживают переход.
+
+Для чистой панели можно вместо этого указать `AWG_IMPORT_LEGACY_STATE` на смонтированный
+`state.json`.
 
 ## Настройка
 
-Настройки задаются через переменные окружения. Пример находится в `.env.example`.
+### Панель
 
-```env
-WEB_PORT=8080
-AWG_PORT=51820
-AWG_SUBNET=10.8.0.0/24
-AWG_CLIENT_ALLOWED_IPS=0.0.0.0/0, ::/0
-AWG_ENDPOINT_HOST=vpn.example.com
-AWG_CLIENT_DNS=1.1.1.1, 8.8.8.8
-```
-
-### Переменные Окружения
-
-| Переменная | Описание |
+| Переменная | Назначение |
 | --- | --- |
-| `WEB_PORT` | Порт web-интерфейса и API. |
-| `AWG_PORT` | UDP-порт для подключения AmneziaWG-клиентов. |
-| `AWG_SUBNET` | Внутренняя VPN-подсеть для адресов клиентов. |
-| `AWG_CLIENT_ALLOWED_IPS` | Значение `AllowedIPs`, которое попадет в клиентские конфиги. |
-| `AWG_ENDPOINT_HOST` | Публичный домен или IP-адрес сервера для подключения клиентов. |
-| `AWG_CLIENT_DNS` | DNS-серверы, которые будут записаны в клиентские конфиги. |
+| `AWG_ENDPOINT_HOST` | Что клиенты видят как endpoint. **Это и есть точка переключения.** |
+| `AWG_PORT` | UDP-порт для подключения клиентов. |
+| `AWG_SUBNET` | Подсеть туннеля; адреса выделяются из неё на весь флот. |
+| `AWG_CLIENT_ALLOWED_IPS` | Значение `AllowedIPs` в клиентских конфигах. |
+| `AWG_CLIENT_DNS` | DNS-серверы в клиентских конфигах. |
+| `AWG_ADMIN_USER`, `AWG_ADMIN_PASSWORD` | Создание первого администратора на пустой базе. |
+| `AWG_CONTROL_DB` | Файл SQLite. По умолчанию `/etc/awg-control/control.db`. |
+| `AWG_BUNDLE_LIFETIME_MINUTES` | Срок жизни подписанного бандла. По умолчанию 15. |
+| `AWG_IMPORT_LEGACY_STATE` | Разовое усыновление старого `state.json`. |
 
-## Запуск Через Docker Compose
+### Нода
 
-Создайте локальный `.env`:
+| Переменная | Назначение |
+| --- | --- |
+| `AWG_CONTROL_URL` | Адрес панели. |
+| `AWG_ENROLLMENT_TOKEN` | Нужен только для первого запуска. |
+| `AWG_EGRESS_INTERFACE` | Оставьте пустым — интерфейс определится по default route. |
+| `AWG_POLL_INTERVAL_SECONDS` | Частота опроса новой ревизии. По умолчанию 20. |
+| `AWG_NODE_STATE_PATH` | Идентичность агента и кэш бандла. По умолчанию `/etc/awg-node`. |
+| `AWG_INTERFACE` | Имя интерфейса. По умолчанию `awg0`. |
+
+Обфускация настраивается **не** переменными окружения. Она общая для флота и задаётся в панели в
+разделе **Fleet**, поэтому изменение применяется сразу ко всем нодам.
+
+## Работа с панелью
+
+- **Clients** — создание, переименование, включение, отключение и удаление клиентов; скачивание
+  конфига, QR-код, share-ссылка на 24 часа для того, у кого нет аккаунта. Статистика трафика и
+  handshake агрегируется по всем нодам.
+- **Nodes** — состояние агентов, забрали ли они текущую ревизию, команды подключения и отзыв
+  доступа. Отзыв обрывает выдачу конфигурации со следующего же запроса ноды.
+- **Fleet** — общая идентичность, настройки обфускации, импорт со старого сервера.
+- **Events** — журнал: кто что менял и какие ноды забирали конфигурацию.
+
+## Модель безопасности
+
+- Админский API требует аутентифицированной сессии. Анонимны только `/api/health`, `/api/auth/*`
+  и `/api/shares/*`.
+- Агенты аутентифицируются **подписью каждого запроса** ключом, который сгенерирован на самой
+  ноде. Приватный ключ никогда не уходит по сети, и, в отличие от mTLS, это переживает
+  терминирующий TLS прокси или CDN перед панелью.
+- Бандлы конфигурации подписываются панелью и проверяются ключом, который агент запомнил при
+  регистрации. Одной подписи мало — корректно подписанный бандл остаётся валидным вечно, — поэтому
+  бандл несёт монотонную ревизию, привязку к ноде и срок годности, а агент отвергает всё, что
+  старше уже применённого.
+- Отзыв ноды — флаг, проверяемый на каждом запросе, поэтому он действует немедленно. Никаких
+  списков отзыва распространять не нужно.
+- Токены регистрации и share-ссылок хранятся только в виде хешей.
+
+Исходите из того, что хостер может прочитать диск ноды. Считайте изъятую ноду компрометацией
+всего флота, поскольку общая идентичность есть на каждой.
+
+## Разработка
 
 ```bash
-cp .env.example .env
+dotnet build Awg-easy.sln
+dotnet test Awg-easy.sln
+
+cd frontend
+pnpm install
+pnpm run dev        # против локально запущенной панели
+pnpm run lint
+pnpm run typecheck
 ```
 
-Отредактируйте `.env` и обязательно укажите `AWG_ENDPOINT_HOST` - публичный домен или IP-адрес вашего сервера.
+| Проект | Роль |
+| --- | --- |
+| `src/AwgEasy.Contracts` | Общий контракт обеих сторон. Его изменение меняет весь флот. |
+| `src/AwgEasy.Node` | Агент для VPN-сервера. Native AOT, привилегированный, без UI. |
+| `src/AwgEasy.Control` | Панель: база, админский API, агентский API, раздача фронтенда. |
+| `frontend` | Nuxt 4 + Nuxt UI, собирается в статику. |
+| `tests/AwgEasy.Tests` | Модульные тесты плюс интеграционные с настоящей панелью. |
 
-После этого соберите и запустите контейнер:
+Агента можно проверить без панели — удобно при отладке ноды:
 
 ```bash
-docker compose up -d --build
+awg-node --render-bundle bundle.json --control-key <base64url> --egress ens3
 ```
 
-Web-интерфейс будет доступен по адресу:
+Он проверит подпись, прогонит проверки приёмки и напечатает конфиг интерфейса, который применил
+бы, ничего при этом не трогая.
 
-```text
-http://localhost:8080
-```
+Архитектурные инварианты, которые стоит знать перед правкой кода, собраны в [AGENTS.md](AGENTS.md).
 
-Если вы изменили `WEB_PORT`, используйте выбранный порт.
+## Дорожная карта
 
-## Требования Для Docker
+Фаза 1 — мультисерверность с ручным переключением — готова. Дальше:
 
-Контейнеру нужны права на управление сетью и доступ к `/dev/net/tun`. В `compose.yaml` это уже настроено:
+- **Детект блокировки.** Заблокированная нода изнутри выглядит совершенно здоровой: агент
+  рапортует, интерфейс поднят, а клиенты просто не могут до неё достучаться. Чтобы это увидеть,
+  нужны пробы из сетей, откуда реально подключаются пользователи, и сопоставление heartbeat агента
+  с настоящими AmneziaWG-хендшейками с нескольких точек.
+- **Автоматический фейловер** по этому сигналу — с кворумом и гистерезисом, с обновлением DNS или
+  переносом floating IP и уведомлением администратора.
+- **Ротация идентичности флота**, чтобы скомпрометированная или изъятая нода не означала ручную
+  пересборку всего.
 
-- `NET_ADMIN`
-- `SYS_MODULE`
-- `/dev/net/tun`
-- sysctl-настройки для IPv4 forwarding
+## Известные пробелы
 
-На реальном сервере также нужно открыть выбранный UDP-порт в firewall.
-
-## API И Документация
-
-API доступно по пути `/api`.
-
-Основные endpoints:
-
-| Endpoint | Назначение |
-| --- | --- |
-| `GET /api/health` | Проверка состояния приложения. |
-| `GET /api/server` | Текущая конфигурация сервера. |
-| `GET /api/server/runtime` | Runtime-статус AmneziaWG-интерфейса. |
-| `PUT /api/server/obfuscation` | Обновление серверных параметров обфускации. |
-| `GET /api/clients` | Список клиентов. |
-| `POST /api/clients` | Создание клиента. |
-| `POST /api/clients/{id}/disable` | Отключение клиента. |
-| `POST /api/clients/{id}/enable` | Включение клиента. |
-| `DELETE /api/clients/{id}` | Удаление клиента. |
-| `GET /api/clients/{id}/config` | Скачивание клиентского конфига. |
-| `GET /api/clients/events` | Event stream со статистикой клиентов. |
-
-OpenAPI доступен здесь:
-
-```text
-/openapi/v1.json
-```
-
-Scalar-документация доступна здесь:
-
-```text
-/scalar
-```
-
-## Хранение Данных
-
-Состояние приложения хранится в JSON-файле. При запуске через Docker оно сохраняется в volume `awg-easy-state`.
-
-Сгенерированная конфигурация AmneziaWG-интерфейса хранится отдельно:
-
-```text
-/etc/amnezia/amneziawg
-```
-
-Пока Docker volumes сохраняются, пересборка контейнера не удаляет клиентов и серверные ключи.
-
-## Заметки
-
-Проект сейчас ориентирован на практичное развертывание на одном сервере. База данных намеренно не используется: состояние хранится в файлах, которые проще бэкапить, проверять и восстанавливать.
-
-Текущая модель синхронизации записывает конфигурацию AmneziaWG и применяет ее к интерфейсу. Это простой и надежный вариант для текущего этапа. Позже его можно заменить на более аккуратную синхронизацию, если это понадобится.
+- Docker-образы ещё ни разу не собирались, панель и агент вместе на настоящем сервере не
+  запускались. Соберите и проверьте на тестовом хосте, прежде чем полагаться на это.
+- У фронтенда нет автоматических тестов.
+- Исходное одиночное приложение всё ещё лежит в `Program.cs` в корне репозитория под тегом
+  `v0.9-standalone`. Оно устарело и будет удалено.

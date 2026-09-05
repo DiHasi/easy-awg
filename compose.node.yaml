@@ -1,0 +1,38 @@
+# A single VPN node. Deploy one of these per server; they all pull the same fleet
+# identity from the control plane, which is what makes endpoint failover invisible.
+services:
+  awg-node:
+    image: dihasi/awg-node:latest
+    build:
+      context: .
+      dockerfile: docker/node.Dockerfile
+    container_name: awg-node
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.src_valid_mark: "1"
+    ports:
+      # Only the tunnel is published. The agent's health endpoint stays on loopback.
+      - "${AWG_PORT:-51820}:${AWG_PORT:-51820}/udp"
+    environment:
+      DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
+      AWG_CONTROL_URL: "${AWG_CONTROL_URL:?set the control plane URL}"
+      AWG_ENROLLMENT_TOKEN: "${AWG_ENROLLMENT_TOKEN:-}"
+      AWG_NODE_STATE_PATH: "/etc/awg-node"
+      AWG_INTERFACE: "awg0"
+      AWG_INTERFACE_CONFIG_PATH: "/etc/amnezia/amneziawg/awg0.conf"
+      # Leave unset to detect the default-route interface instead of assuming eth0.
+      AWG_EGRESS_INTERFACE: "${AWG_EGRESS_INTERFACE:-}"
+      AWG_POLL_INTERVAL_SECONDS: "${AWG_POLL_INTERVAL_SECONDS:-20}"
+    volumes:
+      - awg-node-state:/etc/awg-node
+      - awg-node-config:/etc/amnezia/amneziawg
+
+volumes:
+  awg-node-state:
+  awg-node-config:

@@ -67,6 +67,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends clang zlib1g-dev libicu74 \
     && rm -rf /var/lib/apt/lists/*
 COPY ["Awg-easy.csproj", "./"]
+COPY ["src/AwgEasy.Contracts/AwgEasy.Contracts.csproj", "src/AwgEasy.Contracts/"]
 RUN dotnet restore "Awg-easy.csproj"
 COPY . .
 WORKDIR "/src/"

@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AwgEasy.Contracts;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.HttpOverrides;
 using Scalar.AspNetCore;
@@ -1077,78 +1078,6 @@ public static class AwgConfigRenderer
     }
 }
 
-public static class AwgObfuscationValidator
-{
-    public static bool TryValidateServerProfile(ServerObfuscationProfile? obfuscation, out ApiError error)
-    {
-        error = ApiError.Empty;
-        if (obfuscation is null)
-        {
-            return true;
-        }
-
-        if (!ValidateHValues([obfuscation.H1, obfuscation.H2, obfuscation.H3, obfuscation.H4], out error))
-        {
-            return false;
-        }
-
-        if (!ValidateClientOverrides(obfuscation.GetDefaults(), out error))
-        {
-            return false;
-        }
-
-        return true;
-    }
-
-    public static bool TryValidateClientOverrides(ClientObfuscationOverrides? obfuscation, out ApiError error)
-    {
-        error = ApiError.Empty;
-        if (obfuscation is null)
-        {
-            return true;
-        }
-
-        return ValidateClientOverrides(obfuscation, out error);
-    }
-
-    private static bool ValidateClientOverrides(ClientObfuscationOverrides obfuscation, out ApiError error)
-    {
-        error = ApiError.Empty;
-        if (obfuscation.Jc is < 1 or > 128)
-        {
-            error = new ApiError("invalid_obfuscation", "Jc must be between 1 and 128.");
-            return false;
-        }
-
-        if (obfuscation.Jmin.HasValue != obfuscation.Jmax.HasValue)
-        {
-            error = new ApiError("invalid_obfuscation", "Jmin and Jmax must be set together.");
-            return false;
-        }
-
-        if (obfuscation.Jmin.HasValue && !(obfuscation.Jmin.Value >= 0 && obfuscation.Jmin.Value < obfuscation.Jmax!.Value && obfuscation.Jmax.Value <= 1280))
-        {
-            error = new ApiError("invalid_obfuscation", "Jmin/Jmax must satisfy 0 <= Jmin < Jmax <= 1280.");
-            return false;
-        }
-
-        return true;
-    }
-
-    private static bool ValidateHValues(string?[] values, out ApiError error)
-    {
-        error = ApiError.Empty;
-        var headers = values.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!.Trim()).ToArray();
-        if (headers.Length != headers.Distinct().Count())
-        {
-            error = new ApiError("invalid_obfuscation", "H1-H4 values must be unique.");
-            return false;
-        }
-
-        return true;
-    }
-}
-
 public static class AwgBackupValidator
 {
     public static bool TryValidate(AwgBackup? backup, AwgEasyOptions currentOptions, out string[] warnings, out ApiError error)
@@ -1312,11 +1241,6 @@ public sealed record AwgCommandStatus(
     string Output,
     string Error);
 
-public sealed record ApiError(string Code, string Message)
-{
-    public static ApiError Empty { get; } = new(string.Empty, string.Empty);
-}
-
 public sealed record HealthResponse(string Status);
 
 public sealed record ClientShare(
@@ -1437,190 +1361,7 @@ public sealed class AwgClient
     public ClientObfuscationOverrides? Obfuscation { get; set; }
 
     public ClientObfuscationOverrides GetEffectiveObfuscation(ServerObfuscationProfile? serverProfile)
-        => new()
-        {
-            Jc = Obfuscation?.Jc ?? serverProfile?.DefaultJc,
-            Jmin = Obfuscation?.Jmin ?? serverProfile?.DefaultJmin,
-            Jmax = Obfuscation?.Jmax ?? serverProfile?.DefaultJmax,
-            I1 = Obfuscation?.I1 ?? serverProfile?.DefaultI1,
-            I2 = Obfuscation?.I2 ?? serverProfile?.DefaultI2,
-            I3 = Obfuscation?.I3 ?? serverProfile?.DefaultI3,
-            I4 = Obfuscation?.I4 ?? serverProfile?.DefaultI4,
-            I5 = Obfuscation?.I5 ?? serverProfile?.DefaultI5
-        };
-}
-
-public sealed record ClientObfuscationOverrides
-{
-    public int? Jc { get; init; }
-    public int? Jmin { get; init; }
-    public int? Jmax { get; init; }
-    [JsonConverter(typeof(StringOrNumberJsonConverter))]
-    public string? I1 { get; init; }
-    [JsonConverter(typeof(StringOrNumberJsonConverter))]
-    public string? I2 { get; init; }
-    [JsonConverter(typeof(StringOrNumberJsonConverter))]
-    public string? I3 { get; init; }
-    [JsonConverter(typeof(StringOrNumberJsonConverter))]
-    public string? I4 { get; init; }
-    [JsonConverter(typeof(StringOrNumberJsonConverter))]
-    public string? I5 { get; init; }
-
-    public ClientObfuscationOverrides Normalize()
-        => new()
-        {
-            Jc = Jc,
-            Jmin = Jmin,
-            Jmax = Jmax,
-            I1 = NormalizeString(I1),
-            I2 = NormalizeString(I2),
-            I3 = NormalizeString(I3),
-            I4 = NormalizeString(I4),
-            I5 = NormalizeString(I5)
-        };
-
-    private static string? NormalizeString(string? value)
-        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-}
-
-public sealed record ServerObfuscationProfile
-{
-    public int? S1 { get; init; }
-    public int? S2 { get; init; }
-    public int? S3 { get; init; }
-    public int? S4 { get; init; }
-    [JsonConverter(typeof(StringOrNumberJsonConverter))]
-    public string? H1 { get; init; }
-    [JsonConverter(typeof(StringOrNumberJsonConverter))]
-    public string? H2 { get; init; }
-    [JsonConverter(typeof(StringOrNumberJsonConverter))]
-    public string? H3 { get; init; }
-    [JsonConverter(typeof(StringOrNumberJsonConverter))]
-    public string? H4 { get; init; }
-    public int? DefaultJc { get; init; }
-    public int? DefaultJmin { get; init; }
-    public int? DefaultJmax { get; init; }
-    [JsonConverter(typeof(StringOrNumberJsonConverter))]
-    public string? DefaultI1 { get; init; }
-    [JsonConverter(typeof(StringOrNumberJsonConverter))]
-    public string? DefaultI2 { get; init; }
-    [JsonConverter(typeof(StringOrNumberJsonConverter))]
-    public string? DefaultI3 { get; init; }
-    [JsonConverter(typeof(StringOrNumberJsonConverter))]
-    public string? DefaultI4 { get; init; }
-    [JsonConverter(typeof(StringOrNumberJsonConverter))]
-    public string? DefaultI5 { get; init; }
-
-    public ServerObfuscationProfile Normalize()
-        => new()
-        {
-            S1 = S1,
-            S2 = S2,
-            S3 = S3,
-            S4 = S4,
-            H1 = NormalizeString(H1),
-            H2 = NormalizeString(H2),
-            H3 = NormalizeString(H3),
-            H4 = NormalizeString(H4),
-            DefaultJc = DefaultJc,
-            DefaultJmin = DefaultJmin,
-            DefaultJmax = DefaultJmax,
-            DefaultI1 = NormalizeString(DefaultI1),
-            DefaultI2 = NormalizeString(DefaultI2),
-            DefaultI3 = NormalizeString(DefaultI3),
-            DefaultI4 = NormalizeString(DefaultI4),
-            DefaultI5 = NormalizeString(DefaultI5)
-        };
-
-    public ClientObfuscationOverrides GetDefaults()
-        => new()
-        {
-            Jc = DefaultJc,
-            Jmin = DefaultJmin,
-            Jmax = DefaultJmax,
-            I1 = DefaultI1,
-            I2 = DefaultI2,
-            I3 = DefaultI3,
-            I4 = DefaultI4,
-            I5 = DefaultI5
-        };
-
-    private static string? NormalizeString(string? value)
-        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-}
-
-public sealed record Ipv4Network(uint NetworkAddress, int PrefixLength)
-{
-    public uint UsableHosts => PrefixLength >= 31 ? 0u : (1u << (32 - PrefixLength)) - 1u;
-
-    public static Ipv4Network Parse(string value)
-    {
-        var parts = value.Split('/', 2, StringSplitOptions.TrimEntries);
-        if (parts.Length != 2 || !IPAddress.TryParse(parts[0], out var ip) || ip.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
-        {
-            throw new InvalidOperationException($"Invalid IPv4 CIDR subnet: {value}");
-        }
-
-        if (!int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var prefix) || prefix is < 16 or > 30)
-        {
-            throw new InvalidOperationException("AWG_SUBNET prefix must be between /16 and /30.");
-        }
-
-        var raw = IpToUInt(ip);
-        var mask = uint.MaxValue << (32 - prefix);
-        return new Ipv4Network(raw & mask, prefix);
-    }
-
-    public string GetAddress(uint hostOffset) => UIntToIp(NetworkAddress + hostOffset).ToString();
-
-    public bool Contains(IPAddress address)
-    {
-        if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
-        {
-            return false;
-        }
-
-        var value = IpToUInt(address);
-        var mask = uint.MaxValue << (32 - PrefixLength);
-        return (value & mask) == NetworkAddress;
-    }
-
-    private static uint IpToUInt(IPAddress address)
-    {
-        var bytes = address.GetAddressBytes();
-        return ((uint)bytes[0] << 24) | ((uint)bytes[1] << 16) | ((uint)bytes[2] << 8) | bytes[3];
-    }
-
-    private static IPAddress UIntToIp(uint value)
-        => new([(byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value]);
-}
-
-public sealed class StringOrNumberJsonConverter : JsonConverter<string?>
-{
-    public override string? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-        => reader.TokenType switch
-        {
-            JsonTokenType.Null => null,
-            JsonTokenType.String => Normalize(reader.GetString()),
-            JsonTokenType.Number => reader.TryGetInt64(out var longValue)
-                ? longValue.ToString(CultureInfo.InvariantCulture)
-                : reader.GetDouble().ToString("R", CultureInfo.InvariantCulture),
-            _ => throw new JsonException("Expected string, number or null.")
-        };
-
-    public override void Write(Utf8JsonWriter writer, string? value, JsonSerializerOptions options)
-    {
-        if (value is null)
-        {
-            writer.WriteNullValue();
-            return;
-        }
-
-        writer.WriteStringValue(value);
-    }
-
-    private static string? Normalize(string? value)
-        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        => serverProfile?.Merge(Obfuscation) ?? Obfuscation ?? new ClientObfuscationOverrides();
 }
 
 [JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]

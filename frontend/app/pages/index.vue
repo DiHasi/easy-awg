@@ -1,94 +1,31 @@
 <script setup lang="ts">
 import QRCode from 'qrcode'
+import type { Client, ClientObfuscationOverrides, ClientShare, ClientStats } from '~/types/api'
 
-type ClientObfuscationOverrides = {
-  jc?: number | null
-  jmin?: number | null
-  jmax?: number | null
-  i1?: string | null
-  i2?: string | null
-  i3?: string | null
-  i4?: string | null
-  i5?: string | null
-}
+definePageMeta({ middleware: 'auth' })
 
-type Client = {
-  id: string
-  name: string
-  address: string
-  publicKey: string
-  enabled: boolean
-  createdAt: string
-  updatedAt: string
-  obfuscation?: ClientObfuscationOverrides | null
-}
-
-type ApiError = {
-  code: string
-  message: string
-}
-
-type CreateClientBody = {
-  name: string
-  obfuscation?: ClientObfuscationOverrides
-}
-
-type UpdateClientBody = {
-  name: string
-}
-
-type ClientStats = {
-  id: string
-  latestHandshakeAt?: string | null
-  receivedBytes: number
-  transmittedBytes: number
-  online: boolean
-}
-
-type ClientStatsPayload = ClientStats & {
-  Id?: string
-  LatestHandshakeAt?: string | null
-  ReceivedBytes?: number
-  TransmittedBytes?: number
-  Online?: boolean
-}
-
-type ClientTrafficRate = {
-  downloadBytesPerSecond: number
-  uploadBytesPerSecond: number
-}
-
-type ClientShare = {
-  token: string
-  clientId: string
-  clientName: string
-  expiresAt: string
-}
-
+const api = useControlApi()
 const toast = useToast()
-const config = useRuntimeConfig()
 
 const clients = ref<Client[]>([])
 const stats = ref<Record<string, ClientStats>>({})
-const trafficRates = ref<Record<string, ClientTrafficRate>>({})
+const rates = ref<Record<string, { down: number, up: number }>>({})
 const loading = ref(true)
-const saving = ref(false)
-const actionId = ref<string | null>(null)
 const errorMessage = ref<string | null>(null)
-const statsConnected = ref(false)
-const expandedClientIds = ref<Set<string>>(new Set())
+const actionId = ref<string | null>(null)
+
 const createOpen = ref(false)
 const editOpen = ref(false)
 const qrOpen = ref(false)
-const qrLoading = ref(false)
-const qrClient = ref<Client | null>(null)
-const qrDataUrl = ref<string | null>(null)
+const shareOpen = ref(false)
+const saving = ref(false)
+const useObfuscation = ref(false)
+
 const editingClient = ref<Client | null>(null)
 const editName = ref('')
-const useObfuscation = ref(false)
-let statsSource: EventSource | null = null
-let previousStatsSnapshot: Record<string, ClientStats> | null = null
-let previousStatsAt: number | null = null
+const qrClient = ref<Client | null>(null)
+const qrDataUrl = ref<string | null>(null)
+const share = ref<ClientShare | null>(null)
 
 const form = reactive({
   name: '',
@@ -102,125 +39,60 @@ const form = reactive({
   i5: ''
 })
 
-const apiBase = computed(() => {
-  const value = String(config.public.apiBase || '').replace(/\/$/, '')
-  return value || ''
-})
+// Counters are cumulative, so a rate only means something as a delta between two samples.
+let previousStats: Record<string, ClientStats> | null = null
+let previousAt: number | null = null
+let statsTimer: ReturnType<typeof setInterval> | null = null
 
 const enabledCount = computed(() => clients.value.filter(client => client.enabled).length)
 const disabledCount = computed(() => clients.value.length - enabledCount.value)
-
-function apiUrl(path: string) {
-  return `${apiBase.value}/api${path}`
-}
-
-async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(apiUrl(path), {
-    ...options,
-    headers: {
-      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-      ...options.headers
-    }
-  })
-
-  if (!response.ok) {
-    let message = `HTTP ${response.status}`
-    try {
-      const apiError = await response.json() as ApiError
-      message = apiError.message || apiError.code || message
-    } catch {
-      const text = await response.text()
-      message = text || message
-    }
-
-    throw new Error(message)
-  }
-
-  if (response.status === 204) {
-    return undefined as T
-  }
-
-  return await response.json() as T
-}
+const onlineCount = computed(() => clients.value.filter(client => stats.value[client.id]?.online).length)
 
 async function loadClients() {
-  loading.value = true
-  errorMessage.value = null
-
   try {
-    clients.value = await apiFetch<Client[]>('/clients')
+    clients.value = await api.get<Client[]>('/clients')
+    errorMessage.value = null
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'Failed to load clients.'
+    errorMessage.value = describeError(error, 'Failed to load clients.')
   } finally {
     loading.value = false
   }
 }
 
-function startStatsStream() {
-  if (statsSource) {
-    statsSource.close()
+async function loadStats() {
+  try {
+    const items = await api.get<ClientStats[]>('/clients/stats')
+    updateRates(items)
+    stats.value = Object.fromEntries(items.map(item => [item.id, item]))
+  } catch {
+    // A dropped stats poll is not worth an error banner; the next tick usually recovers.
   }
-
-  statsSource = new EventSource(apiUrl('/clients/events'))
-
-  statsSource.addEventListener('open', () => {
-    statsConnected.value = true
-  })
-
-  statsSource.addEventListener('error', () => {
-    statsConnected.value = false
-  })
-
-  statsSource.addEventListener('client-stats', (event) => {
-    const items = JSON.parse(event.data) as ClientStatsPayload[]
-    const normalized = items.map(normalizeStats)
-    updateTrafficRates(normalized)
-    stats.value = Object.fromEntries(normalized.map(item => [item.id, item]))
-  })
 }
 
-function updateTrafficRates(items: ClientStats[]) {
+function updateRates(items: ClientStats[]) {
   const now = Date.now()
+  const snapshot = Object.fromEntries(items.map(item => [item.id, item]))
 
-  if (!previousStatsSnapshot || !previousStatsAt) {
-    previousStatsSnapshot = Object.fromEntries(items.map(item => [item.id, item]))
-    previousStatsAt = now
-    trafficRates.value = Object.fromEntries(items.map(item => [
-      item.id,
-      { downloadBytesPerSecond: 0, uploadBytesPerSecond: 0 }
-    ]))
+  if (!previousStats || !previousAt) {
+    previousStats = snapshot
+    previousAt = now
     return
   }
 
-  const elapsedSeconds = Math.max((now - previousStatsAt) / 1000, 1)
-  const nextRates = Object.fromEntries(items.map((item) => {
-    const previous = previousStatsSnapshot?.[item.id]
-    const isActive = item.online && previous?.online
-    const downloadDelta = isActive ? Math.max(item.transmittedBytes - (previous?.transmittedBytes ?? item.transmittedBytes), 0) : 0
-    const uploadDelta = isActive ? Math.max(item.receivedBytes - (previous?.receivedBytes ?? item.receivedBytes), 0) : 0
-
-    return [
-      item.id,
-      {
-        downloadBytesPerSecond: downloadDelta / elapsedSeconds,
-        uploadBytesPerSecond: uploadDelta / elapsedSeconds
-      }
-    ]
+  const elapsed = Math.max((now - previousAt) / 1000, 1)
+  rates.value = Object.fromEntries(items.map((item) => {
+    const previous = previousStats?.[item.id]
+    // Only count traffic between two samples where the peer was online in both, so an offline
+    // client does not appear to be transferring the moment it reconnects.
+    const active = item.online && previous?.online
+    return [item.id, {
+      down: active ? Math.max(item.transmittedBytes - (previous?.transmittedBytes ?? 0), 0) / elapsed : 0,
+      up: active ? Math.max(item.receivedBytes - (previous?.receivedBytes ?? 0), 0) / elapsed : 0
+    }]
   }))
 
-  previousStatsSnapshot = Object.fromEntries(items.map(item => [item.id, item]))
-  previousStatsAt = now
-  trafficRates.value = nextRates
-}
-
-function normalizeStats(item: ClientStatsPayload): ClientStats {
-  return {
-    id: item.id ?? item.Id ?? '',
-    latestHandshakeAt: item.latestHandshakeAt ?? item.LatestHandshakeAt ?? null,
-    receivedBytes: item.receivedBytes ?? item.ReceivedBytes ?? 0,
-    transmittedBytes: item.transmittedBytes ?? item.TransmittedBytes ?? 0,
-    online: item.online ?? item.Online ?? false
-  }
+  previousStats = snapshot
+  previousAt = now
 }
 
 function resetForm() {
@@ -236,35 +108,36 @@ function resetForm() {
   useObfuscation.value = false
 }
 
-function cleanText(value: string) {
-  const trimmed = value.trim()
-  return trimmed.length > 0 ? trimmed : undefined
-}
-
 function buildObfuscation(): ClientObfuscationOverrides | undefined {
   if (!useObfuscation.value) {
     return undefined
   }
 
-  const obfuscation: ClientObfuscationOverrides = {
-    jc: form.jc ?? undefined,
-    jmin: form.jmin ?? undefined,
-    jmax: form.jmax ?? undefined,
-    i1: cleanText(form.i1),
-    i2: cleanText(form.i2),
-    i3: cleanText(form.i3),
-    i4: cleanText(form.i4),
-    i5: cleanText(form.i5)
+  const clean = (value: string) => value.trim() || undefined
+  const overrides: ClientObfuscationOverrides = {
+    jc: form.jc,
+    jmin: form.jmin,
+    jmax: form.jmax,
+    i1: clean(form.i1),
+    i2: clean(form.i2),
+    i3: clean(form.i3),
+    i4: clean(form.i4),
+    i5: clean(form.i5)
   }
 
-  return Object.values(obfuscation).some(value => value !== undefined && value !== null)
-    ? obfuscation
-    : undefined
+  return Object.values(overrides).some(value => value !== undefined && value !== null) ? overrides : undefined
+}
+
+function fail(title: string, error: unknown) {
+  toast.add({ title, description: describeError(error, ''), color: 'error', icon: 'i-lucide-circle-alert' })
+}
+
+function succeed(title: string) {
+  toast.add({ title, color: 'success', icon: 'i-lucide-check' })
 }
 
 async function createClient() {
-  const name = form.name.trim()
-  if (!name) {
+  if (!form.name.trim()) {
     toast.add({ title: 'Name is required', color: 'error', icon: 'i-lucide-circle-alert' })
     return
   }
@@ -272,72 +145,43 @@ async function createClient() {
   saving.value = true
 
   try {
-    const body: CreateClientBody = {
-      name,
+    const client = await api.post<Client>('/clients', {
+      name: form.name.trim(),
       obfuscation: buildObfuscation()
-    }
-
-    const client = await apiFetch<Client>('/clients', {
-      method: 'POST',
-      body: JSON.stringify(body)
     })
 
     clients.value = [...clients.value, client]
     createOpen.value = false
     resetForm()
-    toast.add({ title: 'Client created', color: 'success', icon: 'i-lucide-check' })
+    succeed('Client created')
   } catch (error) {
-    toast.add({
-      title: 'Could not create client',
-      description: error instanceof Error ? error.message : undefined,
-      color: 'error',
-      icon: 'i-lucide-circle-alert'
-    })
+    fail('Could not create client', error)
   } finally {
     saving.value = false
   }
 }
 
-function openEditClient(client: Client) {
+function openEdit(client: Client) {
   editingClient.value = client
   editName.value = client.name
   editOpen.value = true
 }
 
-async function saveClientName() {
+async function saveName() {
   const client = editingClient.value
-  const name = editName.value.trim()
-
-  if (!client) {
-    return
-  }
-
-  if (!name) {
-    toast.add({ title: 'Name is required', color: 'error', icon: 'i-lucide-circle-alert' })
+  if (!client || !editName.value.trim()) {
     return
   }
 
   actionId.value = client.id
 
   try {
-    const body: UpdateClientBody = { name }
-    const next = await apiFetch<Client>(`/clients/${client.id}`, {
-      method: 'PUT',
-      body: JSON.stringify(body)
-    })
-
-    clients.value = clients.value.map(item => item.id === next.id ? next : item)
+    const updated = await api.put<Client>(`/clients/${client.id}`, { name: editName.value.trim() })
+    clients.value = clients.value.map(item => item.id === updated.id ? updated : item)
     editOpen.value = false
-    editingClient.value = null
-    editName.value = ''
-    toast.add({ title: 'Client renamed', color: 'success', icon: 'i-lucide-check' })
+    succeed('Client renamed')
   } catch (error) {
-    toast.add({
-      title: 'Could not rename client',
-      description: error instanceof Error ? error.message : undefined,
-      color: 'error',
-      icon: 'i-lucide-circle-alert'
-    })
+    fail('Could not rename client', error)
   } finally {
     actionId.value = null
   }
@@ -347,242 +191,135 @@ async function toggleClient(client: Client) {
   actionId.value = client.id
 
   try {
-    const next = await apiFetch<Client>(`/clients/${client.id}/${client.enabled ? 'disable' : 'enable'}`, {
-      method: 'POST'
-    })
-
-    clients.value = clients.value.map(item => item.id === next.id ? next : item)
-    toast.add({
-      title: next.enabled ? 'Client enabled' : 'Client disabled',
-      color: 'success',
-      icon: next.enabled ? 'i-lucide-power' : 'i-lucide-power-off'
-    })
+    const updated = await api.post<Client>(`/clients/${client.id}/${client.enabled ? 'disable' : 'enable'}`)
+    clients.value = clients.value.map(item => item.id === updated.id ? updated : item)
+    succeed(updated.enabled ? 'Client enabled' : 'Client disabled')
   } catch (error) {
-    toast.add({
-      title: 'Could not update client',
-      description: error instanceof Error ? error.message : undefined,
-      color: 'error',
-      icon: 'i-lucide-circle-alert'
-    })
+    fail('Could not change the client', error)
   } finally {
     actionId.value = null
   }
 }
 
 async function deleteClient(client: Client) {
-  if (!confirm(`Delete ${client.name}?`)) {
+  if (!confirm(`Delete "${client.name}"? Its config stops working immediately.`)) {
     return
   }
 
   actionId.value = client.id
 
   try {
-    await apiFetch<unknown>(`/clients/${client.id}`, { method: 'DELETE' })
+    await api.del(`/clients/${client.id}`)
     clients.value = clients.value.filter(item => item.id !== client.id)
-    toast.add({ title: 'Client deleted', color: 'success', icon: 'i-lucide-trash-2' })
+    succeed('Client deleted')
   } catch (error) {
-    toast.add({
-      title: 'Could not delete client',
-      description: error instanceof Error ? error.message : undefined,
-      color: 'error',
-      icon: 'i-lucide-circle-alert'
-    })
+    fail('Could not delete client', error)
   } finally {
     actionId.value = null
   }
-}
-
-function isClientExpanded(client: Client) {
-  return expandedClientIds.value.has(client.id)
-}
-
-function toggleClientExpanded(client: Client) {
-  const next = new Set(expandedClientIds.value)
-  if (next.has(client.id)) {
-    next.delete(client.id)
-  } else {
-    next.add(client.id)
-  }
-
-  expandedClientIds.value = next
-}
-
-async function shareConfig(client: Client) {
-  actionId.value = client.id
-
-  try {
-    const share = await apiFetch<ClientShare>(`/clients/${client.id}/share`, {
-      method: 'POST'
-    })
-    const url = `${window.location.origin}/share/${share.token}`
-    window.open(url, '_blank', 'noopener,noreferrer')
-    toast.add({ title: 'Share link created', color: 'success', icon: 'i-lucide-share-2' })
-  } catch (error) {
-    toast.add({
-      title: 'Could not create share link',
-      description: error instanceof Error ? error.message : undefined,
-      color: 'error',
-      icon: 'i-lucide-circle-alert'
-    })
-  } finally {
-    actionId.value = null
-  }
-}
-
-function configFileName(client: Client, extension: string) {
-  const name = client.name.replace(/[^a-z0-9_.-]+/gi, '-')
-  return `${name}.${extension}`
-}
-
-async function fetchClientConfig(client: Client) {
-  const response = await fetch(apiUrl(`/clients/${client.id}/config`))
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`)
-  }
-
-  return await response.text()
 }
 
 async function downloadConfig(client: Client) {
   actionId.value = client.id
 
   try {
-    const configText = await fetchClientConfig(client)
-    const blob = new Blob([configText], { type: 'text/plain;charset=utf-8' })
+    const response = await fetch(api.url(`/clients/${client.id}/config`), { credentials: 'include' })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    const blob = await response.blob()
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = configFileName(client, 'conf')
-    document.body.appendChild(link)
+    link.download = `${client.name}.conf`
     link.click()
-    link.remove()
     URL.revokeObjectURL(url)
   } catch (error) {
-    toast.add({
-      title: 'Could not download config',
-      description: error instanceof Error ? error.message : undefined,
-      color: 'error',
-      icon: 'i-lucide-circle-alert'
-    })
+    fail('Could not download the config', error)
   } finally {
     actionId.value = null
   }
 }
 
-async function openQrCode(client: Client) {
-  qrOpen.value = true
-  qrLoading.value = true
+async function openQr(client: Client) {
   qrClient.value = client
   qrDataUrl.value = null
+  qrOpen.value = true
+
+  try {
+    const response = await fetch(api.url(`/clients/${client.id}/config`), { credentials: 'include' })
+    const config = await response.text()
+    qrDataUrl.value = await QRCode.toDataURL(config, { width: 320, margin: 1 })
+  } catch (error) {
+    fail('Could not build the QR code', error)
+    qrOpen.value = false
+  }
+}
+
+async function createShare(client: Client) {
   actionId.value = client.id
 
   try {
-    const configText = await fetchClientConfig(client)
-    qrDataUrl.value = await QRCode.toDataURL(configText, {
-      errorCorrectionLevel: 'M',
-      margin: 2,
-      width: 320
-    })
+    share.value = await api.post<ClientShare>(`/clients/${client.id}/share`)
+    shareOpen.value = true
   } catch (error) {
-    qrOpen.value = false
-    toast.add({
-      title: 'Could not generate QR code',
-      description: error instanceof Error ? error.message : undefined,
-      color: 'error',
-      icon: 'i-lucide-circle-alert'
-    })
+    fail('Could not create a share link', error)
   } finally {
-    qrLoading.value = false
     actionId.value = null
   }
 }
 
-function downloadQrCode() {
-  if (!qrClient.value || !qrDataUrl.value) {
-    return
+async function copyShareUrl() {
+  if (share.value) {
+    await navigator.clipboard.writeText(share.value.url)
+    succeed('Link copied')
+  }
+}
+
+function formatBytes(bytes: number) {
+  if (!bytes) {
+    return '0 B'
   }
 
-  const link = document.createElement('a')
-  link.href = qrDataUrl.value
-  link.download = configFileName(qrClient.value, 'png')
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
+  return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`
 }
 
-function formatRelativeTime(value?: string | null) {
-  if (!value) {
-    return 'Never'
+function formatRate(bytesPerSecond?: number) {
+  return `${formatBytes(bytesPerSecond ?? 0)}/s`
+}
+
+function handshakeLabel(client: Client) {
+  const at = stats.value[client.id]?.latestHandshakeAt
+  if (!at) {
+    return 'never'
   }
 
-  const diffSeconds = Math.round((new Date(value).getTime() - Date.now()) / 1000)
-  const absSeconds = Math.abs(diffSeconds)
-  const units: Array<[Intl.RelativeTimeFormatUnit, number]> = [
-    ['year', 60 * 60 * 24 * 365],
-    ['month', 60 * 60 * 24 * 30],
-    ['week', 60 * 60 * 24 * 7],
-    ['day', 60 * 60 * 24],
-    ['hour', 60 * 60],
-    ['minute', 60],
-    ['second', 1]
-  ]
-
-  const [unit, secondsPerUnit] = units.find(([, seconds]) => absSeconds >= seconds) ?? ['second', 1]
-  const valueInUnits = Math.round(diffSeconds / secondsPerUnit)
-
-  return new Intl.RelativeTimeFormat('en', { numeric: 'auto' }).format(valueInUnits, unit)
-}
-
-function formatBytes(value?: number) {
-  const bytes = value ?? 0
-  if (bytes < 1024) {
-    return `${bytes.toFixed(1)} B`
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(at).getTime()) / 1000))
+  if (seconds < 60) {
+    return `${seconds}s ago`
   }
-
-  const units = ['KB', 'MB', 'GB', 'TB']
-  let size = bytes / 1024
-  let unit = 0
-  while (size >= 1024 && unit < units.length - 1) {
-    size /= 1024
-    unit++
+  if (seconds < 3600) {
+    return `${Math.round(seconds / 60)}m ago`
   }
-
-  return `${size.toFixed(1)} ${units[unit]}`
-}
-
-function formatSpeed(value?: number) {
-  return `${formatBytes(value)}/s`
-}
-
-function isOnline(client: Client) {
-  return stats.value[client.id]?.online ?? false
-}
-
-function downloadSpeed(client: Client) {
-  return isOnline(client) ? trafficRates.value[client.id]?.downloadBytesPerSecond : 0
-}
-
-function uploadSpeed(client: Client) {
-  return isOnline(client) ? trafficRates.value[client.id]?.uploadBytesPerSecond : 0
-}
-
-function totalDownloadedBytes(client: Client) {
-  const clientStats = stats.value[client.id]
-  return clientStats?.transmittedBytes ?? 0
-}
-
-function totalUploadedBytes(client: Client) {
-  const clientStats = stats.value[client.id]
-  return clientStats?.receivedBytes ?? 0
+  if (seconds < 86400) {
+    return `${Math.round(seconds / 3600)}h ago`
+  }
+  return `${Math.round(seconds / 86400)}d ago`
 }
 
 onMounted(async () => {
   await loadClients()
-  startStatsStream()
+  await loadStats()
+  statsTimer = setInterval(loadStats, 3000)
 })
 
 onBeforeUnmount(() => {
-  statsSource?.close()
+  if (statsTimer) {
+    clearInterval(statsTimer)
+  }
 })
 </script>
 
@@ -595,14 +332,7 @@ onBeforeUnmount(() => {
             Clients
           </h1>
           <p class="mt-1 text-sm text-muted">
-            {{ clients.length }} total · {{ enabledCount }} enabled · {{ disabledCount }} disabled
-          </p>
-          <p class="mt-1 flex items-center gap-1 text-xs text-muted">
-            <UIcon
-              :name="statsConnected ? 'i-lucide-radio' : 'i-lucide-radio-tower'"
-              :class="statsConnected ? 'text-success' : 'text-muted'"
-            />
-            {{ statsConnected ? 'Live stats connected' : 'Live stats disconnected' }}
+            {{ clients.length }} total · {{ enabledCount }} enabled · {{ disabledCount }} disabled · {{ onlineCount }} online
           </p>
         </div>
 
@@ -616,7 +346,6 @@ onBeforeUnmount(() => {
           >
             Refresh
           </UButton>
-
           <UButton
             icon="i-lucide-plus"
             @click="createOpen = true"
@@ -638,20 +367,18 @@ onBeforeUnmount(() => {
       <div class="overflow-hidden rounded-lg border border-default bg-default">
         <div
           v-if="loading"
-          class="flex min-h-64 items-center justify-center"
+          class="flex min-h-48 items-center justify-center text-sm text-muted"
         >
-          <div class="flex items-center gap-3 text-sm text-muted">
-            <UIcon
-              name="i-lucide-loader-circle"
-              class="size-5 animate-spin"
-            />
-            Loading clients
-          </div>
+          <UIcon
+            name="i-lucide-loader-circle"
+            class="mr-2 size-5 animate-spin"
+          />
+          Loading clients
         </div>
 
         <div
           v-else-if="clients.length === 0"
-          class="flex min-h-64 flex-col items-center justify-center gap-4 px-6 text-center"
+          class="flex min-h-48 flex-col items-center justify-center gap-4 px-6 py-10 text-center"
         >
           <div class="flex size-12 items-center justify-center rounded-full bg-muted">
             <UIcon
@@ -664,7 +391,7 @@ onBeforeUnmount(() => {
               No clients yet
             </h2>
             <p class="mt-1 text-sm text-muted">
-              Create a client to generate the first configuration.
+              Create a client to generate its configuration.
             </p>
           </div>
           <UButton
@@ -677,567 +404,289 @@ onBeforeUnmount(() => {
 
         <div
           v-else
-          class="md:hidden"
+          class="divide-y divide-default"
         >
-          <div class="divide-y divide-default">
-            <article
-              v-for="client in clients"
-              :key="client.id"
-              class="p-4"
-            >
-              <button
-                type="button"
-                class="flex w-full min-w-0 items-start justify-between gap-3 text-left"
-                :aria-expanded="isClientExpanded(client)"
-                @click="toggleClientExpanded(client)"
-              >
-                <div class="min-w-0">
-                  <div class="flex min-w-0 items-center gap-2">
-                    <h2 class="min-w-0 break-words text-base font-medium text-highlighted">
-                      {{ client.name }}
-                    </h2>
-                    <UBadge
-                      v-if="isOnline(client)"
-                      color="success"
-                      variant="subtle"
-                      icon="i-lucide-wifi"
-                    >
-                      Online
-                    </UBadge>
-                  </div>
-                  <p class="mt-1 font-mono text-sm text-default">
-                    {{ client.address }}
-                  </p>
-                </div>
-                <UIcon
-                  name="i-lucide-chevron-down"
-                  class="mt-1 size-5 shrink-0 text-muted transition-transform"
-                  :class="isClientExpanded(client) ? 'rotate-180' : ''"
-                />
-              </button>
-
-              <div
-                v-if="isClientExpanded(client)"
-                class="mt-4 grid grid-cols-3 gap-2"
-              >
-                <UButton
-                  icon="i-lucide-pencil"
-                  color="neutral"
+          <article
+            v-for="client in clients"
+            :key="client.id"
+            class="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between"
+          >
+            <div class="min-w-0 lg:w-64">
+              <div class="flex flex-wrap items-center gap-2">
+                <h2 class="break-words text-base font-medium text-highlighted">
+                  {{ client.name }}
+                </h2>
+                <UBadge
+                  v-if="stats[client.id]?.online"
+                  color="success"
                   variant="subtle"
-                  block
-                  :loading="actionId === client.id"
-                  aria-label="Edit client name"
-                  @click="openEditClient(client)"
-                />
-                <UButton
-                  icon="i-lucide-download"
-                  color="neutral"
-                  variant="subtle"
-                  block
-                  :loading="actionId === client.id"
-                  aria-label="Download config"
-                  @click="downloadConfig(client)"
-                />
-                <UButton
-                  icon="i-lucide-share-2"
-                  color="neutral"
-                  variant="subtle"
-                  block
-                  :loading="actionId === client.id"
-                  aria-label="Share config"
-                  @click="shareConfig(client)"
-                />
-                <UButton
-                  icon="i-lucide-qr-code"
-                  color="neutral"
-                  variant="subtle"
-                  block
-                  :loading="actionId === client.id"
-                  aria-label="Generate QR code"
-                  @click="openQrCode(client)"
-                />
-                <UButton
-                  :icon="client.enabled ? 'i-lucide-power-off' : 'i-lucide-power'"
-                  :color="client.enabled ? 'warning' : 'success'"
-                  variant="subtle"
-                  block
-                  :loading="actionId === client.id"
-                  :aria-label="client.enabled ? 'Disable client' : 'Enable client'"
-                  @click="toggleClient(client)"
-                />
-                <UButton
-                  icon="i-lucide-trash-2"
-                  color="error"
-                  variant="subtle"
-                  block
-                  :loading="actionId === client.id"
-                  aria-label="Delete client"
-                  @click="deleteClient(client)"
-                />
-              </div>
-
-              <div class="mt-4 grid grid-cols-2 gap-3">
-                <div class="rounded-md bg-muted/40 p-3">
-                  <p class="text-xs text-muted">
-                    Down
-                  </p>
-                  <p class="mt-1 flex items-center gap-1 text-sm font-medium text-highlighted">
-                    <UIcon
-                      name="i-lucide-arrow-down"
-                      class="size-4 text-muted"
-                    />
-                    {{ formatSpeed(downloadSpeed(client)) }}
-                  </p>
-                </div>
-
-                <div class="rounded-md bg-muted/40 p-3">
-                  <p class="text-xs text-muted">
-                    Up
-                  </p>
-                  <p class="mt-1 flex items-center gap-1 text-sm font-medium text-highlighted">
-                    <UIcon
-                      name="i-lucide-arrow-up"
-                      class="size-4 text-muted"
-                    />
-                    {{ formatSpeed(uploadSpeed(client)) }}
-                  </p>
-                </div>
-
-                <div class="rounded-md bg-muted/40 p-3">
-                  <p class="text-xs text-muted">
-                    Total received
-                  </p>
-                  <p class="mt-1 flex items-center gap-1 text-sm font-medium text-highlighted">
-                    <UIcon
-                      name="i-lucide-arrow-down-to-line"
-                      class="size-4 text-muted"
-                    />
-                    {{ formatBytes(totalDownloadedBytes(client)) }}
-                  </p>
-                </div>
-
-                <div class="rounded-md bg-muted/40 p-3">
-                  <p class="text-xs text-muted">
-                    Total sent
-                  </p>
-                  <p class="mt-1 flex items-center gap-1 text-sm font-medium text-highlighted">
-                    <UIcon
-                      name="i-lucide-arrow-up-to-line"
-                      class="size-4 text-muted"
-                    />
-                    {{ formatBytes(totalUploadedBytes(client)) }}
-                  </p>
-                </div>
-
-                <div class="col-span-2 rounded-md bg-muted/40 p-3">
-                  <p class="text-xs text-muted">
-                    Last handshake
-                  </p>
-                  <p class="mt-1 text-sm font-medium text-highlighted">
-                    {{ formatRelativeTime(stats[client.id]?.latestHandshakeAt) }}
-                  </p>
-                </div>
-              </div>
-            </article>
-          </div>
-        </div>
-
-        <div
-          v-if="!loading && clients.length > 0"
-          class="hidden overflow-x-auto md:block"
-        >
-          <table class="min-w-full divide-y divide-default text-sm">
-            <thead class="bg-muted/40">
-              <tr>
-                <th class="px-4 py-3 text-left font-medium text-muted">
-                  Name
-                </th>
-                <th class="px-4 py-3 text-left font-medium text-muted">
-                  Address
-                </th>
-                <th class="px-4 py-3 text-left font-medium text-muted">
+                  icon="i-lucide-wifi"
+                >
                   Online
-                </th>
-                <th class="px-4 py-3 text-left font-medium text-muted">
-                  Traffic
-                </th>
-                <th class="px-4 py-3 text-left font-medium text-muted">
-                  Last handshake
-                </th>
-                <th
-                  class="px-4 py-3 text-right font-medium text-muted"
+                </UBadge>
+                <UBadge
+                  v-else-if="!client.enabled"
+                  color="neutral"
+                  variant="subtle"
                 >
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-default">
-              <tr
-                v-for="client in clients"
-                :key="client.id"
-                class="hover:bg-muted/30"
-              >
-                <td class="px-4 py-3">
-                  <div class="min-w-52">
-                    <p class="font-medium text-highlighted">
-                      {{ client.name }}
-                    </p>
-                  </div>
-                </td>
-                <td class="px-4 py-3 font-mono text-sm text-default">
-                  {{ client.address }}
-                </td>
-                <td class="px-4 py-3">
-                  <UBadge
-                    v-if="isOnline(client)"
-                    color="success"
-                    variant="subtle"
-                    icon="i-lucide-wifi"
-                  >
-                    Online
-                  </UBadge>
-                  <span
-                    v-else
-                    class="text-sm text-muted"
-                  >
-                    Offline
-                  </span>
-                </td>
-                <td class="px-4 py-3">
-                  <div class="grid min-w-36 gap-1 text-xs">
-                    <div class="flex items-center gap-1 font-medium text-highlighted">
-                      <UIcon
-                        name="i-lucide-arrow-down-to-line"
-                        class="size-3.5 text-muted"
-                      />
-                      Total down {{ formatBytes(totalDownloadedBytes(client)) }}
-                    </div>
-                    <div class="flex items-center gap-1 font-medium text-highlighted">
-                      <UIcon
-                        name="i-lucide-arrow-up-to-line"
-                        class="size-3.5 text-muted"
-                      />
-                      Total up {{ formatBytes(totalUploadedBytes(client)) }}
-                    </div>
-                    <div class="flex items-center gap-1 text-default">
-                      <UIcon
-                        name="i-lucide-arrow-down"
-                        class="size-3.5 text-muted"
-                      />
-                      Down {{ formatSpeed(downloadSpeed(client)) }}
-                    </div>
-                    <div class="flex items-center gap-1 text-default">
-                      <UIcon
-                        name="i-lucide-arrow-up"
-                        class="size-3.5 text-muted"
-                      />
-                      Up {{ formatSpeed(uploadSpeed(client)) }}
-                    </div>
-                  </div>
-                </td>
-                <td class="px-4 py-3 text-muted">
-                  {{ formatRelativeTime(stats[client.id]?.latestHandshakeAt) }}
-                </td>
-                <td
-                  class="px-4 py-3"
-                >
-                  <div class="flex justify-end gap-1">
-                    <UButton
-                      icon="i-lucide-pencil"
-                      color="neutral"
-                      variant="ghost"
-                      :loading="actionId === client.id"
-                      aria-label="Edit client name"
-                      @click="openEditClient(client)"
-                    />
-                    <UButton
-                      icon="i-lucide-download"
-                      color="neutral"
-                      variant="ghost"
-                      :loading="actionId === client.id"
-                      aria-label="Download config"
-                      @click="downloadConfig(client)"
-                    />
-                    <UButton
-                      icon="i-lucide-share-2"
-                      color="neutral"
-                      variant="ghost"
-                      :loading="actionId === client.id"
-                      aria-label="Share config"
-                      @click="shareConfig(client)"
-                    />
-                    <UButton
-                      icon="i-lucide-qr-code"
-                      color="neutral"
-                      variant="ghost"
-                      :loading="actionId === client.id"
-                      aria-label="Generate QR code"
-                      @click="openQrCode(client)"
-                    />
-                    <UButton
-                      :icon="client.enabled ? 'i-lucide-power-off' : 'i-lucide-power'"
-                      :color="client.enabled ? 'warning' : 'success'"
-                      variant="ghost"
-                      :loading="actionId === client.id"
-                      :aria-label="client.enabled ? 'Disable client' : 'Enable client'"
-                      @click="toggleClient(client)"
-                    />
-                    <UButton
-                      icon="i-lucide-trash-2"
-                      color="error"
-                      variant="ghost"
-                      :loading="actionId === client.id"
-                      aria-label="Delete client"
-                      @click="deleteClient(client)"
-                    />
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+                  Disabled
+                </UBadge>
+              </div>
+              <p class="mt-1 font-mono text-sm text-muted">
+                {{ client.address }}
+              </p>
+            </div>
+
+            <dl class="grid grid-cols-2 gap-x-6 gap-y-1 text-sm sm:grid-cols-4 lg:flex-1">
+              <div>
+                <dt class="text-xs text-muted">
+                  Handshake
+                </dt>
+                <dd class="text-default">
+                  {{ handshakeLabel(client) }}
+                </dd>
+              </div>
+              <div>
+                <dt class="text-xs text-muted">
+                  Speed
+                </dt>
+                <dd class="text-default">
+                  ↓ {{ formatRate(rates[client.id]?.down) }} · ↑ {{ formatRate(rates[client.id]?.up) }}
+                </dd>
+              </div>
+              <div>
+                <dt class="text-xs text-muted">
+                  Downloaded
+                </dt>
+                <dd class="text-default">
+                  {{ formatBytes(stats[client.id]?.transmittedBytes ?? 0) }}
+                </dd>
+              </div>
+              <div>
+                <dt class="text-xs text-muted">
+                  Uploaded
+                </dt>
+                <dd class="text-default">
+                  {{ formatBytes(stats[client.id]?.receivedBytes ?? 0) }}
+                </dd>
+              </div>
+            </dl>
+
+            <div class="flex shrink-0 flex-wrap gap-1">
+              <UButton
+                icon="i-lucide-download"
+                color="neutral"
+                variant="subtle"
+                aria-label="Download config"
+                :loading="actionId === client.id"
+                @click="downloadConfig(client)"
+              />
+              <UButton
+                icon="i-lucide-qr-code"
+                color="neutral"
+                variant="subtle"
+                aria-label="Show QR code"
+                @click="openQr(client)"
+              />
+              <UButton
+                icon="i-lucide-share-2"
+                color="neutral"
+                variant="subtle"
+                aria-label="Create share link"
+                :loading="actionId === client.id"
+                @click="createShare(client)"
+              />
+              <UButton
+                icon="i-lucide-pencil"
+                color="neutral"
+                variant="subtle"
+                aria-label="Rename"
+                @click="openEdit(client)"
+              />
+              <UButton
+                :icon="client.enabled ? 'i-lucide-power-off' : 'i-lucide-power'"
+                :color="client.enabled ? 'warning' : 'success'"
+                variant="subtle"
+                :aria-label="client.enabled ? 'Disable' : 'Enable'"
+                :loading="actionId === client.id"
+                @click="toggleClient(client)"
+              />
+              <UButton
+                icon="i-lucide-trash-2"
+                color="error"
+                variant="subtle"
+                aria-label="Delete"
+                :loading="actionId === client.id"
+                @click="deleteClient(client)"
+              />
+            </div>
+          </article>
         </div>
       </div>
     </div>
 
-    <div
-      v-if="createOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
-      @click.self="createOpen = false"
+    <UModal
+      v-model:open="createOpen"
+      title="Add a client"
     >
-      <div class="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-default bg-default shadow-xl">
-        <div class="flex items-center justify-between border-b border-default px-5 py-4">
-          <div>
-            <h2 class="text-base font-semibold text-highlighted">
-              Add client
-            </h2>
-            <p class="mt-1 text-sm text-muted">
-              Optional obfuscation values override server defaults.
-            </p>
-          </div>
-          <UButton
-            icon="i-lucide-x"
-            color="neutral"
-            variant="ghost"
-            aria-label="Close"
-            @click="createOpen = false"
-          />
-        </div>
-
-        <div class="space-y-5 px-5 py-5">
-          <UFormField
-            label="Name"
-            required
-          >
+      <template #body>
+        <div class="flex flex-col gap-4">
+          <UFormField label="Name">
             <UInput
               v-model="form.name"
-              placeholder="phone-ivan"
-              autofocus
+              placeholder="phone"
+              class="w-full"
+              @keyup.enter="createClient"
             />
           </UFormField>
 
-          <UCheckbox
+          <USwitch
             v-model="useObfuscation"
-            label="Override client obfuscation"
+            label="Override obfuscation for this client"
+            description="Leave off to inherit the fleet defaults."
           />
 
           <div
             v-if="useObfuscation"
-            class="space-y-5 rounded-lg border border-default p-4"
+            class="flex flex-col gap-3 rounded-md border border-default p-3"
           >
-            <div class="grid gap-4 sm:grid-cols-3">
+            <div class="grid grid-cols-3 gap-2">
               <UFormField label="Jc">
                 <UInput
                   v-model.number="form.jc"
                   type="number"
-                  min="1"
-                  max="128"
-                  placeholder="6"
+                  class="w-full"
                 />
               </UFormField>
               <UFormField label="Jmin">
                 <UInput
                   v-model.number="form.jmin"
                   type="number"
-                  min="0"
-                  max="1280"
-                  placeholder="5"
+                  class="w-full"
                 />
               </UFormField>
               <UFormField label="Jmax">
                 <UInput
                   v-model.number="form.jmax"
                   type="number"
-                  min="1"
-                  max="1280"
-                  placeholder="80"
+                  class="w-full"
                 />
               </UFormField>
             </div>
 
-            <div class="grid gap-4 sm:grid-cols-2">
-              <UFormField label="I1">
-                <UInput
-                  v-model="form.i1"
-                  placeholder="<r 16>"
-                />
-              </UFormField>
-              <UFormField label="I2">
-                <UInput
-                  v-model="form.i2"
-                  placeholder="<t>"
-                />
-              </UFormField>
-              <UFormField label="I3">
-                <UInput v-model="form.i3" />
-              </UFormField>
-              <UFormField label="I4">
-                <UInput v-model="form.i4" />
-              </UFormField>
-              <UFormField
-                label="I5"
-                class="sm:col-span-2"
-              >
-                <UInput v-model="form.i5" />
-              </UFormField>
-            </div>
+            <UFormField
+              v-for="field in (['i1', 'i2', 'i3', 'i4', 'i5'] as const)"
+              :key="field"
+              :label="field.toUpperCase()"
+            >
+              <UInput
+                v-model="form[field]"
+                class="w-full"
+                placeholder="<b 0x...>"
+              />
+            </UFormField>
           </div>
         </div>
+      </template>
 
-        <div class="flex justify-end gap-2 border-t border-default px-5 py-4">
+      <template #footer>
+        <div class="flex w-full justify-end gap-2">
           <UButton
             color="neutral"
-            variant="subtle"
+            variant="ghost"
             @click="createOpen = false"
           >
             Cancel
           </UButton>
           <UButton
-            icon="i-lucide-plus"
             :loading="saving"
             @click="createClient"
           >
             Create
           </UButton>
         </div>
-      </div>
-    </div>
+      </template>
+    </UModal>
 
-    <div
-      v-if="qrOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
-      @click.self="qrOpen = false"
+    <UModal
+      v-model:open="editOpen"
+      title="Rename client"
     >
-      <div class="w-full max-w-sm rounded-lg border border-default bg-default shadow-xl">
-        <div class="flex items-center justify-between border-b border-default px-5 py-4">
-          <div class="min-w-0">
-            <h2 class="truncate text-base font-semibold text-highlighted">
-              {{ qrClient?.name }} QR
-            </h2>
-            <p class="mt-1 text-sm text-muted">
-              Client configuration
-            </p>
-          </div>
+      <template #body>
+        <UFormField label="Name">
+          <UInput
+            v-model="editName"
+            class="w-full"
+            @keyup.enter="saveName"
+          />
+        </UFormField>
+      </template>
+      <template #footer>
+        <div class="flex w-full justify-end gap-2">
           <UButton
-            icon="i-lucide-x"
             color="neutral"
             variant="ghost"
-            aria-label="Close"
-            @click="qrOpen = false"
-          />
-        </div>
-
-        <div class="flex min-h-80 items-center justify-center px-5 py-5">
-          <div
-            v-if="qrLoading"
-            class="flex items-center gap-3 text-sm text-muted"
-          >
-            <UIcon
-              name="i-lucide-loader-circle"
-              class="size-5 animate-spin"
-            />
-            Generating QR code
-          </div>
-          <img
-            v-else-if="qrDataUrl"
-            :src="qrDataUrl"
-            :alt="`${qrClient?.name} configuration QR code`"
-            class="size-80 max-w-full rounded-md bg-white p-3"
-          >
-        </div>
-
-        <div class="flex justify-end gap-2 border-t border-default px-5 py-4">
-          <UButton
-            color="neutral"
-            variant="subtle"
-            @click="qrOpen = false"
-          >
-            Close
-          </UButton>
-          <UButton
-            icon="i-lucide-download"
-            :disabled="!qrDataUrl"
-            @click="downloadQrCode"
-          >
-            Download PNG
-          </UButton>
-        </div>
-      </div>
-    </div>
-
-    <div
-      v-if="editOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
-      @click.self="editOpen = false"
-    >
-      <div class="w-full max-w-md rounded-lg border border-default bg-default shadow-xl">
-        <div class="flex items-center justify-between border-b border-default px-5 py-4">
-          <div>
-            <h2 class="text-base font-semibold text-highlighted">
-              Edit client
-            </h2>
-            <p class="mt-1 text-sm text-muted">
-              Only the display name is changed.
-            </p>
-          </div>
-          <UButton
-            icon="i-lucide-x"
-            color="neutral"
-            variant="ghost"
-            aria-label="Close"
-            @click="editOpen = false"
-          />
-        </div>
-
-        <div class="px-5 py-5">
-          <UFormField
-            label="Name"
-            required
-          >
-            <UInput
-              v-model="editName"
-              autofocus
-              @keyup.enter="saveClientName"
-            />
-          </UFormField>
-        </div>
-
-        <div class="flex justify-end gap-2 border-t border-default px-5 py-4">
-          <UButton
-            color="neutral"
-            variant="subtle"
             @click="editOpen = false"
           >
             Cancel
           </UButton>
-          <UButton
-            icon="i-lucide-save"
-            :loading="actionId === editingClient?.id"
-            @click="saveClientName"
-          >
+          <UButton @click="saveName">
             Save
           </UButton>
         </div>
-      </div>
-    </div>
+      </template>
+    </UModal>
+
+    <UModal
+      v-model:open="qrOpen"
+      :title="qrClient ? `QR code for ${qrClient.name}` : 'QR code'"
+    >
+      <template #body>
+        <div class="flex min-h-72 items-center justify-center">
+          <img
+            v-if="qrDataUrl"
+            :src="qrDataUrl"
+            alt="Client configuration QR code"
+            class="rounded-md bg-white p-2"
+          >
+          <UIcon
+            v-else
+            name="i-lucide-loader-circle"
+            class="size-6 animate-spin text-muted"
+          />
+        </div>
+      </template>
+    </UModal>
+
+    <UModal
+      v-model:open="shareOpen"
+      title="Share link"
+    >
+      <template #body>
+        <div class="flex flex-col gap-4">
+          <UAlert
+            color="warning"
+            variant="subtle"
+            icon="i-lucide-triangle-alert"
+            title="Anyone with this link gets the config"
+            description="It works without signing in and expires in 24 hours."
+          />
+
+          <div class="rounded-md border border-default bg-muted/40 p-3">
+            <code class="block break-all font-mono text-xs text-default">{{ share?.url }}</code>
+          </div>
+
+          <UButton
+            icon="i-lucide-copy"
+            color="neutral"
+            variant="subtle"
+            block
+            @click="copyShareUrl"
+          >
+            Copy link
+          </UButton>
+        </div>
+      </template>
+    </UModal>
   </UContainer>
 </template>

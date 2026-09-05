@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <RootNamespace>AwgEasy.Node</RootNamespace>
+        <AssemblyName>awg-node</AssemblyName>
+        <InvariantGlobalization>true</InvariantGlobalization>
+        <!-- The agent ships to every node: keep it small and quick to start. -->
+        <PublishAot>true</PublishAot>
+        <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\AwgEasy.Contracts\AwgEasy.Contracts.csproj" />
+    </ItemGroup>
+
+</Project>

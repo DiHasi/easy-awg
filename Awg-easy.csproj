@@ -15,4 +15,22 @@
         <PackageReference Include="Scalar.AspNetCore" Version="2.14.14" />
     </ItemGroup>
 
+    <!--
+        This project still lives at the repository root, so its default globs would otherwise
+        compile every .cs under src/ and tests/ into it as well (CS0436 / CS0579). It is a
+        single-file app, so state its one source file explicitly rather than chasing excludes
+        for each new folder. Dropped once the app moves to src/AwgEasy.Control.
+    -->
+    <PropertyGroup>
+        <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="Program.cs" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="src\AwgEasy.Contracts\AwgEasy.Contracts.csproj" />
+    </ItemGroup>
+
 </Project>

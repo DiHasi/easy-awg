@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <RootNamespace>AwgEasy.Control</RootNamespace>
+        <AssemblyName>awg-control</AssemblyName>
+        <InvariantGlobalization>true</InvariantGlobalization>
+        <!--
+            Deliberately not AOT, unlike the node agent. The control plane is deployed once, so
+            small binaries and fast startup buy little, while AOT would fight the auth and data
+            libraries this side actually needs.
+        -->
+        <PublishAot>false</PublishAot>
+        <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.7" />
+        <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.7" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\AwgEasy.Contracts\AwgEasy.Contracts.csproj" />
+    </ItemGroup>
+
+</Project>
