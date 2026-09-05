@@ -38,7 +38,10 @@ public sealed class EnrollmentService(
         command.ExecuteNonQuery();
         events.Record("node.token_issued", $"Enrollment token issued for node '{nodeName}'.");
 
-        var install = $"curl -fsSL {controlUrl.TrimEnd('/')}/install.sh | sh -s -- --url {controlUrl.TrimEnd('/')} --token {token}";
+        // Carry the fleet listen port through, so what Docker publishes on the node matches the
+        // port the agent is actually told to listen on.
+        var baseUrl = controlUrl.TrimEnd('/');
+        var install = $"curl -fsSL {baseUrl}/install.sh | sh -s -- --url {baseUrl} --token {token} --port {fleet.Current.ListenPort.ToString(CultureInfo.InvariantCulture)}";
         return new EnrollmentTokenResponse(token, nodeName, expiresAt, install);
     }
 
