@@ -41,7 +41,9 @@ Client private keys and client names never leave the control plane.
 
 - **A host for the panel.** Any small VPS. Keep it off your VPN nodes: it holds the identity of
   the whole fleet, and that should not sit on the servers most likely to be blocked or seized.
-- **At least one VPN node.** Root access, Docker, `/dev/net/tun`, and the UDP port open.
+- **At least one VPN node.** Root access, Docker, `/dev/net/tun`, and the UDP port open. The
+  agent uses host networking, so it also takes `127.0.0.1:8081` on that server for its health
+  endpoint (configurable via `AWG_HEALTH_URL`).
 - **A DNS record you control.** `AWG_ENDPOINT_HOST` goes into client configs, and failover means
   repointing it. Set the TTL to 30–60 seconds ahead of time. If your provider offers a floating
   IP, prefer it — reassignment is instant and completely invisible to clients.
@@ -105,6 +107,10 @@ In the panel: **Nodes → Add node**. You get a ready-to-run command:
 curl -fsSL https://panel.example.com/install.sh | sh -s -- --url https://panel.example.com --token <token>
 ```
 
+The command carries no tunnel port. The agent runs with host networking and takes its port from
+the fleet configuration, so changing `AWG_PORT` on the panel moves every node without touching a
+single install command.
+
 The enrollment token is **shown once**, cannot be recovered, and expires in 30 minutes. The
 installer sets up Docker if needed, enables forwarding and starts the agent, which enrolls itself,
 pins the panel's signing key and pulls the fleet configuration. Re-running it is safe — it
@@ -148,6 +154,7 @@ For a fresh panel you can instead point `AWG_IMPORT_LEGACY_STATE` at a mounted `
 | `AWG_CONTROL_URL` | Where the panel lives. |
 | `AWG_ENROLLMENT_TOKEN` | Only needed for the first start. |
 | `AWG_EGRESS_INTERFACE` | Leave empty to detect the default-route interface. |
+| `AWG_HEALTH_URL` | Agent health endpoint. Binds on the host. Default `http://127.0.0.1:8081`. |
 | `AWG_POLL_INTERVAL_SECONDS` | How often to check for a new revision. Default 20. |
 | `AWG_NODE_STATE_PATH` | Agent identity and cached bundle. Default `/etc/awg-node`. |
 | `AWG_INTERFACE` | Interface name. Default `awg0`. |
@@ -269,7 +276,9 @@ VPN-сервере забирают эту конфигурацию и прив�
 - **Хост для панели.** Любой небольшой VPS. Держите его отдельно от VPN-нод: на нём лежит
   идентичность всего флота, а ей не место на серверах, которые с наибольшей вероятностью
   заблокируют или изымут.
-- **Хотя бы одна VPN-нода.** Root, Docker, `/dev/net/tun` и открытый UDP-порт.
+- **Хотя бы одна VPN-нода.** Root, Docker, `/dev/net/tun` и открытый UDP-порт. Агент работает в
+  host-режиме сети, поэтому займёт на сервере ещё `127.0.0.1:8081` под health-эндпоинт
+  (меняется через `AWG_HEALTH_URL`).
 - **DNS-запись, которой вы управляете.** `AWG_ENDPOINT_HOST` попадает в клиентские конфиги, и
   переключение — это смена этой записи. Поставьте TTL 30–60 секунд заранее. Если провайдер даёт
   floating IP, он лучше: переезд мгновенный и совершенно незаметный для клиентов.
@@ -376,6 +385,7 @@ curl -fsSL https://panel.example.com/install.sh | sh -s -- --url https://panel.e
 | `AWG_CONTROL_URL` | Адрес панели. |
 | `AWG_ENROLLMENT_TOKEN` | Нужен только для первого запуска. |
 | `AWG_EGRESS_INTERFACE` | Оставьте пустым — интерфейс определится по default route. |
+| `AWG_HEALTH_URL` | Health-эндпоинт агента. Биндится на хосте. По умолчанию `http://127.0.0.1:8081`. |
 | `AWG_POLL_INTERVAL_SECONDS` | Частота опроса новой ревизии. По умолчанию 20. |
 | `AWG_NODE_STATE_PATH` | Идентичность агента и кэш бандла. По умолчанию `/etc/awg-node`. |
 | `AWG_INTERFACE` | Имя интерфейса. По умолчанию `awg0`. |

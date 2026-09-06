@@ -1,5 +1,15 @@
 # A single VPN node. Deploy one of these per server; they all pull the same fleet
 # identity from the control plane, which is what makes endpoint failover invisible.
+#
+# Host networking, not a published port. The tunnel port then comes entirely from the fleet
+# configuration instead of having to be fixed when the container is created, the agent sees the
+# server's real interfaces so NAT masquerades through the right one, and traffic is not NATed
+# twice on its way out. The container already holds NET_ADMIN and /dev/net/tun, so it is not
+# meaningfully more isolated on a bridge anyway.
+#
+# ip_forward and src_valid_mark are host settings and cannot be set from a container in this
+# mode - scripts/install.sh writes them to /etc/sysctl.d. Set them yourself if you use compose
+# directly.
 services:
   awg-node:
     image: dihasi/awg-node:latest
@@ -8,17 +18,12 @@ services:
       dockerfile: docker/node.Dockerfile
     container_name: awg-node
     restart: unless-stopped
+    network_mode: host
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
     devices:
       - /dev/net/tun:/dev/net/tun
-    sysctls:
-      net.ipv4.ip_forward: "1"
-      net.ipv4.conf.all.src_valid_mark: "1"
-    ports:
-      # Only the tunnel is published. The agent's health endpoint stays on loopback.
-      - "${AWG_PORT:-51820}:${AWG_PORT:-51820}/udp"
     environment:
       DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
       AWG_CONTROL_URL: "${AWG_CONTROL_URL:-}"
@@ -26,9 +31,12 @@ services:
       AWG_NODE_STATE_PATH: "/etc/awg-node"
       AWG_INTERFACE: "awg0"
       AWG_INTERFACE_CONFIG_PATH: "/etc/amnezia/amneziawg/awg0.conf"
-      # Leave unset to detect the default-route interface instead of assuming eth0.
+      # Leave unset to detect the default-route interface. With host networking that detection
+      # sees the real one, so this is only needed for unusual routing setups.
       AWG_EGRESS_INTERFACE: "${AWG_EGRESS_INTERFACE:-}"
       AWG_POLL_INTERVAL_SECONDS: "${AWG_POLL_INTERVAL_SECONDS:-20}"
+      # Binds on the host in this mode; change it if 8081 is taken.
+      AWG_HEALTH_URL: "${AWG_HEALTH_URL:-http://127.0.0.1:8081}"
     volumes:
       - awg-node-state:/etc/awg-node
       - awg-node-config:/etc/amnezia/amneziawg
