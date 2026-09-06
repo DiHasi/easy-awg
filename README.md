@@ -70,6 +70,26 @@ docker compose -f compose.control.yaml build
 docker compose -f compose.node.yaml build
 ```
 
+### Do not build on a small VPN node
+
+Building pulls the .NET SDK, a Node image and a Go toolchain, which together want several
+gigabytes of disk that a 10 GB server does not have. The compose files reference published images
+for this reason: build once somewhere with room, push, and pull on the servers.
+
+```bash
+# On a build machine or in CI
+docker build -f docker/control.Dockerfile -t dihasi/awg-control:latest .
+docker build -f docker/node.Dockerfile   -t dihasi/awg-node:latest .
+docker push dihasi/awg-control:latest && docker push dihasi/awg-node:latest
+```
+
+```bash
+# On the servers
+docker compose -f compose.control.yaml pull && docker compose -f compose.control.yaml up -d
+```
+
+A node then pulls only its runtime image, not the toolchains that produced it.
+
 On first start it creates the database, generates the fleet identity and the bundle signing key,
 and creates the admin account. The panel is then at `http://<host>:8080`.
 
@@ -277,6 +297,26 @@ docker compose -f compose.control.yaml up -d --build
 docker compose -f compose.control.yaml build
 docker compose -f compose.node.yaml build
 ```
+
+### Не собирайте образы на маленькой ноде
+
+Сборка тянет .NET SDK, образ Node и Go-тулчейн — вместе это несколько гигабайт, которых на
+сервере с диском 10 ГБ просто нет. Именно поэтому compose-файлы ссылаются на опубликованные
+образы: соберите один раз там, где есть место, запушьте, а на серверах только `pull`.
+
+```bash
+# На машине сборки или в CI
+docker build -f docker/control.Dockerfile -t dihasi/awg-control:latest .
+docker build -f docker/node.Dockerfile   -t dihasi/awg-node:latest .
+docker push dihasi/awg-control:latest && docker push dihasi/awg-node:latest
+```
+
+```bash
+# На серверах
+docker compose -f compose.control.yaml pull && docker compose -f compose.control.yaml up -d
+```
+
+Нода тогда качает только рантайм-образ, а не тулчейны, которыми он собран.
 
 При первом старте создаётся база, генерируются идентичность флота и ключ подписи, заводится
 аккаунт администратора. Панель доступна на `http://<хост>:8080`.

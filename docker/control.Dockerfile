@@ -15,7 +15,9 @@ RUN apt-get update \
     && make -C src install DESTDIR=/out PREFIX=/usr WITH_WGQUICK=no WITH_BASHCOMPLETION=no WITH_SYSTEMDUNITS=no \
     && rm -rf /var/lib/apt/lists/*
 
-FROM node:24-bookworm AS frontend-build
+# Slim: the Nuxt build needs no native toolchain, and the full image costs ~700MB of
+# build-host disk that a small VPS does not have.
+FROM node:24-bookworm-slim AS frontend-build
 WORKDIR /src/frontend
 RUN corepack enable
 COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
