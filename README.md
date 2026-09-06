@@ -54,10 +54,20 @@ Client private keys and client names never leave the control plane.
 cp .env.control.example .env
 ```
 
-Edit `.env`. At minimum set `AWG_ENDPOINT_HOST` and the bootstrap admin credentials.
+Edit `.env`. At minimum set `AWG_ENDPOINT_HOST` — the public hostname clients will connect to —
+and the bootstrap admin credentials. The panel refuses to start without an endpoint host, because
+that value is written into every client config and a wrong one produces configs that connect to
+nothing.
 
 ```bash
 docker compose -f compose.control.yaml up -d --build
+```
+
+Building on its own needs no configuration, so you can verify the images first:
+
+```bash
+docker compose -f compose.control.yaml build
+docker compose -f compose.node.yaml build
 ```
 
 On first start it creates the database, generates the fleet identity and the bundle signing key,
@@ -253,10 +263,19 @@ VPN-сервере забирают эту конфигурацию и прив�
 cp .env.control.example .env
 ```
 
-Отредактируйте `.env` — как минимум `AWG_ENDPOINT_HOST` и учётные данные администратора.
+Отредактируйте `.env` — как минимум `AWG_ENDPOINT_HOST`, публичное имя для подключения клиентов, и
+учётные данные администратора. Без endpoint host панель откажется стартовать: это значение
+попадает в каждый клиентский конфиг, и неверное даёт конфиги, которые никуда не подключаются.
 
 ```bash
 docker compose -f compose.control.yaml up -d --build
+```
+
+Сборка сама по себе конфигурации не требует, так что образы можно проверить заранее:
+
+```bash
+docker compose -f compose.control.yaml build
+docker compose -f compose.node.yaml build
 ```
 
 При первом старте создаётся база, генерируются идентичность флота и ключ подписи, заводится

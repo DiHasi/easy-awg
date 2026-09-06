@@ -86,6 +86,14 @@ static void Bootstrap(WebApplication app)
     var options = scope.ServiceProvider.GetRequiredService<ControlOptions>();
     var logger = app.Logger;
 
+    // Fail before touching the database: a half-initialised fleet with a wrong endpoint is
+    // harder to recover from than a container that refuses to come up with a clear reason.
+    if (options.Validate() is { } configurationError)
+    {
+        logger.LogCritical("{Error}", configurationError);
+        throw new InvalidOperationException(configurationError);
+    }
+
     scope.ServiceProvider.GetRequiredService<Database>().Migrate();
     scope.ServiceProvider.GetRequiredService<FleetService>().EnsureInitialized();
 

@@ -21,7 +21,7 @@ services:
       - "${AWG_PORT:-51820}:${AWG_PORT:-51820}/udp"
     environment:
       DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
-      AWG_CONTROL_URL: "${AWG_CONTROL_URL:?set the control plane URL}"
+      AWG_CONTROL_URL: "${AWG_CONTROL_URL:-}"
       AWG_ENROLLMENT_TOKEN: "${AWG_ENROLLMENT_TOKEN:-}"
       AWG_NODE_STATE_PATH: "/etc/awg-node"
       AWG_INTERFACE: "awg0"
