@@ -118,6 +118,25 @@ upgrades the agent in place and keeps the node's identity, so the tunnel is not 
 
 If you prefer compose, use `.env.node.example` with `compose.node.yaml`.
 
+### Per-host tweaks
+
+Do not edit the tracked compose files on a server: every `git pull` will then conflict. Put local
+deviations in an override file, which is gitignored, and pass both:
+
+```bash
+docker compose -f compose.control.yaml -f compose.control.override.yaml up -d
+```
+
+```yaml
+# compose.control.override.yaml
+services:
+  awg-control:
+    ports:
+      - "127.0.0.1:8080:8080"   # only reachable through the reverse proxy
+```
+
+Plain values — hostnames, ports, credentials — belong in `.env` instead.
+
 ## Recovering a node
 
 Revoking or deleting a node in the panel cuts off its configuration, but it does **not** stop the
@@ -364,6 +383,25 @@ curl -fsSL https://panel.example.com/install.sh | sh -s -- --url https://panel.e
 агента, идентичность ноды сохраняется, туннель не рвётся.
 
 Если предпочитаете compose — используйте `.env.node.example` вместе с `compose.node.yaml`.
+
+### Правки под конкретный сервер
+
+Не редактируйте на сервере compose-файлы из репозитория — каждый `git pull` будет конфликтовать.
+Локальные отклонения кладите в override-файл, он в `.gitignore`, и передавайте оба:
+
+```bash
+docker compose -f compose.control.yaml -f compose.control.override.yaml up -d
+```
+
+```yaml
+# compose.control.override.yaml
+services:
+  awg-control:
+    ports:
+      - "127.0.0.1:8080:8080"   # доступ только через reverse proxy
+```
+
+Обычные значения — хосты, порты, учётные данные — задавайте в `.env`.
 
 ## Восстановление ноды
 

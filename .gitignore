@@ -50,6 +50,10 @@ frontend/.eslintcache
 
 # Docker/local runtime state
 docker-compose.override.yml
+
+# Per-host compose tweaks. Keep local deviations here instead of editing the tracked
+# compose files, which would conflict on every pull.
+compose.*.override.yaml
 *.pid
 *.log
 logs/
