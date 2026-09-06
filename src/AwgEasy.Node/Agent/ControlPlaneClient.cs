@@ -14,6 +14,26 @@ namespace AwgEasy.Node;
 /// confined to <see cref="SignRequest"/> so it can be swapped for mTLS without touching
 /// anything else.
 /// </summary>
+public enum FetchOutcome
+{
+    /// <summary>A bundle came back.</summary>
+    Ok,
+
+    /// <summary>The node is already at the current revision.</summary>
+    NotModified,
+
+    /// <summary>
+    /// The control plane does not accept this node's identity any more - it was revoked, or
+    /// removed and forgotten. Retrying with the same identity will never succeed.
+    /// </summary>
+    IdentityRejected,
+
+    /// <summary>Anything transient: network trouble, the panel restarting, a 5xx.</summary>
+    Failed
+}
+
+public sealed record BundleFetch(FetchOutcome Outcome, SignedBundle? Bundle);
+
 public sealed class ControlPlaneClient(HttpClient http, NodeOptions options, ILogger<ControlPlaneClient> logger)
 {
     public async Task<EnrollResponse?> EnrollAsync(AgentIdentityDocument identity, string enrollmentToken, CancellationToken cancellationToken)
@@ -43,7 +63,7 @@ public sealed class ControlPlaneClient(HttpClient http, NodeOptions options, ILo
     /// Fetches the desired state. Returns null when the control plane reports the node is already
     /// at the current revision (304), so an unchanged fleet costs one cheap request per poll.
     /// </summary>
-    public async Task<SignedBundle?> FetchBundleAsync(AgentIdentityDocument identity, CancellationToken cancellationToken)
+    public async Task<BundleFetch> FetchBundleAsync(AgentIdentityDocument identity, CancellationToken cancellationToken)
     {
         using var message = new HttpRequestMessage(HttpMethod.Get, Url($"/api/v1/agents/{identity.NodeId}/desired"));
         message.Headers.TryAddWithoutValidation("If-None-Match", $"\"rev-{identity.AppliedRevision}\"");
@@ -52,16 +72,22 @@ public sealed class ControlPlaneClient(HttpClient http, NodeOptions options, ILo
         var response = await http.SendAsync(message, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotModified)
         {
-            return null;
+            return new BundleFetch(FetchOutcome.NotModified, null);
+        }
+
+        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+        {
+            return new BundleFetch(FetchOutcome.IdentityRejected, null);
         }
 
         if (!response.IsSuccessStatusCode)
         {
             logger.LogWarning("Control plane returned {StatusCode} for the desired state.", (int)response.StatusCode);
-            return null;
+            return new BundleFetch(FetchOutcome.Failed, null);
         }
 
-        return await response.Content.ReadFromJsonAsync(NodeJsonContext.Default.SignedBundle, cancellationToken);
+        var bundle = await response.Content.ReadFromJsonAsync(NodeJsonContext.Default.SignedBundle, cancellationToken);
+        return new BundleFetch(bundle is null ? FetchOutcome.Failed : FetchOutcome.Ok, bundle);
     }
 
     public async Task ReportStatusAsync(AgentIdentityDocument identity, NodeStatusReport report, CancellationToken cancellationToken)
@@ -74,8 +100,9 @@ public sealed class ControlPlaneClient(HttpClient http, NodeOptions options, ILo
         await SignRequestAsync(message, identity, cancellationToken);
 
         var response = await http.SendAsync(message, cancellationToken);
-        if (!response.IsSuccessStatusCode)
+        if (!response.IsSuccessStatusCode && response.StatusCode is not (HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden))
         {
+            // A rejected identity is reported once by the fetch path; do not log it twice a cycle.
             logger.LogWarning("Status report rejected with {StatusCode}.", (int)response.StatusCode);
         }
     }

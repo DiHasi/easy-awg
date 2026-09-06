@@ -210,6 +210,53 @@ public class AgentProtocolTests(ControlPlaneFixture fixture) : IClassFixture<Con
         Assert.Equal(agent.NodeId, clientStats.NodeId);
     }
 
+    // An operator who revokes a node, then deletes it, must not be left with a server that can
+    // never rejoin. A fresh token is the authorization to adopt it again.
+    [Fact]
+    public async Task A_deleted_node_can_rejoin_with_a_fresh_token()
+    {
+        var (admin, agentClient, agent) = await EnrolledAgentAsync("node-rejoin");
+        var originalNodeId = agent.NodeId;
+
+        (await admin.PostAsync($"/api/nodes/{agent.NodeId}/revoke", null)).EnsureSuccessStatusCode();
+        (await admin.DeleteAsync($"/api/nodes/{agent.NodeId}")).EnsureSuccessStatusCode();
+
+        var rejected = await agentClient.SendAsync(agent.SignedRequest(HttpMethod.Get, $"/api/v1/agents/{agent.NodeId}/desired"));
+        Assert.Equal(HttpStatusCode.Unauthorized, rejected.StatusCode);
+
+        // The same agent, same key pair, new token - exactly what re-running the installer does.
+        var tokenResponse = await admin.PostAsJsonAsync("/api/nodes/tokens", new CreateNodeRequest("node-rejoin-again", null, null, null));
+        var token = (await tokenResponse.Content.ReadFromJsonAsync<EnrollmentTokenResponse>())!;
+        await agent.EnrollAsync(agentClient, token.Token);
+
+        Assert.NotEqual(originalNodeId, agent.NodeId);
+
+        var response = await agentClient.SendAsync(agent.SignedRequest(HttpMethod.Get, $"/api/v1/agents/{agent.NodeId}/desired"));
+        response.EnsureSuccessStatusCode();
+    }
+
+    // Revoking without deleting is a deliberate act; enrolling over it should say so rather than
+    // failing on a database constraint.
+    [Fact]
+    public async Task Enrolling_a_server_that_is_still_registered_is_refused_with_a_reason()
+    {
+        var (admin, agentClient, agent) = await EnrolledAgentAsync("node-still-there");
+
+        (await admin.PostAsync($"/api/nodes/{agent.NodeId}/revoke", null)).EnsureSuccessStatusCode();
+
+        var tokenResponse = await admin.PostAsJsonAsync("/api/nodes/tokens", new CreateNodeRequest("node-duplicate", null, null, null));
+        var token = (await tokenResponse.Content.ReadFromJsonAsync<EnrollmentTokenResponse>())!;
+
+        var response = await agentClient.PostAsJsonAsync(
+            "/api/v1/agents/enroll",
+            new EnrollRequest(token.Token, "same-server", agent.PublicKey, "test-agent/1.0"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = (await response.Content.ReadFromJsonAsync<AwgEasy.Contracts.ApiError>())!;
+        Assert.Equal("enrollment_key_registered", error.Code);
+        Assert.Contains("Delete that node", error.Message);
+    }
+
     private static async Task<SignedBundle?> Fetch(HttpClient client, TestAgent agent)
     {
         var response = await client.SendAsync(agent.SignedRequest(HttpMethod.Get, $"/api/v1/agents/{agent.NodeId}/desired"));

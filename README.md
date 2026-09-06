@@ -118,6 +118,23 @@ upgrades the agent in place and keeps the node's identity, so the tunnel is not 
 
 If you prefer compose, use `.env.node.example` with `compose.node.yaml`.
 
+## Recovering a node
+
+Revoking or deleting a node in the panel cuts off its configuration, but it does **not** stop the
+tunnel: the agent keeps serving traffic from its cached bundle. That is the fail-static design
+working, not a bug.
+
+To bring such a server back, issue a fresh enrollment token and re-run the installer. If the old
+node still exists in the panel, delete it first — the agent keeps one key pair for its lifetime,
+and the panel refuses to register the same server twice.
+
+If the node's own identity is what you want to discard — a lost or suspect server — remove its
+state and let it enroll from scratch:
+
+```bash
+docker rm -f awg-node && rm -rf /etc/awg-node/*
+```
+
 ## Migrating from a single-server deployment
 
 Existing users are not disconnected, because the import preserves the original server key pair.
@@ -347,6 +364,23 @@ curl -fsSL https://panel.example.com/install.sh | sh -s -- --url https://panel.e
 агента, идентичность ноды сохраняется, туннель не рвётся.
 
 Если предпочитаете compose — используйте `.env.node.example` вместе с `compose.node.yaml`.
+
+## Восстановление ноды
+
+Отзыв или удаление ноды в панели обрывает выдачу конфигурации, но **не останавливает туннель**:
+агент продолжает обслуживать трафик по закэшированному бандлу. Это работает fail-static, а не
+поломка.
+
+Чтобы вернуть такой сервер в строй, выпустите новый токен и заново запустите установщик. Если
+старая нода ещё числится в панели — сначала удалите её: агент хранит одну ключевую пару на всю
+жизнь, и панель не даст зарегистрировать тот же сервер дважды.
+
+Если нужно выбросить саму идентичность ноды — потерянный или подозрительный сервер — сотрите её
+состояние, и она зарегистрируется с нуля:
+
+```bash
+docker rm -f awg-node && rm -rf /etc/awg-node/*
+```
 
 ## Переезд с одиночного сервера
 

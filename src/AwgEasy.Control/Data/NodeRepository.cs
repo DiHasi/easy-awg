@@ -17,6 +17,13 @@ public sealed class NodeRepository(Database database)
         return Read(connection, "SELECT * FROM nodes WHERE id = $id", ("$id", id)).FirstOrDefault();
     }
 
+    /// <summary>An agent keeps one key pair for its lifetime, so this identifies a returning server.</summary>
+    public NodeRecord? FindByAgentKey(string agentPublicKey)
+    {
+        using var connection = database.Open();
+        return Read(connection, "SELECT * FROM nodes WHERE agent_public_key = $key", ("$key", agentPublicKey)).FirstOrDefault();
+    }
+
     public void Insert(NodeRecord node)
     {
         using var connection = database.Open();

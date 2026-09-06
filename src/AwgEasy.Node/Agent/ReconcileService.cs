@@ -133,13 +133,56 @@ public sealed class ReconcileService(
             }
         }
 
-        var envelope = await controlPlane.FetchBundleAsync(identity, cancellationToken);
-        if (envelope is not null && await TryApplyAsync(envelope, identity, cancellationToken))
+        var fetch = await controlPlane.FetchBundleAsync(identity, cancellationToken);
+        if (fetch.Outcome == FetchOutcome.IdentityRejected)
         {
-            bundleStore.Save(envelope);
+            await HandleIdentityRejectedAsync(identity, cancellationToken);
+            return;
+        }
+
+        if (fetch.Bundle is not null && await TryApplyAsync(fetch.Bundle, identity, cancellationToken))
+        {
+            bundleStore.Save(fetch.Bundle);
         }
 
         await ReportAsync(identity, cancellationToken);
+    }
+
+    /// <summary>
+    /// The control plane no longer knows this node: it was revoked, or removed and forgotten.
+    /// Retrying the same identity forever is pointless, so either adopt a fresh one or say
+    /// plainly what an operator has to do.
+    ///
+    /// The tunnel is untouched throughout. A node that has lost management still carries traffic.
+    /// </summary>
+    private async Task HandleIdentityRejectedAsync(AgentIdentityDocument identity, CancellationToken cancellationToken)
+    {
+        health.RecordError("Control plane rejected this node's identity.");
+
+        if (string.IsNullOrWhiteSpace(options.EnrollmentToken))
+        {
+            logger.LogError(
+                "The control plane rejected node {NodeId}: it was revoked or removed. The tunnel keeps "
+                + "running on its cached configuration, but this node will not receive updates. Issue a "
+                + "fresh enrollment token in the panel and re-run the installer with it.",
+                identity.NodeId);
+            return;
+        }
+
+        // Possession of an enrollment token is the authorization to adopt this server, so a stale
+        // node id must not stand in the way. The agent keeps its key pair; only the registration
+        // is redone.
+        logger.LogWarning(
+            "Node {NodeId} was rejected by the control plane. An enrollment token is configured, so re-enrolling.",
+            identity.NodeId);
+
+        identity.NodeId = null;
+        identity.ControlSigningPublicKey = null;
+        identity.ControlSigningKeyId = null;
+        identity.AppliedRevision = 0;
+        identityStore.Save(identity);
+
+        await EnsureEnrolledAsync(identity, cancellationToken);
     }
 
     private async Task<bool> TryApplyAsync(SignedBundle envelope, AgentIdentityDocument identity, CancellationToken cancellationToken)

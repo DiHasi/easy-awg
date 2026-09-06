@@ -63,6 +63,18 @@ public sealed class EnrollmentService(
             return (null, new ApiError("enrollment_invalid", "Agent public key is not a valid P-256 SubjectPublicKeyInfo."));
         }
 
+        // An agent keeps its key pair across restarts, so a server whose node was revoked - but not
+        // deleted - would otherwise hit a unique-index violation and get an opaque 500. Refuse it
+        // with a reason: re-adopting a revoked node should be a deliberate act in the panel.
+        if (nodes.FindByAgentKey(request.AgentPublicKey) is { } existing)
+        {
+            return (null, new ApiError(
+                "enrollment_key_registered",
+                existing.Revoked
+                    ? $"This server is already registered as '{existing.Name}' and was revoked. Delete that node in the panel first, then enroll again."
+                    : $"This server is already registered as '{existing.Name}'. Delete that node in the panel first, or leave the existing agent running."));
+        }
+
         var now = DateTimeOffset.UtcNow;
         var hash = Hash(request.EnrollmentToken);
 
