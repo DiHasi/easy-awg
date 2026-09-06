@@ -26,8 +26,12 @@ RUN apt-get update \
         WITH_SYSTEMDUNITS=no \
     && rm -rf /var/lib/apt/lists/*
 
-FROM golang:1.24-bookworm AS awg-go-build
+FROM golang:1.25-bookworm AS awg-go-build
 ARG AMNEZIAWG_GO_REF=master
+# This stage tracks amneziawg-go master, so its go.mod can raise the required Go version at any
+# time. The golang images pin GOTOOLCHAIN=local, which turns that into a hard build failure;
+# letting Go fetch the toolchain its go.mod asks for keeps upstream bumps from breaking us.
+ENV GOTOOLCHAIN=auto
 WORKDIR /src
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git make \
@@ -68,6 +72,9 @@ RUN chmod +x /app/awg-node
 
 ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 ENV WG_QUICK_USERSPACE_IMPLEMENTATION=amneziawg-go
+# The base image presets a listen port, but the agent binds its own loopback health address.
+# Clearing it keeps a confusing "Overriding HTTP_PORTS" warning out of every node's log.
+ENV ASPNETCORE_HTTP_PORTS=
 
 EXPOSE 51820/udp
 VOLUME ["/etc/awg-node", "/etc/amnezia/amneziawg"]

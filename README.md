@@ -230,8 +230,7 @@ Phase 1 — multi-server with manual switchover — is done. What comes next:
 
 ## Known gaps
 
-- The Docker images have not been built yet, and the panel and agent have not been run together
-  on a real server. Build and try them on a test host before relying on this.
+- The pair has been exercised in containers on a single host, not yet across real servers.
 - The frontend has no automated tests.
 - The predecessor single-server app is preserved at tag `v0.9-standalone` and has been removed
   from the tree.
@@ -459,8 +458,7 @@ awg-node --render-bundle bundle.json --control-key <base64url> --egress ens3
 
 ## Известные пробелы
 
-- Docker-образы ещё ни разу не собирались, панель и агент вместе на настоящем сервере не
-  запускались. Соберите и проверьте на тестовом хосте, прежде чем полагаться на это.
+- Связка проверена в контейнерах на одной машине, но ещё не на разнесённых серверах.
 - У фронтенда нет автоматических тестов.
 - Предшественник — одиночное приложение — сохранён под тегом `v0.9-standalone` и удалён из
   дерева.

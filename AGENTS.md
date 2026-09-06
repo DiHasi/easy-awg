@@ -41,9 +41,12 @@ cd frontend && pnpm run generate   # static build into .output/public
 Run `pnpm run typecheck` after touching anything the frontend consumes. It catches null/undefined
 drift between the API and the forms that plain linting does not.
 
-Docker images have never been built in CI or locally in this repo's history — the node image
-clones and compiles amneziawg-tools and amneziawg-go, which takes minutes. Build them before any
-deploy; do not assume they work.
+Both images build and have been run together: an agent enrolls, pulls a bundle and brings up
+awg0, and the panel reports it healthy and in sync. Build them off the VPN nodes though — the
+toolchains want several gigabytes that a small server does not have.
+
+The Go stage tracks amneziawg-go master, whose go.mod can raise the required Go version at any
+time. `GOTOOLCHAIN=auto` is set so that does not become a hard build failure.
 
 ## Invariants
 
@@ -130,8 +133,7 @@ never assert on a specific allocated address — assert on what the API returned
 
 ## Known gaps
 
-- Docker images have not been built; the control plane and agent have not been run together on a
-  real server.
+- The pair has only been exercised in containers on one host, never across real servers.
 - The frontend has no automated tests.
 - `Microsoft.OpenApi` 2.0.0 arrives transitively with a known high-severity advisory (NU1903).
 - Phase 2 (external probes, blocked-vs-down detection, DNS/floating-IP failover, notifications)
