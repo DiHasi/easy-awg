@@ -82,7 +82,7 @@ for this reason: build once somewhere with room, push, and pull on the servers.
 # On a build machine or in CI. AGENT_VERSION is what each node reports back to
 # the panel; leave it out and the agent identifies itself as 0.0.0-dev.
 docker build -f docker/control.Dockerfile -t dihasi/awg-control:latest .
-docker build -f docker/node.Dockerfile   -t dihasi/awg-node:latest --build-arg AGENT_VERSION=1.2.0 .
+docker build -f docker/node.Dockerfile   -t dihasi/awg-node:latest --build-arg AGENT_VERSION=1.2.1 .
 docker push dihasi/awg-control:latest && docker push dihasi/awg-node:latest
 ```
 
@@ -414,7 +414,7 @@ docker compose -f compose.node.yaml build
 # На машине сборки или в CI. AGENT_VERSION — это версия, которую нода сообщает
 # панели; без неё агент представляется как 0.0.0-dev.
 docker build -f docker/control.Dockerfile -t dihasi/awg-control:latest .
-docker build -f docker/node.Dockerfile   -t dihasi/awg-node:latest --build-arg AGENT_VERSION=1.2.0 .
+docker build -f docker/node.Dockerfile   -t dihasi/awg-node:latest --build-arg AGENT_VERSION=1.2.1 .
 docker push dihasi/awg-control:latest && docker push dihasi/awg-node:latest
 ```
 
