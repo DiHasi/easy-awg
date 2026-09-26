@@ -79,9 +79,10 @@ gigabytes of disk that a 10 GB server does not have. The compose files reference
 for this reason: build once somewhere with room, push, and pull on the servers.
 
 ```bash
-# On a build machine or in CI
+# On a build machine or in CI. AGENT_VERSION is what each node reports back to
+# the panel; leave it out and the agent identifies itself as 0.0.0-dev.
 docker build -f docker/control.Dockerfile -t dihasi/awg-control:latest .
-docker build -f docker/node.Dockerfile   -t dihasi/awg-node:latest .
+docker build -f docker/node.Dockerfile   -t dihasi/awg-node:latest --build-arg AGENT_VERSION=1.2.0 .
 docker push dihasi/awg-control:latest && docker push dihasi/awg-node:latest
 ```
 
@@ -197,6 +198,61 @@ For a fresh panel you can instead point `AWG_IMPORT_LEGACY_STATE` at a mounted `
 
 Obfuscation is **not** configured through environment variables. It is fleet-wide and lives in the
 panel under **Fleet**, so a change applies to every node at once.
+
+## Obfuscation (AmneziaWG 3.x)
+
+The panel targets the AmneziaWG 3.1 line. 3.x exists because masking individual traits stopped being
+enough: a tunnel with randomized packet sizes but a fixed rekey interval and a fixed keepalive
+cadence is still recognizable. So most of the new settings are *ranges* rather than values, written
+as `lo-hi`, and the peer re-rolls within the range on every use. A single number still works, and
+`0`, `0-0` or `off` means "behave like stock WireGuard".
+
+The settings divide in two, and which half a setting is in decides where you configure it.
+
+**Must match on both ends** - fleet-wide, written into every node interface and every client config:
+
+| Setting | Notes |
+| --- | --- |
+| `S1`-`S4` | Random padding on init, response, cookie and transport messages. |
+| `H1`-`H4` | Message type identifiers. Now ranges; the four may not overlap, and may not enter the 1-4 range WireGuard reserves. |
+| `HeaderProtectionKey` | New in 3.0. ChaCha20 over the packet header, so the message type is unreadable rather than merely renamed. Needs `S1`-`S4` of at least 12: the nonce rides in that padding. Generate one with the button next to the field. |
+| `RandomTrailers` | New in 3.0. Random trailing bytes on every packet. |
+
+**May differ per client** - the fleet profile holds the default, and any client can override it:
+
+| Setting | Notes |
+| --- | --- |
+| `Jc`, `Jmin`, `Jmax` | Junk packets before the handshake. |
+| `I1`-`I5` | Obfuscation packets sent before the handshake, as a tag chain: `<b hex>`, `<t>`, `<r n>`, `<rc n>`, `<rd n>`, `<d>`, `<ds>`, `<dz>`. |
+| `ContentPaddingAddition` | New in 3.0. Extra random payload bytes on top of the 16-byte multiple WireGuard already pads to. |
+| `RekeyAfterTime` | Seconds before a live session re-handshakes. WireGuard uses a fixed 120. |
+| `RekeyTimeout` | Seconds between handshake retries. Fixed 5 in WireGuard. |
+| `RejectAfterTime` | Seconds before a key is abandoned. Fixed 180. Must stay above `RekeyAfterTime`. |
+| `KeepaliveTimeout` | Seconds of silence before a keepalive. Fixed 10. |
+| `MaxHandshakeAttempts` | Attempts before the peer gives up. Fixed 18. |
+| `DisableCookies` | New in 3.0. Stops answering with a cookie reply under load, which is a recognizable message of its own. |
+| `PersistentKeepalive` | Goes in the client `[Peer]`. Defaults to 25; a range here stops the whole fleet emitting one synchronized heartbeat. |
+
+Differing per client is the point rather than a nicety: two clients that rekey on the same schedule
+and pad to the same length are a correlatable pair.
+
+Changing `HeaderProtectionKey`, `RandomTrailers`, `S1`-`S4` or `H1`-`H4` changes the wire format, so
+**every client config has to be handed out again** - existing ones stop handshaking. The per-client
+half can be changed freely; only that client's config needs reissuing.
+
+### Upgrading a fleet to 3.x
+
+Upgrade the panel first, then walk the nodes. Until a node is upgraded it keeps reporting the older
+bundle schema, and the panel serves it a profile with the 3.x settings stripped and `H1`-`H4`
+collapsed to their low bound, so its tunnel stays up on the settings it was already running. Such a
+node is flagged on the **Nodes** page as `agent predates AmneziaWG 3.x`; do not turn on the 3.x
+wire-format settings until that flag is gone from every node, or those nodes will be serving a wire
+format your clients no longer speak.
+
+On a node using the kernel data path, `scripts/install-awg-v3.sh` upgrades `awg`, `awg-quick` and
+the DKMS module together, and verifies a real 3.x configuration on a throwaway interface before
+leaving the module in place - rolling back to the userspace path if it cannot. Nodes running the
+bundled `amneziawg-go` need nothing beyond the new image.
 
 ## Using the panel
 
@@ -349,9 +405,10 @@ docker compose -f compose.node.yaml build
 образы: соберите один раз там, где есть место, запушьте, а на серверах только `pull`.
 
 ```bash
-# На машине сборки или в CI
+# На машине сборки или в CI. AGENT_VERSION — это версия, которую нода сообщает
+# панели; без неё агент представляется как 0.0.0-dev.
 docker build -f docker/control.Dockerfile -t dihasi/awg-control:latest .
-docker build -f docker/node.Dockerfile   -t dihasi/awg-node:latest .
+docker build -f docker/node.Dockerfile   -t dihasi/awg-node:latest --build-arg AGENT_VERSION=1.2.0 .
 docker push dihasi/awg-control:latest && docker push dihasi/awg-node:latest
 ```
 
@@ -464,6 +521,63 @@ docker rm -f awg-node && rm -rf /etc/awg-node/*
 
 Обфускация настраивается **не** переменными окружения. Она общая для флота и задаётся в панели в
 разделе **Fleet**, поэтому изменение применяется сразу ко всем нодам.
+
+## Обфускация (AmneziaWG 3.x)
+
+Панель рассчитана на линейку AmneziaWG 3.1. Смысл 3.x в том, что маскировать отдельные признаки
+перестало хватать: туннель со случайными размерами пакетов, но фиксированным интервалом rekey и
+фиксированным ритмом keepalive всё равно узнаётся. Поэтому большинство новых параметров — это не
+значения, а *диапазоны* в виде `lo-hi`, и пир заново выбирает число внутри диапазона при каждом
+использовании. Одно число тоже работает, а `0`, `0-0` или `off` означает поведение обычного
+WireGuard.
+
+Параметры делятся на две группы, и от группы зависит, где их настраивать.
+
+**Должны совпадать на обоих концах** — общие для флота, пишутся и в конфиг интерфейса каждой ноды,
+и в каждый клиентский конфиг:
+
+| Параметр | Замечания |
+| --- | --- |
+| `S1`-`S4` | Случайный паддинг для init, response, cookie и transport. |
+| `H1`-`H4` | Идентификаторы типов сообщений. Теперь диапазоны; четыре не должны пересекаться и не должны попадать в зарезервированный WireGuard диапазон 1-4. |
+| `HeaderProtectionKey` | Новое в 3.0. ChaCha20 поверх заголовка пакета: тип сообщения не просто переименован, а нечитаем. Требует `S1`-`S4` не меньше 12 — nonce едет внутри этого паддинга. Сгенерировать можно кнопкой рядом с полем. |
+| `RandomTrailers` | Новое в 3.0. Случайные байты в конце каждого пакета. |
+
+**Могут различаться у каждого клиента** — в профиле флота лежит значение по умолчанию, любой клиент
+может его переопределить:
+
+| Параметр | Замечания |
+| --- | --- |
+| `Jc`, `Jmin`, `Jmax` | Мусорные пакеты перед хендшейком. |
+| `I1`-`I5` | Обфускационные пакеты перед хендшейком, цепочкой тегов: `<b hex>`, `<t>`, `<r n>`, `<rc n>`, `<rd n>`, `<d>`, `<ds>`, `<dz>`. |
+| `ContentPaddingAddition` | Новое в 3.0. Добавка случайных байт к полезной нагрузке сверх кратности 16. |
+| `RekeyAfterTime` | Секунды до повторного хендшейка живой сессии. В WireGuard фиксированные 120. |
+| `RekeyTimeout` | Секунды между повторами хендшейка. В WireGuard 5. |
+| `RejectAfterTime` | Секунды до отказа от ключа. В WireGuard 180. Должно оставаться больше `RekeyAfterTime`. |
+| `KeepaliveTimeout` | Секунды тишины до keepalive. В WireGuard 10. |
+| `MaxHandshakeAttempts` | Число попыток хендшейка. В WireGuard 18. |
+| `DisableCookies` | Новое в 3.0. Не отвечать cookie reply под нагрузкой — сам этот ответ является узнаваемым сообщением. |
+| `PersistentKeepalive` | Пишется в `[Peer]` клиента. По умолчанию 25; диапазон здесь убирает единый синхронный «пульс» всего флота. |
+
+Различие между клиентами — это цель, а не мелочь: два клиента с одинаковым расписанием rekey и
+одинаковым паддингом коррелируются между собой.
+
+Изменение `HeaderProtectionKey`, `RandomTrailers`, `S1`-`S4` или `H1`-`H4` меняет формат на проводе,
+поэтому **все клиентские конфиги придётся выдать заново** — старые перестанут хендшейкиться.
+Вторую группу можно менять свободно: переоформить нужно только конфиг этого клиента.
+
+### Перевод флота на 3.x
+
+Сначала обновляется панель, потом по очереди ноды. Пока нода не обновлена, она сообщает старую
+версию схемы бандла, и панель отдаёт ей профиль без параметров 3.x и с `H1`-`H4`, сведёнными к
+нижней границе, — её туннель продолжает работать на тех настройках, что уже были. Такая нода
+помечается на странице **Nodes** как `agent predates AmneziaWG 3.x`; не включайте параметры формата
+на проводе, пока эта метка не исчезнет со всех нод, иначе эти ноды будут отдавать формат, которого
+клиенты уже не понимают.
+
+Для ноды на kernel-датапасе есть `scripts/install-awg-v3.sh`: он обновляет `awg`, `awg-quick` и
+DKMS-модуль вместе, проверяет настоящий конфиг 3.x на одноразовом интерфейсе и откатывается на
+userspace, если проверка не прошла. Нодам на встроенном `amneziawg-go` достаточно нового образа.
 
 ## Работа с панелью
 

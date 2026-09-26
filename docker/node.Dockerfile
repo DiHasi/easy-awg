@@ -5,7 +5,11 @@
 # calls to the control plane, and its health endpoint binds to loopback.
 
 FROM ubuntu:24.04 AS awg-tools-build
-ARG AMNEZIAWG_TOOLS_REF=master
+# Pinned, not master: master already carries an awg4 line, and the tools are half of an ABI pair
+# with whatever kernel module the host runs. These 3.1 tools negotiate the netlink encoding of
+# H1-H4 against the module's genl family version, so they drive a genl 1, 2 or 3 module correctly
+# - which is what lets a node be upgraded without its kernel module being upgraded in lockstep.
+ARG AMNEZIAWG_TOOLS_REF=v3.1.20260812
 WORKDIR /src
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -27,10 +31,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 FROM golang:1.25-bookworm AS awg-go-build
-ARG AMNEZIAWG_GO_REF=master
-# This stage tracks amneziawg-go master, so its go.mod can raise the required Go version at any
-# time. The golang images pin GOTOOLCHAIN=local, which turns that into a hard build failure;
-# letting Go fetch the toolchain its go.mod asks for keeps upstream bumps from breaking us.
+# The userspace implementation, and the default backend for a node: it needs no kernel module and
+# it speaks the full 3.1 parameter set. Pinned for the same reason as the tools.
+ARG AMNEZIAWG_GO_REF=v3.1.20260828
+# amneziawg-go can raise the required Go version at any time. The golang images pin
+# GOTOOLCHAIN=local, which turns that into a hard build failure; letting Go fetch the toolchain
+# its go.mod asks for keeps upstream bumps from breaking us.
 ENV GOTOOLCHAIN=auto
 WORKDIR /src
 RUN apt-get update \
@@ -43,6 +49,9 @@ RUN apt-get update \
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release
+# Stamped into the agent assembly so the panel can tell which nodes it has
+# already walked during a synchronized fleet upgrade.
+ARG AGENT_VERSION=0.0.0-dev
 WORKDIR /src
 RUN apt-get update \
     && apt-get install -y --no-install-recommends clang zlib1g-dev libicu74 \
@@ -51,7 +60,7 @@ COPY ["src/AwgEasy.Contracts/AwgEasy.Contracts.csproj", "src/AwgEasy.Contracts/"
 COPY ["src/AwgEasy.Node/AwgEasy.Node.csproj", "src/AwgEasy.Node/"]
 RUN dotnet restore "src/AwgEasy.Node/AwgEasy.Node.csproj"
 COPY src/ src/
-RUN dotnet publish "src/AwgEasy.Node/AwgEasy.Node.csproj" -c $BUILD_CONFIGURATION -o /app/publish
+RUN dotnet publish "src/AwgEasy.Node/AwgEasy.Node.csproj" -c $BUILD_CONFIGURATION -p:Version=$AGENT_VERSION -o /app/publish
 
 FROM mcr.microsoft.com/dotnet/runtime-deps:10.0 AS final
 WORKDIR /app

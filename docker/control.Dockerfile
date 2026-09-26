@@ -5,7 +5,9 @@
 # at all is key generation, which now happens exclusively in the control plane.
 
 FROM ubuntu:24.04 AS awg-tools-build
-ARG AMNEZIAWG_TOOLS_REF=master
+# Only genkey/pubkey/genpsk are used here, but the ref is pinned alongside the node image so the
+# two never disagree about what a key looks like.
+ARG AMNEZIAWG_TOOLS_REF=v3.1.20260812
 WORKDIR /src
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

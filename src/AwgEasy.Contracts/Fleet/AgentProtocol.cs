@@ -7,11 +7,17 @@ namespace AwgEasy.Contracts;
 /// <param name="EnrollmentToken">Single-use, short-lived token issued by the control plane UI.</param>
 /// <param name="Hostname">Reported for operator convenience only; never trusted for authorization.</param>
 /// <param name="AgentPublicKey">Base64url SubjectPublicKeyInfo of the ECDSA P-256 key generated on the node.</param>
+/// <param name="BundleSchemaVersion">
+/// Highest bundle schema this agent understands. Reported here and on every status report so the
+/// control plane never hands a node a bundle carrying settings its AmneziaWG build would reject.
+/// Absent (0) from agents that predate schema negotiation and read as 1.
+/// </param>
 public sealed record EnrollRequest(
     string EnrollmentToken,
     string Hostname,
     string AgentPublicKey,
-    string AgentVersion);
+    string AgentVersion,
+    int BundleSchemaVersion = 0);
 
 /// <param name="ControlSigningPublicKey">Pinned by the agent and used to verify every bundle afterwards.</param>
 public sealed record EnrollResponse(
@@ -27,7 +33,8 @@ public sealed record NodeStatusReport(
     DateTimeOffset ReportedAt,
     PeerStatus[] Peers,
     NodeMetrics? Metrics,
-    string? LastError);
+    string? LastError,
+    int BundleSchemaVersion = 0);
 
 /// <summary>
 /// Traffic counters are reported per public key. The node does not know which client a key
@@ -51,3 +58,15 @@ public sealed record NodeMetrics(
 public sealed record NodeStatusAck(
     long CurrentRevision,
     bool BundleAvailable);
+
+/// <summary>
+/// Clamps a reported bundle schema version into the window this build can serve. Agents that
+/// predate schema negotiation send nothing and must be read as schema 1, not as 0.
+/// </summary>
+public static class BundleSchema
+{
+    public static int Normalize(int reported)
+        => reported <= 0
+            ? DesiredStateBundle.MinimumSupportedSchemaVersion
+            : Math.Min(reported, DesiredStateBundle.CurrentSchemaVersion);
+}

@@ -30,10 +30,10 @@ public sealed class NodeRepository(Database database)
         using var command = connection.Sql(
             """
             INSERT INTO nodes (id, name, hostname, endpoint_host, agent_public_key, agent_version,
-                               status, applied_revision, interface_up, backend, egress_interface, mtu,
-                               last_seen_at, last_error, revoked, enrolled_at)
+                               status, applied_revision, interface_up, backend, bundle_schema_version,
+                               egress_interface, mtu, last_seen_at, last_error, revoked, enrolled_at)
             VALUES ($id, $name, $hostname, $endpointHost, $agentKey, $agentVersion,
-                    $status, 0, 0, NULL, $egress, $mtu, NULL, NULL, 0, $enrolledAt)
+                    $status, 0, 0, NULL, $bundleSchema, $egress, $mtu, NULL, NULL, 0, $enrolledAt)
             """,
             ("$id", node.Id),
             ("$name", node.Name),
@@ -42,6 +42,7 @@ public sealed class NodeRepository(Database database)
             ("$agentKey", node.AgentPublicKey),
             ("$agentVersion", node.AgentVersion),
             ("$status", node.Status),
+            ("$bundleSchema", node.BundleSchemaVersion),
             ("$egress", node.EgressInterface),
             ("$mtu", node.Mtu),
             ("$enrolledAt", node.EnrolledAt.ToStorage()));
@@ -58,6 +59,7 @@ public sealed class NodeRepository(Database database)
                SET applied_revision = $revision,
                    interface_up     = $interfaceUp,
                    backend          = $backend,
+                   bundle_schema_version = $bundleSchema,
                    agent_version    = $agentVersion,
                    last_seen_at     = $seenAt,
                    last_error       = $lastError,
@@ -68,6 +70,7 @@ public sealed class NodeRepository(Database database)
             ("$revision", report.AppliedRevision),
             ("$interfaceUp", report.InterfaceUp ? 1 : 0),
             ("$backend", report.Backend),
+            ("$bundleSchema", BundleSchema.Normalize(report.BundleSchemaVersion)),
             ("$agentVersion", report.AgentVersion),
             ("$seenAt", report.ReportedAt.ToStorage()),
             ("$lastError", report.LastError),
@@ -181,6 +184,7 @@ public sealed class NodeRepository(Database database)
                 reader.GetInt64("applied_revision"),
                 reader.GetBoolean("interface_up"),
                 reader.GetStringOrNull("backend"),
+                reader.GetInt32("bundle_schema_version"),
                 reader.GetStringOrNull("egress_interface"),
                 reader.GetInt32OrNull("mtu"),
                 reader.GetTimestampOrNull("last_seen_at"),

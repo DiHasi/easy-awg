@@ -42,7 +42,8 @@ public sealed class ControlPlaneClient(HttpClient http, NodeOptions options, ILo
             enrollmentToken,
             Environment.MachineName,
             identity.PublicKey,
-            AgentVersion.Current);
+            AgentVersion.Current,
+            DesiredStateBundle.CurrentSchemaVersion);
 
         using var message = new HttpRequestMessage(HttpMethod.Post, Url("/api/v1/agents/enroll"))
         {

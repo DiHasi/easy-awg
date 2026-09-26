@@ -12,7 +12,9 @@ namespace AwgEasy.Tests;
 /// </summary>
 public class AgentProtocolTests(ControlPlaneFixture fixture) : IClassFixture<ControlPlaneFixture>
 {
-    private async Task<(HttpClient Admin, HttpClient Agent, TestAgent Node)> EnrolledAgentAsync(string nodeName)
+    private async Task<(HttpClient Admin, HttpClient Agent, TestAgent Node)> EnrolledAgentAsync(
+        string nodeName,
+        int bundleSchemaVersion = DesiredStateBundle.CurrentSchemaVersion)
     {
         var admin = await fixture.CreateAdminClientAsync();
         var tokenResponse = await admin.PostAsJsonAsync("/api/nodes/tokens", new CreateNodeRequest(nodeName, null, null, null));
@@ -21,7 +23,7 @@ public class AgentProtocolTests(ControlPlaneFixture fixture) : IClassFixture<Con
 
         var agentClient = fixture.CreateClient();
         var agent = new TestAgent();
-        await agent.EnrollAsync(agentClient, token.Token);
+        await agent.EnrollAsync(agentClient, token.Token, bundleSchemaVersion: bundleSchemaVersion);
 
         return (admin, agentClient, agent);
     }
@@ -188,7 +190,8 @@ public class AgentProtocolTests(ControlPlaneFixture fixture) : IClassFixture<Con
             ReportedAt: DateTimeOffset.UtcNow,
             Peers: [new PeerStatus(client.PublicKey, DateTimeOffset.UtcNow, 1024, 2048)],
             Metrics: null,
-            LastError: null);
+            LastError: null,
+            BundleSchemaVersion: DesiredStateBundle.CurrentSchemaVersion);
 
         var response = await agentClient.SendAsync(agent.SignedRequest(
             HttpMethod.Post,
@@ -255,6 +258,68 @@ public class AgentProtocolTests(ControlPlaneFixture fixture) : IClassFixture<Con
         var error = (await response.Content.ReadFromJsonAsync<AwgEasy.Contracts.ApiError>())!;
         Assert.Equal("enrollment_key_registered", error.Code);
         Assert.Contains("Delete that node", error.Message);
+    }
+
+    // A synchronized fleet upgrade means the panel runs the new schema while some nodes still run
+    // the old one. Each node has to get the newest bundle it can actually apply, or upgrading the
+    // panel would take every un-walked node's tunnel down.
+    [Fact]
+    public async Task A_node_one_schema_behind_is_served_the_downgraded_profile()
+    {
+        var admin = await fixture.CreateAdminClientAsync();
+        var profile = new ServerObfuscationProfile
+        {
+            S1 = 16,
+            S2 = 16,
+            S3 = 16,
+            S4 = 16,
+            H1 = "1000000-1000500",
+            HeaderProtectionKey = Convert.ToBase64String(new byte[32]),
+            RandomTrailers = true,
+            DefaultRekeyAfterTime = "110-130",
+            DefaultRejectAfterTime = "170-190"
+        };
+
+        (await admin.PutAsJsonAsync("/api/fleet/obfuscation", profile)).EnsureSuccessStatusCode();
+
+        var (_, legacyClient, legacy) = await EnrolledAgentAsync(
+            "node-legacy-schema",
+            DesiredStateBundle.MinimumSupportedSchemaVersion);
+
+        var legacyBundle = legacy.AcceptBundle((await Fetch(legacyClient, legacy))!);
+
+        Assert.Equal(DesiredStateBundle.MinimumSupportedSchemaVersion, legacyBundle.SchemaVersion);
+        Assert.Null(legacyBundle.Obfuscation!.HeaderProtectionKey);
+        Assert.Null(legacyBundle.Obfuscation.RandomTrailers);
+        Assert.Null(legacyBundle.Obfuscation.DefaultRekeyAfterTime);
+        // Collapsed to the low bound rather than dropped: that is the value the node was already
+        // running before the range was widened.
+        Assert.Equal("1000000", legacyBundle.Obfuscation.H1);
+
+        var (_, currentClient, current) = await EnrolledAgentAsync("node-current-schema");
+        var currentBundle = current.AcceptBundle((await Fetch(currentClient, current))!);
+
+        Assert.Equal(DesiredStateBundle.CurrentSchemaVersion, currentBundle.SchemaVersion);
+        Assert.Equal("1000000-1000500", currentBundle.Obfuscation!.H1);
+        Assert.True(currentBundle.Obfuscation.RandomTrailers);
+        Assert.Equal("110-130", currentBundle.Obfuscation.DefaultRekeyAfterTime);
+    }
+
+    // A node that cannot apply the current profile looks healthy and in sync from the outside, so
+    // the panel has to say it is behind on its own.
+    [Fact]
+    public async Task The_panel_reports_which_nodes_cannot_apply_the_current_schema()
+    {
+        var admin = await fixture.CreateAdminClientAsync();
+        var (_, _, legacy) = await EnrolledAgentAsync(
+            "node-schema-badge",
+            DesiredStateBundle.MinimumSupportedSchemaVersion);
+        var (_, _, current) = await EnrolledAgentAsync("node-schema-ok");
+
+        var nodes = (await admin.GetFromJsonAsync<NodeResponse[]>("/api/nodes"))!;
+
+        Assert.False(nodes.Single(n => n.Id == legacy.NodeId).SupportsCurrentSchema);
+        Assert.True(nodes.Single(n => n.Id == current.NodeId).SupportsCurrentSchema);
     }
 
     private static async Task<SignedBundle?> Fetch(HttpClient client, TestAgent agent)

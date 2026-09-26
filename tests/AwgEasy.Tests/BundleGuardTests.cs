@@ -85,6 +85,21 @@ public class BundleGuardTests
         Assert.Equal("bundle_schema_unsupported", error.Code);
     }
 
+    // The panel is upgraded before the nodes are walked, so a current agent is handed the older
+    // schema for as long as the fleet is mid-upgrade. Refusing it would take the tunnel down.
+    [Fact]
+    public void Accepts_a_bundle_one_schema_version_behind()
+    {
+        Assert.True(
+            BundleGuard.TryAccept(
+                Bundle(schemaVersion: DesiredStateBundle.MinimumSupportedSchemaVersion),
+                appliedRevision: 0,
+                "node-a",
+                Now,
+                out var error),
+            error.Message);
+    }
+
     [Fact]
     public void Rejects_a_peer_outside_the_tunnel_subnet()
     {

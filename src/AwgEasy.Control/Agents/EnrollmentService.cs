@@ -116,6 +116,7 @@ public sealed class EnrollmentService(
             AppliedRevision: 0,
             InterfaceUp: false,
             Backend: null,
+            BundleSchemaVersion: BundleSchema.Normalize(request.BundleSchemaVersion),
             EgressInterface: null,
             Mtu: null,
             LastSeenAt: null,

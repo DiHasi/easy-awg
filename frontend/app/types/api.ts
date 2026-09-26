@@ -3,6 +3,11 @@ export type ApiError = {
   message: string
 }
 
+/**
+ * Everything that may legally differ between the two ends of a tunnel. The 3.x range fields are
+ * strings because a value may be either `140` or `120-160`; the API keeps them verbatim so the
+ * panel never has to agree with awg on formatting.
+ */
 export type ClientObfuscationOverrides = {
   jc?: number | null
   jmin?: number | null
@@ -12,6 +17,14 @@ export type ClientObfuscationOverrides = {
   i3?: string | null
   i4?: string | null
   i5?: string | null
+  contentPaddingAddition?: string | null
+  rekeyAfterTime?: string | null
+  rekeyTimeout?: string | null
+  rejectAfterTime?: string | null
+  keepaliveTimeout?: string | null
+  maxHandshakeAttempts?: string | null
+  disableCookies?: boolean | null
+  persistentKeepalive?: string | null
 }
 
 export type ServerObfuscationProfile = {
@@ -23,6 +36,8 @@ export type ServerObfuscationProfile = {
   h2?: string | null
   h3?: string | null
   h4?: string | null
+  headerProtectionKey?: string | null
+  randomTrailers?: boolean | null
   defaultJc?: number | null
   defaultJmin?: number | null
   defaultJmax?: number | null
@@ -31,6 +46,14 @@ export type ServerObfuscationProfile = {
   defaultI3?: string | null
   defaultI4?: string | null
   defaultI5?: string | null
+  defaultContentPaddingAddition?: string | null
+  defaultRekeyAfterTime?: string | null
+  defaultRekeyTimeout?: string | null
+  defaultRejectAfterTime?: string | null
+  defaultKeepaliveTimeout?: string | null
+  defaultMaxHandshakeAttempts?: string | null
+  defaultDisableCookies?: boolean | null
+  defaultPersistentKeepalive?: string | null
 }
 
 export type Client = {
@@ -79,6 +102,8 @@ export type Node = {
   interfaceUp: boolean
   backend?: string | null
   agentVersion?: string | null
+  bundleSchemaVersion: number
+  supportsCurrentSchema: boolean
   lastSeenAt?: string | null
   lastError?: string | null
   revoked: boolean
@@ -106,6 +131,10 @@ export type AuditEvent = {
   actor?: string | null
   nodeId?: string | null
   message: string
+}
+
+export type GeneratedKey = {
+  key: string
 }
 
 export type ImportResult = {

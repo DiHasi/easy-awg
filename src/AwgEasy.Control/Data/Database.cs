@@ -40,9 +40,17 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
         }
 
         using var connection = Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = Schema;
-        command.ExecuteNonQuery();
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = Schema;
+            command.ExecuteNonQuery();
+        }
+
+        // CREATE TABLE IF NOT EXISTS does nothing to a table that already exists, so a column
+        // added after a panel was first deployed has to be filled in here. Defaulting to 1 is
+        // deliberate: a node that has not yet reported its bundle schema is assumed to be the
+        // older one, so it is never handed settings its AmneziaWG build would reject.
+        EnsureColumn(connection, "nodes", "bundle_schema_version", "INTEGER NOT NULL DEFAULT 1");
 
         if (!OperatingSystem.IsWindows() && File.Exists(options.DatabasePath))
         {
@@ -51,6 +59,20 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
         }
 
         logger.LogInformation("Control plane database ready at {Path}.", options.DatabasePath);
+    }
+
+    private static void EnsureColumn(SqliteConnection connection, string table, string column, string definition)
+    {
+        using var columns = connection.CreateCommand();
+        columns.CommandText = $"SELECT 1 FROM pragma_table_info('{table}') WHERE name = '{column}'";
+        if (columns.ExecuteScalar() is not null)
+        {
+            return;
+        }
+
+        using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {definition}";
+        alter.ExecuteNonQuery();
     }
 
     private const string Schema = """
@@ -100,6 +122,7 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             applied_revision  INTEGER NOT NULL DEFAULT 0,
             interface_up      INTEGER NOT NULL DEFAULT 0,
             backend           TEXT    NULL,
+            bundle_schema_version INTEGER NOT NULL DEFAULT 1,
             egress_interface  TEXT    NULL,
             mtu               INTEGER NULL,
             last_seen_at      TEXT    NULL,

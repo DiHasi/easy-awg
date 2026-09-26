@@ -16,6 +16,12 @@ public interface IAwgKeyGenerator
     string GeneratePublicKey(string privateKey);
 
     string GeneratePresharedKey();
+
+    /// <summary>
+    /// AmneziaWG 3.x header protection key: 32 random bytes, base64. `awg genpsk` produces
+    /// exactly that, so there is no second code path for what is the same kind of secret.
+    /// </summary>
+    string GenerateHeaderProtectionKey();
 }
 
 public sealed class AwgToolKeyGenerator : IAwgKeyGenerator
@@ -25,6 +31,8 @@ public sealed class AwgToolKeyGenerator : IAwgKeyGenerator
     public string GeneratePublicKey(string privateKey) => Run("pubkey", privateKey + "\n");
 
     public string GeneratePresharedKey() => Run("genpsk", input: null);
+
+    public string GenerateHeaderProtectionKey() => Run("genpsk", input: null);
 
     private static string Run(string argument, string? input)
     {

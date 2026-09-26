@@ -30,6 +30,11 @@ public static class FleetApi
             return Results.Ok(fleet.Describe());
         });
 
+        // Generated here rather than in the browser so key material keeps coming from one place,
+        // the same `awg` the fleet identity comes from.
+        admin.MapPost("/fleet/header-protection-key", (IAwgKeyGenerator keys)
+            => TypedResults.Ok(new GeneratedKeyResponse(keys.GenerateHeaderProtectionKey())));
+
         admin.MapPost("/fleet/import", async (
             HttpRequest request,
             LegacyStateImporter importer) =>

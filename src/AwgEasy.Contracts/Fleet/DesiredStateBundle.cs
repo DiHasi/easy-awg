@@ -20,7 +20,18 @@ public sealed record DesiredStateBundle(
     NodeSettings Node,
     BundlePeer[] Peers)
 {
-    public const int CurrentSchemaVersion = 1;
+    /// <summary>
+    /// 2 added the AmneziaWG 3.x settings: header protection, random trailers, the timing and
+    /// padding ranges, and H1-H4 as ranges rather than single values.
+    /// </summary>
+    public const int CurrentSchemaVersion = 2;
+
+    /// <summary>
+    /// The oldest schema this build still understands. The control plane must be able to serve
+    /// agents one version behind, because the panel is always upgraded before the nodes are, so
+    /// both sides accept the whole window rather than only the current version.
+    /// </summary>
+    public const int MinimumSupportedSchemaVersion = 1;
 }
 
 /// <summary>Fleet-wide AmneziaWG server identity. Identical on every node, which is what makes

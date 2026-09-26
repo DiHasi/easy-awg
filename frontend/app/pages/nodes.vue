@@ -266,6 +266,19 @@ onBeforeUnmount(() => {
                 >
                   rev {{ node.appliedRevision }} of {{ node.fleetRevision }}
                 </UBadge>
+                <!--
+                  A node behind the bundle schema is served the older obfuscation profile, so it
+                  quietly speaks a different wire format from the rest of the fleet. That is worth
+                  saying out loud rather than leaving it to look healthy and in sync.
+                -->
+                <UBadge
+                  v-if="!node.supportsCurrentSchema && !node.revoked"
+                  color="warning"
+                  variant="subtle"
+                  icon="i-lucide-triangle-alert"
+                >
+                  agent predates AmneziaWG 3.x
+                </UBadge>
               </div>
 
               <p class="mt-1 text-sm text-muted">

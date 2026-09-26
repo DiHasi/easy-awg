@@ -215,7 +215,8 @@ public sealed class ReconcileService(
             DateTimeOffset.UtcNow,
             peers,
             Metrics: null,
-            health.LastError);
+            health.LastError,
+            DesiredStateBundle.CurrentSchemaVersion);
 
         await controlPlane.ReportStatusAsync(identity, report, cancellationToken);
     }

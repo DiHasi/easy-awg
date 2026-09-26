@@ -43,6 +43,7 @@ public sealed record NodeRecord(
     long AppliedRevision,
     bool InterfaceUp,
     string? Backend,
+    int BundleSchemaVersion,
     string? EgressInterface,
     int? Mtu,
     DateTimeOffset? LastSeenAt,

@@ -25,11 +25,14 @@ public static class BundleGuard
             return false;
         }
 
-        if (bundle.SchemaVersion != DesiredStateBundle.CurrentSchemaVersion)
+        // A window rather than an exact match: the panel is upgraded before the nodes are, so a
+        // fresh agent may be handed the older schema while the fleet is mid-upgrade.
+        if (bundle.SchemaVersion < DesiredStateBundle.MinimumSupportedSchemaVersion
+            || bundle.SchemaVersion > DesiredStateBundle.CurrentSchemaVersion)
         {
             error = new ApiError(
                 "bundle_schema_unsupported",
-                $"Bundle schema version {bundle.SchemaVersion} is not supported by this agent (expected {DesiredStateBundle.CurrentSchemaVersion}).");
+                $"Bundle schema version {bundle.SchemaVersion} is not supported by this agent (expected {DesiredStateBundle.MinimumSupportedSchemaVersion}-{DesiredStateBundle.CurrentSchemaVersion}).");
             return false;
         }
 

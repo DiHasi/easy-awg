@@ -20,8 +20,14 @@ public static class ServerConfigRenderer
         builder.AppendSetting("ListenPort", bundle.Network.ListenPort);
         builder.AppendSetting("MTU", bundle.Node.Mtu);
 
-        // Only the interface side. Jc/Jmin/Jmax and I1-I5 are client knobs and never belong here.
+        // The wire format, which must match every client exactly.
         builder.AppendInterfaceObfuscation(bundle.Obfuscation);
+
+        // The 3.x timing and padding knobs apply to the node's own behaviour too - a server that
+        // rekeys on a fixed schedule is as fingerprintable as a client that does. It has no
+        // client to override them, so it runs the fleet defaults. Jc/Jmin/Jmax and I1-I5 stay out:
+        // those describe what an initiator sends, and the node only has to tolerate them.
+        builder.AppendTuning(bundle.Obfuscation?.GetDefaults());
 
         builder.AppendSetting("PostUp", NatRule("-A", egressInterface));
         builder.AppendSetting("PostDown", NatRule("-D", egressInterface));

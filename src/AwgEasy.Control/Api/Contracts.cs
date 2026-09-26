@@ -48,6 +48,8 @@ public sealed record NodeResponse(
     bool InterfaceUp,
     string? Backend,
     string? AgentVersion,
+    int BundleSchemaVersion,
+    bool SupportsCurrentSchema,
     DateTimeOffset? LastSeenAt,
     string? LastError,
     bool Revoked,
@@ -57,8 +59,10 @@ public sealed record NodeResponse(
         => new(
             node.Id, node.Name, node.Hostname, node.EndpointHost, node.Status,
             node.AppliedRevision, fleetRevision, node.AppliedRevision == fleetRevision,
-            node.InterfaceUp, node.Backend, node.AgentVersion, node.LastSeenAt,
-            node.LastError, node.Revoked, node.EnrolledAt);
+            node.InterfaceUp, node.Backend, node.AgentVersion,
+            node.BundleSchemaVersion,
+            node.BundleSchemaVersion >= DesiredStateBundle.CurrentSchemaVersion,
+            node.LastSeenAt, node.LastError, node.Revoked, node.EnrolledAt);
 }
 
 public sealed record CreateNodeRequest(string Name, string? EndpointHost, string? EgressInterface, int? Mtu);
@@ -86,3 +90,10 @@ public sealed record ClientShareResponse(string Token, string ClientName, DateTi
 public sealed record PublicShareResponse(string ClientName, DateTimeOffset ExpiresAt);
 
 public sealed record HealthResponse(string Status);
+
+/// <summary>
+/// A freshly generated AmneziaWG 3.x header protection key. Returned for the operator to paste
+/// into the profile rather than stored on the side: it only takes effect once the profile is
+/// saved, and a key nobody saved should leave no trace.
+/// </summary>
+public sealed record GeneratedKeyResponse(string Key);

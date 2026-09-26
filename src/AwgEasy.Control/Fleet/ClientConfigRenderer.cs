@@ -20,10 +20,12 @@ public static class ClientConfigRenderer
         builder.AppendSetting("Address", $"{client.Address}/{network.PrefixLength.ToString(CultureInfo.InvariantCulture)}");
         builder.AppendSetting("DNS", fleet.ClientDns);
 
-        // A client config carries both halves: the interface-side values that must match the
-        // server, and the client-side jitter knobs, with per-client overrides winning.
+        // A client config carries both halves: the wire-format values that must match the server,
+        // and everything that may differ per client, with per-client overrides winning.
+        var tunables = fleet.Obfuscation?.Merge(client.Obfuscation) ?? client.Obfuscation;
         builder.AppendInterfaceObfuscation(fleet.Obfuscation);
-        builder.AppendClientObfuscation(fleet.Obfuscation?.Merge(client.Obfuscation) ?? client.Obfuscation);
+        builder.AppendTuning(tunables);
+        builder.AppendClientObfuscation(tunables);
 
         builder.AppendLine();
         builder.AppendLine("[Peer]");
@@ -31,7 +33,10 @@ public static class ClientConfigRenderer
         builder.AppendSetting("PresharedKey", client.PresharedKey);
         builder.AppendSetting("AllowedIPs", fleet.ClientAllowedIps);
         builder.AppendSetting("Endpoint", $"{endpointHost}:{fleet.ListenPort.ToString(CultureInfo.InvariantCulture)}");
-        builder.AppendSetting("PersistentKeepalive", 25);
+        // 3.x accepts a range here. Keeping every client on a fixed 25s makes the fleet's
+        // keepalives line up into one recognizable heartbeat, so a range is worth configuring -
+        // but the stock value stays the fallback so an unconfigured fleet still behaves.
+        builder.AppendSetting("PersistentKeepalive", tunables?.PersistentKeepalive ?? "25");
 
         return builder.ToString();
     }

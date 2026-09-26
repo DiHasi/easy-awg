@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Fleet, ImportResult, ServerObfuscationProfile } from '~/types/api'
+import type { Fleet, GeneratedKey, ImportResult, ServerObfuscationProfile } from '~/types/api'
 
 definePageMeta({ middleware: 'auth' })
 
@@ -11,6 +11,7 @@ const loading = ref(true)
 const saving = ref(false)
 const errorMessage = ref<string | null>(null)
 
+const generatingKey = ref(false)
 const importing = ref(false)
 const importResult = ref<ImportResult | null>(null)
 const replaceExisting = ref(false)
@@ -53,6 +54,21 @@ const clientDefaultFields = [
   { key: 'defaultI5', label: 'I5' }
 ] as const
 
+/**
+ * AmneziaWG 3.x tunables. Each takes a single number or an inclusive `lo-hi` range that the peer
+ * re-rolls per use, which is the point: a fixed rekey interval is itself a fingerprint. The hints
+ * carry the stock WireGuard value so it is clear what a blank field leaves in place.
+ */
+const tuningFields = [
+  { key: 'defaultContentPaddingAddition', label: 'ContentPaddingAddition', hint: 'Extra random payload bytes. Off by default.' },
+  { key: 'defaultRekeyAfterTime', label: 'RekeyAfterTime', hint: 'Seconds between re-handshakes. WireGuard uses 120.' },
+  { key: 'defaultRekeyTimeout', label: 'RekeyTimeout', hint: 'Seconds between handshake retries. WireGuard uses 5.' },
+  { key: 'defaultRejectAfterTime', label: 'RejectAfterTime', hint: 'Seconds before a key is abandoned. Must stay above RekeyAfterTime. WireGuard uses 180.' },
+  { key: 'defaultKeepaliveTimeout', label: 'KeepaliveTimeout', hint: 'Seconds of silence before a keepalive. WireGuard uses 10.' },
+  { key: 'defaultMaxHandshakeAttempts', label: 'MaxHandshakeAttempts', hint: 'Handshake attempts before giving up. WireGuard uses 18.' },
+  { key: 'defaultPersistentKeepalive', label: 'PersistentKeepalive', hint: 'Seconds, written into the client [Peer]. Defaults to 25.' }
+] as const
+
 async function loadFleet() {
   try {
     fleet.value = await api.get<Fleet>('/fleet')
@@ -62,6 +78,30 @@ async function loadFleet() {
     errorMessage.value = describeError(error, 'Failed to load fleet settings.')
   } finally {
     loading.value = false
+  }
+}
+
+async function generateHeaderProtectionKey() {
+  generatingKey.value = true
+
+  try {
+    const generated = await api.post<GeneratedKey>('/fleet/header-protection-key')
+    form.headerProtectionKey = generated.key
+    toast.add({
+      title: 'Key generated',
+      description: 'Save the profile to roll it out. Every client config has to be handed out again.',
+      color: 'success',
+      icon: 'i-lucide-key'
+    })
+  } catch (error) {
+    toast.add({
+      title: 'Could not generate a key',
+      description: describeError(error, ''),
+      color: 'error',
+      icon: 'i-lucide-circle-alert'
+    })
+  } finally {
+    generatingKey.value = false
   }
 }
 
@@ -198,8 +238,9 @@ onMounted(loadFleet)
               Obfuscation
             </h2>
             <p class="mt-1 text-sm text-muted">
-              S1-S4 and H1-H4 are applied to every node interface. The client defaults are written
-              into new client configs when the client does not override them.
+              The wire format is applied to every node interface and copied into every client
+              config: both ends must carry identical values. The defaults below only seed client
+              configs, and a client may override any of them.
             </p>
           </div>
         </template>
@@ -207,7 +248,7 @@ onMounted(loadFleet)
         <div class="flex flex-col gap-6">
           <div>
             <h3 class="mb-2 text-sm font-medium text-highlighted">
-              Interface
+              Wire format
             </h3>
             <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <UFormField
@@ -227,13 +268,45 @@ onMounted(loadFleet)
                 v-for="field in headerFields"
                 :key="field.key"
                 :label="field.label"
+                help="Number or range"
               >
                 <UInput
                   v-model="form[field.key]"
                   class="w-full"
+                  placeholder="1000000-1000500"
                 />
               </UFormField>
             </div>
+
+            <UFormField
+              class="mt-3"
+              label="HeaderProtectionKey"
+              help="AmneziaWG 3.x. Encrypts the packet header, so the message type is unreadable rather than renamed. Needs S1-S4 of at least 12, and every client config has to be reissued when it changes."
+            >
+              <UFieldGroup class="w-full">
+                <UInput
+                  v-model="form.headerProtectionKey"
+                  class="w-full"
+                  placeholder="base64, 32 bytes"
+                />
+                <UButton
+                  color="neutral"
+                  variant="subtle"
+                  icon="i-lucide-key"
+                  :loading="generatingKey"
+                  @click="generateHeaderProtectionKey"
+                >
+                  Generate
+                </UButton>
+              </UFieldGroup>
+            </UFormField>
+
+            <USwitch
+              v-model="form.randomTrailers"
+              class="mt-3"
+              label="RandomTrailers"
+              description="AmneziaWG 3.x. Appends random trailing bytes to every packet. Must match on both ends."
+            />
           </div>
 
           <div>
@@ -276,6 +349,28 @@ onMounted(loadFleet)
                 />
               </UFormField>
             </div>
+
+            <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <UFormField
+                v-for="field in tuningFields"
+                :key="field.key"
+                :label="field.label"
+                :help="field.hint"
+              >
+                <UInput
+                  v-model="form[field.key]"
+                  class="w-full"
+                  placeholder="140 or 120-160"
+                />
+              </UFormField>
+            </div>
+
+            <USwitch
+              v-model="form.defaultDisableCookies"
+              class="mt-3"
+              label="DisableCookies"
+              description="AmneziaWG 3.x. Stops the peer answering with a cookie reply under load, which is a recognizable message of its own."
+            />
           </div>
         </div>
 

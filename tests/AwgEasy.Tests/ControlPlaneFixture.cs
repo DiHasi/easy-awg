@@ -24,6 +24,15 @@ public sealed class FakeKeyGenerator : IAwgKeyGenerator
     public string GeneratePublicKey(string privateKey) => "PUB" + privateKey[4..];
 
     public string GeneratePresharedKey() => $"PSK{Interlocked.Increment(ref _counter):D4}{new string('=', 40)}";
+
+    /// <summary>Unlike the others this one is validated as a real base64 32-byte key before it is
+    /// accepted, so the stand-in has to produce one.</summary>
+    public string GenerateHeaderProtectionKey()
+    {
+        var key = new byte[32];
+        key[0] = (byte)Interlocked.Increment(ref _counter);
+        return Convert.ToBase64String(key);
+    }
 }
 
 /// <summary>
@@ -115,11 +124,19 @@ public sealed class TestAgent : IDisposable
 
     public string? PinnedSigningKeyId { get; private set; }
 
-    public async Task<EnrollResponse> EnrollAsync(HttpClient client, string token, string hostname = "test-node")
+    /// <summary>
+    /// Enrolls as the real agent does, reporting the bundle schema it understands. Pass an older
+    /// <paramref name="bundleSchemaVersion"/> to stand in for a node that has not been upgraded.
+    /// </summary>
+    public async Task<EnrollResponse> EnrollAsync(
+        HttpClient client,
+        string token,
+        string hostname = "test-node",
+        int bundleSchemaVersion = DesiredStateBundle.CurrentSchemaVersion)
     {
         var response = await client.PostAsJsonAsync(
             "/api/v1/agents/enroll",
-            new EnrollRequest(token, hostname, PublicKey, "test-agent/1.0"));
+            new EnrollRequest(token, hostname, PublicKey, "test-agent/1.0", bundleSchemaVersion));
 
         response.EnsureSuccessStatusCode();
         var enrolled = (await response.Content.ReadFromJsonAsync<EnrollResponse>())!;

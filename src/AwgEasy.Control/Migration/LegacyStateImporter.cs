@@ -129,7 +129,18 @@ public sealed class LegacyStateImporter(
 
         if (state.ServerObfuscation is not null)
         {
-            fleet.UpdateObfuscation(state.ServerObfuscation.Normalize(), now);
+            // A profile the nodes would refuse is worse than no profile: every node rejects the
+            // bundle and the fleet stops converging. The identity and the clients are what an
+            // import is for, so keep those and say the profile needs re-entering by hand.
+            var imported = state.ServerObfuscation.Normalize();
+            if (AwgObfuscationValidator.TryValidateServerProfile(imported, out var obfuscationError))
+            {
+                fleet.UpdateObfuscation(imported, now);
+            }
+            else
+            {
+                warnings.Add($"Obfuscation profile was not imported: {obfuscationError.Message} Set it again in the panel.");
+            }
         }
 
         foreach (var client in importable)

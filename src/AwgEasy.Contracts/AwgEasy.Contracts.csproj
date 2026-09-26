@@ -8,6 +8,9 @@
         <InvariantGlobalization>true</InvariantGlobalization>
         <!-- Consumed by both the AOT-published node agent and the control plane. -->
         <IsAotCompatible>true</IsAotCompatible>
+        <!-- This assembly is linked into the AOT agent and carries the signature
+             verification path, so it holds the same gate the node does. -->
+        <WarningsAsErrors>$(WarningsAsErrors);IL2026;IL2055;IL2057;IL2060;IL2067;IL2070;IL2072;IL2075;IL2087;IL2091;IL2104;IL3000;IL3002;IL3050</WarningsAsErrors>
     </PropertyGroup>
 
 </Project>

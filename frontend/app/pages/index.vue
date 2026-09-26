@@ -36,8 +36,31 @@ const form = reactive({
   i2: '',
   i3: '',
   i4: '',
-  i5: ''
+  i5: '',
+  contentPaddingAddition: '',
+  rekeyAfterTime: '',
+  rekeyTimeout: '',
+  rejectAfterTime: '',
+  keepaliveTimeout: '',
+  maxHandshakeAttempts: '',
+  persistentKeepalive: '',
+  disableCookies: undefined as boolean | undefined
 })
+
+/**
+ * AmneziaWG 3.x tunables a single client may diverge on. Two clients that rekey on the same
+ * schedule and pad to the same length are a correlatable pair, so per-client values are the
+ * point rather than a nicety.
+ */
+const clientTuningFields = [
+  { key: 'contentPaddingAddition', label: 'ContentPaddingAddition' },
+  { key: 'rekeyAfterTime', label: 'RekeyAfterTime' },
+  { key: 'rekeyTimeout', label: 'RekeyTimeout' },
+  { key: 'rejectAfterTime', label: 'RejectAfterTime' },
+  { key: 'keepaliveTimeout', label: 'KeepaliveTimeout' },
+  { key: 'maxHandshakeAttempts', label: 'MaxHandshakeAttempts' },
+  { key: 'persistentKeepalive', label: 'PersistentKeepalive' }
+] as const
 
 // Counters are cumulative, so a rate only means something as a delta between two samples.
 let previousStats: Record<string, ClientStats> | null = null
@@ -105,6 +128,10 @@ function resetForm() {
   form.i3 = ''
   form.i4 = ''
   form.i5 = ''
+  for (const field of clientTuningFields) {
+    form[field.key] = ''
+  }
+  form.disableCookies = undefined
   useObfuscation.value = false
 }
 
@@ -122,7 +149,15 @@ function buildObfuscation(): ClientObfuscationOverrides | undefined {
     i2: clean(form.i2),
     i3: clean(form.i3),
     i4: clean(form.i4),
-    i5: clean(form.i5)
+    i5: clean(form.i5),
+    contentPaddingAddition: clean(form.contentPaddingAddition),
+    rekeyAfterTime: clean(form.rekeyAfterTime),
+    rekeyTimeout: clean(form.rekeyTimeout),
+    rejectAfterTime: clean(form.rejectAfterTime),
+    keepaliveTimeout: clean(form.keepaliveTimeout),
+    maxHandshakeAttempts: clean(form.maxHandshakeAttempts),
+    persistentKeepalive: clean(form.persistentKeepalive),
+    disableCookies: form.disableCookies
   }
 
   return Object.values(overrides).some(value => value !== undefined && value !== null) ? overrides : undefined
@@ -585,6 +620,25 @@ onBeforeUnmount(() => {
                 placeholder="<b 0x...>"
               />
             </UFormField>
+
+            <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <UFormField
+                v-for="field in clientTuningFields"
+                :key="field.key"
+                :label="field.label"
+              >
+                <UInput
+                  v-model="form[field.key]"
+                  class="w-full"
+                  placeholder="140 or 120-160"
+                />
+              </UFormField>
+            </div>
+
+            <USwitch
+              v-model="form.disableCookies"
+              label="DisableCookies"
+            />
           </div>
         </div>
       </template>

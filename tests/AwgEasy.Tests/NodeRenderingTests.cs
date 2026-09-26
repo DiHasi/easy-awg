@@ -45,7 +45,8 @@ public class ServerConfigRendererTests
         {
             S1 = 15,
             H1 = "1234567891",
-            // Client-side knobs belong in client configs, never in the node interface config.
+            // Junk and pre-handshake packets describe what an initiator sends. They belong in
+            // client configs, never in the node interface config.
             DefaultJc = 4,
             DefaultI1 = "<b 0xf00d>"
         };
@@ -55,6 +56,50 @@ public class ServerConfigRendererTests
         Assert.Contains("H1 = 1234567891", config);
         Assert.DoesNotContain("Jc", config);
         Assert.DoesNotContain("I1", config);
+    }
+
+    // AmneziaWG 3.x. Header protection and random trailers are only recognized when both ends
+    // carry them, so the node has to write them out too - a client-only copy just means no
+    // handshake at all.
+    [Fact]
+    public void Writes_the_shared_wire_format_of_amneziawg_3()
+    {
+        var profile = new ServerObfuscationProfile
+        {
+            S1 = 15,
+            S2 = 16,
+            S3 = 17,
+            S4 = 18,
+            H1 = "1000000-1000500",
+            HeaderProtectionKey = "aGVhZGVyLXByb3RlY3Rpb24ta2V5LTMyLWJ5dGVzLg==",
+            RandomTrailers = true
+        };
+
+        var config = ServerConfigRenderer.Render(Bundle(profile), "eth0");
+        Assert.Contains("H1 = 1000000-1000500", config);
+        Assert.Contains("HeaderProtectionKey = aGVhZGVyLXByb3RlY3Rpb24ta2V5LTMyLWJ5dGVzLg==", config);
+        Assert.Contains("RandomTrailers = on", config);
+    }
+
+    // The timings may differ between the two ends, but the node still needs its own: a server
+    // that rekeys on the stock fixed schedule is as fingerprintable as a client that does.
+    [Fact]
+    public void Applies_the_fleet_timing_defaults_to_the_node_itself()
+    {
+        var profile = new ServerObfuscationProfile
+        {
+            DefaultRekeyAfterTime = "110-130",
+            DefaultKeepaliveTimeout = "8-14",
+            DefaultDisableCookies = false,
+            // Goes in a client [Peer] section. The node has no use for it.
+            DefaultPersistentKeepalive = "20-30"
+        };
+
+        var config = ServerConfigRenderer.Render(Bundle(profile), "eth0");
+        Assert.Contains("RekeyAfterTime = 110-130", config);
+        Assert.Contains("KeepaliveTimeout = 8-14", config);
+        Assert.Contains("DisableCookies = off", config);
+        Assert.DoesNotContain("PersistentKeepalive", config);
     }
 
     [Fact]

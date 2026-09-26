@@ -32,7 +32,7 @@ scripts/install.sh       Node enrollment one-liner, served by Control at /instal
 
 ```bash
 dotnet build Awg-easy.sln          # whole solution
-dotnet test Awg-easy.sln           # 62 tests, all must pass
+dotnet test Awg-easy.sln           # 104 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
 cd frontend && pnpm run generate   # static build into .output/public
@@ -45,8 +45,10 @@ Both images build and have been run together: an agent enrolls, pulls a bundle a
 awg0, and the panel reports it healthy and in sync. Build them off the VPN nodes though — the
 toolchains want several gigabytes that a small server does not have.
 
-The Go stage tracks amneziawg-go master, whose go.mod can raise the required Go version at any
-time. `GOTOOLCHAIN=auto` is set so that does not become a hard build failure.
+Both images pin the AmneziaWG refs (`AMNEZIAWG_TOOLS_REF`, `AMNEZIAWG_GO_REF`) to the 3.1 line
+rather than tracking master, which already carries an awg4 branch. Bump the two together.
+`GOTOOLCHAIN=auto` stays set because amneziawg-go can raise the required Go version at any time,
+and the golang images pin `GOTOOLCHAIN=local`, which would turn that into a hard build failure.
 
 ## Invariants
 
@@ -68,8 +70,13 @@ payload bytes verbatim. If the control plane and the agent serialize the same bu
 verification fails. Never re-serialize a bundle to verify it.
 
 **Bundle format changes require a synchronized fleet upgrade.** Bump
-`DesiredStateBundle.CurrentSchemaVersion`, and keep the control plane able to serve agents one
-version behind — you will always upgrade the panel before you walk every node.
+`DesiredStateBundle.CurrentSchemaVersion`, raise `MinimumSupportedSchemaVersion` only when you drop
+support, and keep the control plane able to serve agents one version behind — you will always
+upgrade the panel before you walk every node. Negotiation is server-side state, not a request
+parameter: the agent reports its highest supported schema on enrollment and on every status report,
+the panel stores it on the node row, and `FleetService.BuildBundle` issues the newest bundle that
+node can apply. Do not move that decision into a query string or a header — both sit outside the
+request signature, so either would let a downgrade be forced from the network.
 
 **Nodes are fail-static.** If the control plane is unreachable, the agent re-applies its cached
 bundle and keeps serving traffic indefinitely. Losing management is never a reason to lose the
@@ -82,6 +89,25 @@ on a node.
 **Signed bundles need rollback protection, not just signatures.** A correctly signed bundle stays
 valid forever, so `BundleGuard` also enforces monotonic revision, node binding, and expiry. Any
 new signed message needs the same treatment.
+
+**Obfuscation settings split into "must match" and "may differ", and the split is load-bearing.**
+S1-S4, H1-H4, `HeaderProtectionKey` and `RandomTrailers` describe the wire format: a client and
+the node it talks to must carry identical values or the handshake is never recognized, so they are
+fleet-wide and written into both configs by `AppendInterfaceObfuscation`. Everything else — junk
+packets, I1-I5, and the 3.x padding and timing ranges - may differ per peer, and differing is the
+point: two clients that rekey on the same schedule are a correlatable pair. Those live on
+`ClientObfuscationOverrides`, with the fleet profile carrying the `Default*` seed. When you add a
+setting, decide which half it belongs to first; putting a must-match setting in the second half
+produces a fleet that half-works.
+
+**A node applies its bundle in one shot, so one bad value costs the whole tunnel.** `awg` rejects
+a device configuration as a unit — the interface does not come up with the rest of the settings
+honoured, it does not come up at all. That is why `AwgObfuscationValidator` mirrors amneziawg's own
+rules rather than trusting the form: H1-H4 ranges may not overlap and may not enter the 1-4 range
+WireGuard reserves, S1-S4 must be at least 12 when `HeaderProtectionKey` is set (the ChaCha20
+nonce rides in that padding), and `RejectAfterTime` must stay above `RekeyAfterTime`. The legacy
+import path validates too, and drops an unusable profile with a warning rather than poisoning the
+fleet with it.
 
 **Bump the fleet revision for anything that changes what a node runs.** Client create/delete/
 enable/disable and obfuscation changes bump it. Renaming a client deliberately does not — it
@@ -97,13 +123,29 @@ or `enp1s0`: the tunnel came up, peers handshook, and no traffic reached the int
 `AwgEasy.Control` is not (it is deployed once, and AOT would fight the auth and data libraries).
 In Contracts and Node, never use the reflection-based `JsonSerializer` overloads — pass a
 `JsonTypeInfo`. `dotnet publish src/AwgEasy.Node` must stay free of IL2026/IL3050 warnings.
+That is enforced, not just asked for: Node and Contracts promote the IL trim/AOT codes to
+errors via `WarningsAsErrors`, so a regression breaks the build instead of reaching a node.
+When one fires, fix the cause — never `#pragma warning disable` or `[UnconditionalSuppressMessage]`,
+which silence the analyzer while the linker still breaks at publish.
 
 **.NET 10 has no Ed25519 in the BCL.** Bundle and request signing use ECDSA P-256 / SHA-256 with
 IEEE P-1363 fixed-field signatures, which is in the BCL and AOT-clean. Do not add a third-party
 crypto library to the node image for this.
 
 **Key generation shells out to `awg`.** It happens only in the control plane, whose image carries
-the binary. Tests substitute `IAwgKeyGenerator`, so the suite runs on machines without it.
+the binary. Tests substitute `IAwgKeyGenerator`, so the suite runs on machines without it. The 3.x
+header protection key is 32 random bytes, which is what `awg genpsk` already produces, so it goes
+through the same path rather than a second one.
+
+**The 3.x tools negotiate the netlink encoding; the parameters still need a 3.x module.** The
+netlink ABI for H1-H4 changed three times (u32, then a string, then u64), and the 3.x `awg` picks
+the encoding from the module's genl family version, so it drives a genl 1, 2 or 3 module. What it
+cannot do is make a pre-3.0 module accept `HeaderProtectionKey`, `ContentPaddingAddition`, the
+timing ranges, `RandomTrailers` or `DisableCookies`: those are absent from its netlink policy, so
+`awg setconf` fails with EINVAL and nothing reaches dmesg. `scripts/install-awg-v3.sh` installs
+both halves from the 3.1 line and proves it by applying a real 3.x configuration to a throwaway
+interface before it leaves the module in place. The userspace `amneziawg-go` in the node image
+speaks the full set, and is the backend a node falls back to.
 
 **Agent requests are authenticated by signature, not a bearer token.** The agent's private key
 never crosses the wire, and unlike mTLS this survives a TLS-terminating proxy or CDN in front of

@@ -86,25 +86,48 @@ public sealed class FleetService(
     /// Client private keys and client names are deliberately left out: a node needs only public
     /// keys, preshared keys and addresses to serve peers, so a seized node reveals neither who
     /// the clients are nor anything that would let someone impersonate them.
+    ///
+    /// The bundle is issued at the schema the node reported it understands. The panel is always
+    /// upgraded before the nodes are walked, so during a fleet upgrade some nodes are still a
+    /// schema behind; handing one of those a profile it cannot parse would take its tunnel down
+    /// rather than leave it on the older settings.
     /// </summary>
     public SignedBundle BuildBundle(NodeRecord node)
     {
         var current = Current;
         var now = DateTimeOffset.UtcNow;
+        var schemaVersion = BundleSchema.Normalize(node.BundleSchemaVersion);
+
+        var obfuscation = current.Obfuscation;
+        if (schemaVersion < DesiredStateBundle.CurrentSchemaVersion && obfuscation is not null)
+        {
+            if (obfuscation.UsesSchema3Features)
+            {
+                // Worth a warning rather than a debug line: such a node serves a wire format its
+                // own clients no longer speak, so it is effectively out of the fleet until it is
+                // upgraded. Only fires when the revision actually moved - unchanged polls are 304s.
+                logger.LogWarning(
+                    "Node {NodeName} reports bundle schema {NodeSchema} and cannot apply the AmneziaWG 3.x profile. Serving it the downgraded profile; upgrade the agent on that server.",
+                    node.Name,
+                    schemaVersion);
+            }
+
+            obfuscation = obfuscation.ToSchemaV1();
+        }
 
         var peers = clients.ListEnabled()
             .Select(client => new BundlePeer(client.PublicKey, client.PresharedKey, client.Address))
             .ToArray();
 
         var bundle = new DesiredStateBundle(
-            DesiredStateBundle.CurrentSchemaVersion,
+            schemaVersion,
             current.Revision,
             node.Id,
             now,
             now.Add(options.BundleLifetime),
             new FleetIdentity(current.Generation, current.ServerPrivateKey, current.ServerPublicKey),
             new NetworkProfile(current.Subnet, current.ListenPort),
-            current.Obfuscation,
+            obfuscation,
             new NodeSettings("awg0", node.EgressInterface, node.Mtu),
             peers);
 
