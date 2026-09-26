@@ -326,6 +326,12 @@ Phase 1 — multi-server with manual switchover — is done. What comes next:
   reassigning a floating IP, and notifying the operator.
 - **Fleet identity rotation**, so a compromised or seized node is recoverable without rebuilding
   everything by hand.
+- **Converge the node's firewall rules, not just its peers.** The NAT and forwarding rules live in
+  `PostUp`, which only runs when the interface is brought up. Once it is up the agent applies every
+  later revision with `awg syncconf`, which never runs `PostUp` - so a rule someone flushed, or an
+  egress interface that changed under the node, is never restored. The tunnel stays up and carries
+  nothing, and the panel reports the node healthy and in sync throughout. The agent should check
+  the rules it expects on every apply and reinstate them, instead of trusting a one-shot hook.
 
 ## Known gaps
 
@@ -651,6 +657,13 @@ awg-node --render-bundle bundle.json --control-key <base64url> --egress ens3
   переносом floating IP и уведомлением администратора.
 - **Ротация идентичности флота**, чтобы скомпрометированная или изъятая нода не означала ручную
   пересборку всего.
+- **Сводить не только пиров, но и правила фаервола ноды.** Правила NAT и форвардинга живут в
+  `PostUp`, а он выполняется только при поднятии интерфейса. Дальше агент применяет каждую
+  следующую ревизию через `awg syncconf`, который `PostUp` не запускает, — поэтому смытое правило
+  или сменившийся под нодой egress-интерфейс не восстановятся никогда. Туннель при этом поднят и
+  не несёт ничего, а панель всё это время показывает ноду здоровой и синхронной. Агент должен
+  проверять ожидаемые правила при каждом применении и восстанавливать их, а не полагаться на
+  одноразовый хук.
 
 ## Известные пробелы
 

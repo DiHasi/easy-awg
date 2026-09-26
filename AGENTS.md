@@ -32,7 +32,7 @@ scripts/install.sh       Node enrollment one-liner, served by Control at /instal
 
 ```bash
 dotnet build Awg-easy.sln          # whole solution
-dotnet test Awg-easy.sln           # 104 tests, all must pass
+dotnet test Awg-easy.sln           # 105 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
 cd frontend && pnpm run generate   # static build into .output/public
@@ -180,3 +180,7 @@ never assert on a specific allocated address — assert on what the API returned
 - `Microsoft.OpenApi` 2.0.0 arrives transitively with a known high-severity advisory (NU1903).
 - Phase 2 (external probes, blocked-vs-down detection, DNS/floating-IP failover, notifications)
   is designed but not built. Failover is manual today.
+- A node's firewall rules are only applied by `PostUp`, so they are installed once when the
+  interface comes up and never reconciled. `awg syncconf`, which every later revision goes
+  through, does not run hooks. A flushed rule or a changed egress interface leaves a tunnel that
+  is up, healthy and in sync, and carries no traffic.

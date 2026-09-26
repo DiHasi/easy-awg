@@ -38,6 +38,19 @@ public class ServerConfigRendererTests
         Assert.DoesNotContain("eth0", config);
     }
 
+    // The agent runs in Docker, which sets the host FORWARD policy to DROP. With only the rule out
+    // of the tunnel a client reaches the internet and every reply is dropped coming back - the
+    // tunnel handshakes, the node decrypts and masquerades, and the client still sees nothing.
+    [Fact]
+    public void Accepts_forwarding_in_both_directions()
+    {
+        var config = ServerConfigRenderer.Render(Bundle(), "ens3");
+
+        Assert.Contains("iptables -A FORWARD -i %i -j ACCEPT", config);
+        Assert.Contains("iptables -A FORWARD -o %i -j ACCEPT", config);
+        Assert.Contains("iptables -D FORWARD -o %i -j ACCEPT", config);
+    }
+
     [Fact]
     public void Writes_interface_side_obfuscation_only()
     {

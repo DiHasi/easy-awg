@@ -56,6 +56,15 @@ public static class ServerConfigRenderer
             .Append(" issued=").AppendLine(bundle.IssuedAt.ToString("O", CultureInfo.InvariantCulture));
     }
 
+    /// <summary>
+    /// Both forward directions, not just the one out of the tunnel. The agent runs in Docker, and
+    /// Docker sets the host FORWARD policy to DROP, so a rule for `-i %i` alone lets a client reach
+    /// the internet while every reply is dropped on the way back: the tunnel handshakes, the node
+    /// decrypts and masquerades, and the client still sees nothing. On a host without Docker the
+    /// policy is ACCEPT and the missing rule costs nothing, which is what kept this hidden.
+    /// </summary>
     private static string NatRule(string op, string egressInterface)
-        => $"iptables {op} FORWARD -i %i -j ACCEPT; iptables -t nat {op} POSTROUTING -o {egressInterface} -j MASQUERADE";
+        => $"iptables {op} FORWARD -i %i -j ACCEPT; "
+            + $"iptables {op} FORWARD -o %i -j ACCEPT; "
+            + $"iptables -t nat {op} POSTROUTING -o {egressInterface} -j MASQUERADE";
 }
