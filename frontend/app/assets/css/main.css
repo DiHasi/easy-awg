@@ -1,18 +1,118 @@
 @import "tailwindcss";
 @import "@nuxt/ui";
 
-@theme static {
-  --font-sans: 'Public Sans', sans-serif;
+/*
+ * The panel is drawn as a technical drawing sheet: drafting paper in light mode, a cyanotype
+ * blueprint in dark mode. Nuxt UI's semantic tokens are remapped onto that palette, so every
+ * `text-muted` or `border-default` in the pages follows the sheet without knowing about it.
+ */
 
-  --color-green-50: #EFFDF5;
-  --color-green-100: #D9FBE8;
-  --color-green-200: #B3F5D1;
-  --color-green-300: #75EDAE;
-  --color-green-400: #00DC82;
-  --color-green-500: #00C16A;
-  --color-green-600: #00A155;
-  --color-green-700: #007F45;
-  --color-green-800: #016538;
-  --color-green-900: #0A5331;
-  --color-green-950: #052E16;
+@theme {
+  --font-sans: 'Archivo', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Chivo Mono', ui-monospace, monospace;
+}
+
+/* Colors with no Nuxt UI counterpart. `live` marks the path traffic actually takes. */
+@theme inline {
+  --color-desk: var(--sheet-desk);
+  --color-live: var(--sheet-live);
+  --color-live-tint: var(--sheet-live-tint);
+  --color-standby: var(--sheet-standby);
+  --color-title: var(--sheet-title);
+}
+
+:root {
+  --ui-radius: 0rem;
+  --ui-header-height: 3rem;
+
+  --sheet-desk: #e7e3d8;
+  --sheet-live: #c4452c;
+  --sheet-live-tint: #f2ded8;
+  --sheet-standby: #63727e;
+  --sheet-title: #e2ddcd;
+
+  --ui-bg: #f1eee4;
+  --ui-bg-muted: #e9e5d8;
+  --ui-bg-elevated: #f7f5ee;
+  --ui-bg-accented: #e2ddcd;
+  --ui-bg-inverted: #191c1f;
+
+  --ui-text-dimmed: #8f8a7b;
+  --ui-text-muted: #6b6659;
+  --ui-text-toned: #45413a;
+  --ui-text: #191c1f;
+  --ui-text-highlighted: #0f1113;
+  --ui-text-inverted: #f1eee4;
+
+  --ui-border: #b6b0a0;
+  --ui-border-muted: #dcd6c6;
+  --ui-border-accented: #55504a;
+  --ui-border-inverted: #191c1f;
+
+  --ui-primary: #191c1f;
+  --ui-secondary: #1f4e79;
+  --ui-success: #1f6b4a;
+  --ui-info: #1f4e79;
+  --ui-warning: #8a5a12;
+  --ui-error: #9b1c1c;
+  --ui-neutral: #55504a;
+}
+
+.dark {
+  --sheet-desk: #0b2640;
+  --sheet-live: #ff8466;
+  --sheet-live-tint: #3a3a55;
+  --sheet-standby: #8fb0cc;
+  --sheet-title: #1a4b75;
+
+  --ui-bg: #123a5c;
+  --ui-bg-muted: #174062;
+  --ui-bg-elevated: #16446b;
+  --ui-bg-accented: #1d5282;
+  --ui-bg-inverted: #eef4fa;
+
+  --ui-text-dimmed: #7f9bb4;
+  --ui-text-muted: #a3bbd0;
+  --ui-text-toned: #c3d4e4;
+  --ui-text: #e8f0f7;
+  --ui-text-highlighted: #ffffff;
+  --ui-text-inverted: #123a5c;
+
+  --ui-border: #5e86aa;
+  --ui-border-muted: #2f5a80;
+  --ui-border-accented: #c3d4e4;
+  --ui-border-inverted: #eef4fa;
+
+  --ui-primary: #eef4fa;
+  --ui-secondary: #9cc8f0;
+  --ui-success: #7fd6a8;
+  --ui-info: #9cc8f0;
+  --ui-warning: #f2c46d;
+  --ui-error: #ff9b8a;
+  --ui-neutral: #c3d4e4;
+}
+
+@layer base {
+  body {
+    background-color: var(--sheet-desk);
+  }
+
+  ::selection {
+    background-color: var(--sheet-live);
+    color: var(--ui-text-inverted);
+  }
+}
+
+/* The small tracked capitals every label on a drawing is set in. */
+@utility caps {
+  font-family: var(--font-sans);
+  font-size: 0.625rem;
+  line-height: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
 }

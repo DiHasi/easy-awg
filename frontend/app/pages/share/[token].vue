@@ -20,6 +20,9 @@ const qrDataUrl = ref<string | null>(null)
 
 const configUrl = computed(() => api.url(`/shares/${token.value}/config`))
 
+// The person opening this is not an operator: their own clock is the one that matters.
+const expiresLocal = computed(() => share.value ? new Date(share.value.expiresAt).toLocaleString() : '—')
+
 async function load() {
   try {
     share.value = await api.get<PublicShare>(`/shares/${token.value}`)
@@ -36,71 +39,86 @@ async function load() {
 }
 
 onMounted(load)
+
+useHead({ title: 'Your VPN configuration' })
 </script>
 
 <template>
-  <div class="flex min-h-screen items-center justify-center bg-muted/30 px-4 py-10">
-    <UCard class="w-full max-w-md">
-      <template #header>
-        <div class="flex items-center gap-3">
-          <UIcon
-            name="i-lucide-shield"
-            class="size-6 text-primary"
+  <LooseSheet
+    drawing="client configuration"
+    :rows="[
+      { label: 'Client', value: share?.clientName ?? '—' },
+      { label: 'Valid until', value: expiresLocal }
+    ]"
+  >
+    <p
+      v-if="loading"
+      class="py-16 text-center font-mono text-xs text-muted"
+    >
+      reading the link…
+    </p>
+
+    <div
+      v-else-if="errorMessage"
+      class="flex flex-col gap-2 border border-dashed border-default px-4 py-8 text-center"
+    >
+      <span class="caps text-error">Link unavailable</span>
+      <p class="text-sm text-muted">
+        {{ errorMessage }} Ask whoever sent it for a new one.
+      </p>
+    </div>
+
+    <div
+      v-else
+      class="flex flex-col gap-5"
+    >
+      <figure class="m-0 flex flex-col items-center gap-2">
+        <div class="relative p-3">
+          <span
+            v-for="corner in ['top-0 left-0 border-t border-l', 'top-0 right-0 border-t border-r', 'bottom-0 left-0 border-b border-l', 'bottom-0 right-0 border-b border-r']"
+            :key="corner"
+            class="absolute size-4 border-accented"
+            :class="corner"
+            aria-hidden="true"
           />
-          <h1 class="text-base font-semibold text-highlighted">
-            Your VPN configuration
-          </h1>
+          <!-- Always black on white: a scanner reads contrast, not the sheet's palette. -->
+          <img
+            v-if="qrDataUrl"
+            :src="qrDataUrl"
+            alt="Configuration QR code"
+            class="size-64 bg-white p-2 sm:size-72"
+          >
         </div>
-      </template>
+        <figcaption class="caps text-muted">
+          Fig. 1 — {{ share?.clientName }}.conf
+        </figcaption>
+      </figure>
 
-      <div
-        v-if="loading"
-        class="flex min-h-48 items-center justify-center text-sm text-muted"
+      <UButton
+        :href="configUrl"
+        color="primary"
+        variant="solid"
+        icon="i-lucide-download"
+        block
+        external
       >
-        <UIcon
-          name="i-lucide-loader-circle"
-          class="mr-2 size-5 animate-spin"
-        />
-        Loading
-      </div>
+        Download config
+      </UButton>
 
-      <UAlert
-        v-else-if="errorMessage"
-        color="error"
-        variant="subtle"
-        icon="i-lucide-circle-alert"
-        title="Link unavailable"
-        :description="errorMessage"
-      />
-
-      <div
-        v-else
-        class="flex flex-col items-center gap-4"
-      >
-        <p class="text-sm text-muted">
-          Configuration for <span class="font-medium text-highlighted">{{ share?.clientName }}</span>
-        </p>
-
-        <img
-          v-if="qrDataUrl"
-          :src="qrDataUrl"
-          alt="Configuration QR code"
-          class="rounded-md bg-white p-2"
-        >
-
-        <p class="text-center text-xs text-muted">
-          Scan this in the AmneziaWG app, or download the file and import it.
-        </p>
-
-        <UButton
-          :href="configUrl"
-          icon="i-lucide-download"
-          block
-          external
-        >
-          Download config
-        </UButton>
-      </div>
-    </UCard>
-  </div>
+      <ol class="flex flex-col gap-2 border-t border-muted pt-4">
+        <li class="flex gap-2.5 text-[13px] leading-snug text-toned">
+          <NoteMark n="1" />
+          <span>Install the AmneziaWG app on the device.</span>
+        </li>
+        <li class="flex gap-2.5 text-[13px] leading-snug text-toned">
+          <NoteMark n="2" />
+          <span>Scan figure 1 in the app, or download the file and import it.</span>
+        </li>
+        <li class="flex gap-2.5 text-[13px] leading-snug text-toned">
+          <NoteMark n="3" />
+          <span>Keep this to yourself: the link carries your private key and works until {{ expiresLocal }}.</span>
+        </li>
+      </ol>
+    </div>
+  </LooseSheet>
 </template>

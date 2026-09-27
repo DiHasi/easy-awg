@@ -198,6 +198,12 @@ signed; it covers a hash of the body. Node revocation is a flag checked per requ
 - No ORM. Hand-written SQL via `Microsoft.Data.Sqlite` and the helpers in `SqliteExtensions`.
 - Frontend: Nuxt UI components, semantic Tailwind tokens (`text-muted`, `border-default`, …).
   The API models "unset" as `null`, form inputs need `undefined` — convert at the boundary.
+- The panel is drawn as a technical drawing sheet (paper in light mode, cyanotype in dark).
+  `main.css` remaps Nuxt UI's tokens onto that palette and `app.config.ts` squares and flattens
+  the components, so keep using the semantic tokens rather than raw colours. `live` is reserved
+  for the path traffic actually takes; do not reuse it for emphasis. Peer states are the marks
+  `● ○ –` via `StateMark`, not coloured pills. Labels are `caps`, except AmneziaWG parameter
+  names, which keep their exact spelling through `paramField`.
 - Everything under `/api` requires an authenticated admin except `/health`, `/auth/*` and
   `/shares/*`. Do not add an endpoint to the anonymous set without a reason worth stating.
 

@@ -30,66 +30,64 @@ async function submit() {
     submitting.value = false
   }
 }
+
+useHead({ title: 'Sign in · AWG Easy' })
 </script>
 
 <template>
-  <div class="flex min-h-screen items-center justify-center bg-muted/30 px-4">
-    <UCard class="w-full max-w-sm">
-      <template #header>
-        <div class="flex items-center gap-3">
-          <UIcon
-            name="i-lucide-shield"
-            class="size-6 text-primary"
-          />
-          <div>
-            <h1 class="text-base font-semibold text-highlighted">
-              AWG Easy
-            </h1>
-            <p class="text-xs text-muted">
-              Sign in to manage the fleet
-            </p>
-          </div>
-        </div>
-      </template>
+  <LooseSheet
+    drawing="fleet control"
+    :rows="[
+      { label: 'Drawing', value: 'access' },
+      { label: 'Sheet', value: '0 of 4' }
+    ]"
+  >
+    <h1 class="caps text-sm text-highlighted">
+      Sign in
+    </h1>
+    <p class="mt-1 text-[13px] text-muted">
+      To read and change the fleet.
+    </p>
 
-      <form
-        class="flex flex-col gap-4"
-        @submit.prevent="submit"
-      >
-        <UFormField label="Username">
-          <UInput
-            v-model="username"
-            autocomplete="username"
-            autofocus
-            class="w-full"
-          />
-        </UFormField>
-
-        <UFormField label="Password">
-          <UInput
-            v-model="password"
-            type="password"
-            autocomplete="current-password"
-            class="w-full"
-          />
-        </UFormField>
-
-        <UAlert
-          v-if="errorMessage"
-          color="error"
-          variant="subtle"
-          icon="i-lucide-circle-alert"
-          :description="errorMessage"
+    <form
+      class="mt-5 flex flex-col gap-4"
+      @submit.prevent="submit"
+    >
+      <UFormField label="Username">
+        <UInput
+          v-model="username"
+          autocomplete="username"
+          autofocus
+          class="w-full"
         />
+      </UFormField>
 
-        <UButton
-          type="submit"
-          block
-          :loading="submitting"
-        >
-          Sign in
-        </UButton>
-      </form>
-    </UCard>
-  </div>
+      <UFormField label="Password">
+        <UInput
+          v-model="password"
+          type="password"
+          autocomplete="current-password"
+          class="w-full"
+        />
+      </UFormField>
+
+      <UAlert
+        v-if="errorMessage"
+        color="error"
+        variant="subtle"
+        icon="i-lucide-circle-alert"
+        :description="errorMessage"
+      />
+
+      <UButton
+        type="submit"
+        color="primary"
+        variant="solid"
+        block
+        :loading="submitting"
+      >
+        Sign in
+      </UButton>
+    </form>
+  </LooseSheet>
 </template>

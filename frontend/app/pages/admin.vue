@@ -5,8 +5,8 @@ definePageMeta({ middleware: 'auth' })
 
 const api = useControlApi()
 const toast = useToast()
+const { fleet, refresh } = useFleetState()
 
-const fleet = ref<Fleet | null>(null)
 const loading = ref(true)
 const saving = ref(false)
 const errorMessage = ref<string | null>(null)
@@ -69,6 +69,7 @@ const tuningFields = [
   { key: 'defaultPersistentKeepalive', label: 'PersistentKeepalive', hint: 'Seconds, written into the client [Peer]. Defaults to 25.' }
 ] as const
 
+// Read once: the sheet frame polls the fleet, and a poll must not overwrite a half-edited form.
 async function loadFleet() {
   try {
     fleet.value = await api.get<Fleet>('/fleet')
@@ -78,6 +79,13 @@ async function loadFleet() {
     errorMessage.value = describeError(error, 'Failed to load fleet settings.')
   } finally {
     loading.value = false
+  }
+}
+
+async function copyPublicKey() {
+  if (fleet.value) {
+    await navigator.clipboard.writeText(fleet.value.serverPublicKey)
+    toast.add({ title: 'Key copied', color: 'success', icon: 'i-lucide-check' })
   }
 }
 
@@ -110,6 +118,7 @@ async function saveObfuscation() {
 
   try {
     fleet.value = await api.put<Fleet>('/fleet/obfuscation', form)
+    void refresh()
     toast.add({
       title: 'Obfuscation saved',
       description: `Fleet is now at revision ${fleet.value.revision}. Nodes pick it up on their next poll.`,
@@ -146,6 +155,7 @@ async function importLegacyState(event: Event) {
     )
 
     await loadFleet()
+    void refresh()
     toast.add({
       title: `Imported ${importResult.value.clientsImported} client(s)`,
       color: 'success',
@@ -168,275 +178,327 @@ onMounted(loadFleet)
 </script>
 
 <template>
-  <UContainer class="py-6">
-    <div class="flex flex-col gap-6">
-      <section>
-        <h1 class="text-2xl font-semibold tracking-tight text-highlighted">
-          Fleet
-        </h1>
-        <p class="mt-1 text-sm text-muted">
-          Settings shared by every node.
-        </p>
-      </section>
+  <div class="flex flex-col">
+    <UAlert
+      v-if="errorMessage"
+      class="m-3 w-auto sm:m-4"
+      color="error"
+      variant="subtle"
+      icon="i-lucide-circle-alert"
+      title="Could not read the fleet"
+      :description="errorMessage"
+    />
 
-      <UAlert
-        v-if="errorMessage"
-        color="error"
-        variant="subtle"
-        icon="i-lucide-circle-alert"
-        title="Could not load settings"
-        :description="errorMessage"
-      />
+    <SheetSection
+      title="Identity"
+      meta="shared by every node — never regenerated"
+    >
+      <template #actions>
+        <UButton
+          v-if="fleet"
+          icon="i-lucide-copy"
+          size="sm"
+          @click="copyPublicKey"
+        >
+          Copy public key
+        </UButton>
+      </template>
 
-      <UCard v-if="fleet">
-        <template #header>
-          <h2 class="text-base font-medium text-highlighted">
-            Identity
-          </h2>
-        </template>
+      <p
+        v-if="loading"
+        class="py-6 text-center font-mono text-xs text-muted"
+      >
+        reading the fleet…
+      </p>
 
-        <dl class="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2">
-          <div>
-            <dt class="text-xs text-muted">
-              Server public key
-            </dt>
-            <dd class="break-all font-mono text-default">
-              {{ fleet.serverPublicKey }}
-            </dd>
-          </div>
-          <div>
-            <dt class="text-xs text-muted">
-              Endpoint
-            </dt>
-            <dd class="font-mono text-default">
-              {{ fleet.endpointHost }}:{{ fleet.listenPort }}
-            </dd>
-          </div>
-          <div>
-            <dt class="text-xs text-muted">
-              Subnet
-            </dt>
-            <dd class="font-mono text-default">
-              {{ fleet.subnet }}
-            </dd>
-          </div>
-          <div>
-            <dt class="text-xs text-muted">
-              Revision
-            </dt>
-            <dd class="text-default">
-              {{ fleet.revision }} · generation {{ fleet.generation }} · {{ fleet.nodesCount }} node(s)
-            </dd>
-          </div>
-        </dl>
-      </UCard>
+      <dl
+        v-else-if="fleet"
+        class="grid grid-cols-2 gap-x-6 gap-y-3 md:grid-cols-4"
+      >
+        <SpecItem
+          label="Server public key"
+          mono
+          class="col-span-2"
+        >
+          <span class="break-all">{{ fleet.serverPublicKey }}</span>
+        </SpecItem>
+        <SpecItem
+          label="Endpoint"
+          mono
+        >
+          {{ fleet.endpointHost }}:{{ fleet.listenPort }}
+        </SpecItem>
+        <SpecItem
+          label="Subnet"
+          mono
+        >
+          {{ fleet.subnet }}
+        </SpecItem>
+        <SpecItem
+          label="Client allowed IPs"
+          mono
+        >
+          {{ fleet.clientAllowedIps }}
+        </SpecItem>
+        <SpecItem
+          label="Client DNS"
+          mono
+        >
+          {{ fleet.clientDns ?? '—' }}
+        </SpecItem>
+        <SpecItem
+          label="Revision"
+          mono
+        >
+          r{{ fleet.revision }} · generation {{ fleet.generation }}
+        </SpecItem>
+        <SpecItem
+          label="Issued"
+          mono
+        >
+          {{ fleet.clientsCount }} peers · {{ fleet.nodesCount }} nodes
+        </SpecItem>
+      </dl>
+    </SheetSection>
 
-      <UCard>
-        <template #header>
+    <SheetSection
+      title="Obfuscation"
+      meta="saving bumps the fleet revision"
+      flush
+    >
+      <template #actions>
+        <UButton
+          color="primary"
+          variant="solid"
+          size="sm"
+          icon="i-lucide-save"
+          :loading="saving"
+          :disabled="loading"
+          @click="saveObfuscation"
+        >
+          Save profile
+        </UButton>
+      </template>
+
+      <div class="grid lg:grid-cols-2">
+        <!-- must match -->
+        <div class="flex flex-col gap-4 border-b border-default p-3 sm:p-4 lg:border-e lg:border-b-0">
           <div>
-            <h2 class="text-base font-medium text-highlighted">
-              Obfuscation
-            </h2>
-            <p class="mt-1 text-sm text-muted">
-              The wire format is applied to every node interface and copied into every client
-              config: both ends must carry identical values. The defaults below only seed client
-              configs, and a client may override any of them.
+            <h3 class="caps text-highlighted">
+              Wire format · must match on both ends
+            </h3>
+            <p class="mt-1 text-[13px] leading-snug text-muted">
+              Applied to every node interface and copied into every client config. A client and
+              its node must carry identical values or the handshake is never recognised, so none
+              of these can differ per client.
             </p>
           </div>
-        </template>
 
-        <div class="flex flex-col gap-6">
-          <div>
-            <h3 class="mb-2 text-sm font-medium text-highlighted">
-              Wire format
-            </h3>
-            <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <UFormField
-                v-for="field in numericFields"
-                :key="field.key"
-                :label="field.label"
-              >
-                <UInput
-                  v-model.number="form[field.key]"
-                  type="number"
-                  class="w-full"
-                />
-              </UFormField>
-            </div>
-            <div class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <UFormField
-                v-for="field in headerFields"
-                :key="field.key"
-                :label="field.label"
-                help="Number or range"
-              >
-                <UInput
-                  v-model="form[field.key]"
-                  class="w-full"
-                  placeholder="1000000-1000500"
-                />
-              </UFormField>
-            </div>
-
+          <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <UFormField
-              class="mt-3"
-              label="HeaderProtectionKey"
-              help="AmneziaWG 3.x. Encrypts the packet header, so the message type is unreadable rather than renamed. Needs S1-S4 of at least 12, and every client config has to be reissued when it changes."
+              v-for="field in numericFields"
+              :key="field.key"
+              :ui="paramField"
+              :label="field.label"
             >
-              <UFieldGroup class="w-full">
-                <UInput
-                  v-model="form.headerProtectionKey"
-                  class="w-full"
-                  placeholder="base64, 32 bytes"
-                />
-                <UButton
-                  color="neutral"
-                  variant="subtle"
-                  icon="i-lucide-key"
-                  :loading="generatingKey"
-                  @click="generateHeaderProtectionKey"
-                >
-                  Generate
-                </UButton>
-              </UFieldGroup>
+              <UInput
+                v-model.number="form[field.key]"
+                type="number"
+                class="w-full"
+              />
             </UFormField>
-
-            <USwitch
-              v-model="form.randomTrailers"
-              class="mt-3"
-              label="RandomTrailers"
-              description="AmneziaWG 3.x. Appends random trailing bytes to every packet. Must match on both ends."
-            />
           </div>
 
-          <div>
-            <h3 class="mb-2 text-sm font-medium text-highlighted">
-              Client defaults
-            </h3>
-            <div class="grid grid-cols-3 gap-3">
-              <UFormField label="Jc">
-                <UInput
-                  v-model.number="form.defaultJc"
-                  type="number"
-                  class="w-full"
-                />
-              </UFormField>
-              <UFormField label="Jmin">
-                <UInput
-                  v-model.number="form.defaultJmin"
-                  type="number"
-                  class="w-full"
-                />
-              </UFormField>
-              <UFormField label="Jmax">
-                <UInput
-                  v-model.number="form.defaultJmax"
-                  type="number"
-                  class="w-full"
-                />
-              </UFormField>
-            </div>
-            <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <UFormField
-                v-for="field in clientDefaultFields"
-                :key="field.key"
-                :label="field.label"
-              >
-                <UInput
-                  v-model="form[field.key]"
-                  class="w-full"
-                  placeholder="<b 0x...>"
-                />
-              </UFormField>
-            </div>
-
-            <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <UFormField
-                v-for="field in tuningFields"
-                :key="field.key"
-                :label="field.label"
-                :help="field.hint"
-              >
-                <UInput
-                  v-model="form[field.key]"
-                  class="w-full"
-                  placeholder="140 or 120-160"
-                />
-              </UFormField>
-            </div>
-
-            <USwitch
-              v-model="form.defaultDisableCookies"
-              class="mt-3"
-              label="DisableCookies"
-              description="AmneziaWG 3.x. Stops the peer answering with a cookie reply under load, which is a recognizable message of its own."
-            />
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <UFormField
+              v-for="field in headerFields"
+              :key="field.key"
+              :ui="paramField"
+              :label="field.label"
+              help="Number or range"
+            >
+              <UInput
+                v-model="form[field.key]"
+                class="w-full"
+                placeholder="1000000-1000500"
+              />
+            </UFormField>
           </div>
+
+          <UFormField
+            :ui="paramField"
+            label="HeaderProtectionKey"
+            help="AmneziaWG 3.x. Encrypts the packet header, so the message type is unreadable rather than renamed. Needs S1–S4 of at least 12, and every client config has to be reissued when it changes."
+          >
+            <UFieldGroup class="w-full">
+              <UInput
+                v-model="form.headerProtectionKey"
+                class="w-full"
+                placeholder="base64, 32 bytes"
+              />
+              <UButton
+                icon="i-lucide-key"
+                :loading="generatingKey"
+                @click="generateHeaderProtectionKey"
+              >
+                Generate
+              </UButton>
+            </UFieldGroup>
+          </UFormField>
+
+          <USwitch
+            v-model="form.randomTrailers"
+            label="RandomTrailers"
+            description="AmneziaWG 3.x. Appends random trailing bytes to every packet. Must match on both ends."
+          />
         </div>
 
-        <template #footer>
-          <div class="flex justify-end">
-            <UButton
-              :loading="saving"
-              @click="saveObfuscation"
-            >
-              Save obfuscation
-            </UButton>
-          </div>
-        </template>
-      </UCard>
-
-      <UCard>
-        <template #header>
+        <!-- may differ -->
+        <div class="flex flex-col gap-4 p-3 sm:p-4">
           <div>
-            <h2 class="text-base font-medium text-highlighted">
-              Import from a single-server deployment
-            </h2>
-            <p class="mt-1 text-sm text-muted">
-              Upload the old <code class="font-mono">state.json</code> or a backup export. The
-              original server key pair is preserved, so configs already handed out keep working.
+            <h3 class="caps text-highlighted">
+              Client defaults · may differ per client
+            </h3>
+            <p class="mt-1 text-[13px] leading-snug text-muted">
+              Seeds for new client configs. Any peer may override them on sheet 1, and differing is
+              the point: two clients that rekey on the same schedule are a correlatable pair.
             </p>
           </div>
-        </template>
 
-        <div class="flex flex-col gap-4">
+          <div class="grid grid-cols-3 gap-3">
+            <UFormField
+              :ui="paramField"
+              label="Jc"
+            >
+              <UInput
+                v-model.number="form.defaultJc"
+                type="number"
+                class="w-full"
+              />
+            </UFormField>
+            <UFormField
+              :ui="paramField"
+              label="Jmin"
+            >
+              <UInput
+                v-model.number="form.defaultJmin"
+                type="number"
+                class="w-full"
+              />
+            </UFormField>
+            <UFormField
+              :ui="paramField"
+              label="Jmax"
+            >
+              <UInput
+                v-model.number="form.defaultJmax"
+                type="number"
+                class="w-full"
+              />
+            </UFormField>
+          </div>
+
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <UFormField
+              v-for="field in clientDefaultFields"
+              :key="field.key"
+              :ui="paramField"
+              :label="field.label"
+            >
+              <UInput
+                v-model="form[field.key]"
+                class="w-full"
+                placeholder="<b 0x...>"
+              />
+            </UFormField>
+          </div>
+
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <UFormField
+              v-for="field in tuningFields"
+              :key="field.key"
+              :ui="paramField"
+              :label="field.label"
+              :help="field.hint"
+            >
+              <UInput
+                v-model="form[field.key]"
+                class="w-full"
+                placeholder="140 or 120-160"
+              />
+            </UFormField>
+          </div>
+
+          <USwitch
+            v-model="form.defaultDisableCookies"
+            label="DisableCookies"
+            description="AmneziaWG 3.x. Stops the peer answering with a cookie reply under load, which is a recognisable message of its own."
+          />
+        </div>
+      </div>
+    </SheetSection>
+
+    <SheetSection
+      title="Import"
+      meta="from a single-server deployment"
+    >
+      <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:gap-10">
+        <p class="max-w-xl text-[13px] leading-snug text-toned">
+          Upload the old <span class="font-mono">state.json</span> or a backup export. The original
+          server key pair is preserved, so configs already handed out keep working. An obfuscation
+          profile that would not apply is dropped with a warning rather than rolled out.
+        </p>
+
+        <div class="flex flex-col gap-3">
           <USwitch
             v-model="replaceExisting"
             label="Replace existing clients"
             description="Required if this panel already has clients."
           />
 
-          <input
-            type="file"
-            accept="application/json,.json"
-            class="block w-full text-sm text-muted file:mr-3 file:rounded-md file:border-0 file:bg-primary file:px-3 file:py-2 file:text-sm file:text-inverted"
-            :disabled="importing"
-            @change="importLegacyState"
+          <label
+            class="inline-flex w-fit cursor-pointer items-center gap-2 border border-accented px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] transition-colors hover:bg-elevated focus-within:outline-2 focus-within:outline-primary"
+            :class="importing ? 'pointer-events-none opacity-60' : ''"
           >
-
-          <UAlert
-            v-if="importResult"
-            :color="importResult.warnings.length ? 'warning' : 'success'"
-            variant="subtle"
-            :icon="importResult.warnings.length ? 'i-lucide-triangle-alert' : 'i-lucide-check'"
-            :title="`Imported ${importResult.clientsImported} client(s) at revision ${importResult.revision}`"
-          >
-            <template
-              v-if="importResult.warnings.length"
-              #description
+            <UIcon
+              :name="importing ? 'i-lucide-loader-circle' : 'i-lucide-upload'"
+              class="size-4"
+              :class="importing ? 'animate-spin' : ''"
+            />
+            {{ importing ? 'Importing…' : 'Choose state.json' }}
+            <input
+              type="file"
+              accept="application/json,.json"
+              class="sr-only"
+              :disabled="importing"
+              @change="importLegacyState"
             >
-              <ul class="list-inside list-disc">
-                <li
-                  v-for="warning in importResult.warnings"
-                  :key="warning"
-                >
-                  {{ warning }}
-                </li>
-              </ul>
-            </template>
-          </UAlert>
+          </label>
         </div>
-      </UCard>
-    </div>
-  </UContainer>
+      </div>
+
+      <UAlert
+        v-if="importResult"
+        class="mt-4"
+        :color="importResult.warnings.length ? 'warning' : 'success'"
+        variant="subtle"
+        :icon="importResult.warnings.length ? 'i-lucide-triangle-alert' : 'i-lucide-check'"
+        :title="`Imported ${importResult.clientsImported} client(s) at revision ${importResult.revision}`"
+      >
+        <template
+          v-if="importResult.warnings.length"
+          #description
+        >
+          <ul class="list-inside list-disc">
+            <li
+              v-for="warning in importResult.warnings"
+              :key="warning"
+            >
+              {{ warning }}
+            </li>
+          </ul>
+        </template>
+      </UAlert>
+    </SheetSection>
+  </div>
 </template>
