@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import QRCode from 'qrcode'
-import type { Client, ClientObfuscationOverrides, ClientShare, ClientStats } from '~/types/api'
+import type { DropdownMenuItem } from '@nuxt/ui'
+import type { Client, ClientObfuscationOverrides, ClientStats } from '~/types/api'
 
 definePageMeta({ middleware: 'auth' })
 
@@ -8,26 +8,25 @@ const api = useControlApi()
 const toast = useToast()
 const confirm = useConfirm()
 const { fleet, dns, serving } = useFleetState()
+const nodeActions = useNodeActions()
 
 const clients = ref<Client[]>([])
 const stats = ref<Record<string, ClientStats>>({})
 const rates = ref<Record<string, { down: number, up: number }>>({})
 const loading = ref(true)
 const errorMessage = ref<string | null>(null)
-const actionId = ref<string | null>(null)
+const busyId = ref<string | null>(null)
 
 const createOpen = ref(false)
 const editOpen = ref(false)
-const qrOpen = ref(false)
-const shareOpen = ref(false)
+const configOpen = ref(false)
+const enrollOpen = ref(false)
 const saving = ref(false)
 const useObfuscation = ref(false)
 
 const editingClient = ref<Client | null>(null)
 const editName = ref('')
-const qrClient = ref<Client | null>(null)
-const qrDataUrl = ref<string | null>(null)
-const share = ref<ClientShare | null>(null)
+const configClient = ref<Client | null>(null)
 
 type PeerState = 'up' | 'idle' | 'off'
 const filter = ref<'all' | PeerState>('all')
@@ -80,7 +79,7 @@ function peerState(client: Client): PeerState {
 }
 
 const counts = computed(() => {
-  const result = { all: clients.value.length, up: 0, idle: 0, off: 0 }
+  const result = { total: clients.value.length, up: 0, idle: 0, off: 0 }
   for (const client of clients.value) {
     result[peerState(client)]++
   }
@@ -88,22 +87,20 @@ const counts = computed(() => {
 })
 
 const filters = computed(() => [
-  { value: 'all' as const, label: 'All', count: counts.value.all },
-  { value: 'up' as const, label: 'Up', count: counts.value.up },
+  { value: 'all' as const, label: 'All', count: counts.value.total },
+  { value: 'up' as const, label: 'Online', count: counts.value.up },
   { value: 'idle' as const, label: 'Idle', count: counts.value.idle },
-  { value: 'off' as const, label: 'Off', count: counts.value.off }
+  { value: 'off' as const, label: 'Disabled', count: counts.value.off }
 ])
-
-// Numbered by address across the whole list, so an item keeps its number while filtering.
-const sorted = computed(() => [...clients.value].sort((a, b) => addressOrder(a.address) - addressOrder(b.address)))
-const itemIndex = computed(() => Object.fromEntries(sorted.value.map((client, index) => [client.id, index])))
 
 const visible = computed(() => {
   const needle = search.value.trim().toLowerCase()
-  return sorted.value.filter(client =>
-    (filter.value === 'all' || peerState(client) === filter.value)
-    && (!needle || client.name.toLowerCase().includes(needle) || client.address.includes(needle))
-  )
+  return [...clients.value]
+    .sort((a, b) => addressOrder(a.address) - addressOrder(b.address))
+    .filter(client =>
+      (filter.value === 'all' || peerState(client) === filter.value)
+      && (!needle || client.name.toLowerCase().includes(needle) || client.address.includes(needle))
+    )
 })
 
 async function loadClients() {
@@ -223,12 +220,19 @@ async function createClient() {
     clients.value = [...clients.value, client]
     createOpen.value = false
     resetForm()
-    succeed('Peer issued')
+    succeed(`${client.name} created`)
+    // The next thing anyone does with a new peer is hand its config over.
+    openConfig(client)
   } catch (error) {
     fail('Could not create the peer', error)
   } finally {
     saving.value = false
   }
+}
+
+function openConfig(client: Client) {
+  configClient.value = client
+  configOpen.value = true
 }
 
 function openEdit(client: Client) {
@@ -243,7 +247,7 @@ async function saveName() {
     return
   }
 
-  actionId.value = client.id
+  busyId.value = client.id
 
   try {
     const updated = await api.put<Client>(`/clients/${client.id}`, { name: editName.value.trim() })
@@ -253,28 +257,28 @@ async function saveName() {
   } catch (error) {
     fail('Could not rename the peer', error)
   } finally {
-    actionId.value = null
+    busyId.value = null
   }
 }
 
 async function toggleClient(client: Client) {
-  actionId.value = client.id
+  busyId.value = client.id
 
   try {
     const updated = await api.post<Client>(`/clients/${client.id}/${client.enabled ? 'disable' : 'enable'}`)
     clients.value = clients.value.map(item => item.id === updated.id ? updated : item)
-    succeed(updated.enabled ? 'Peer enabled' : 'Peer disabled')
+    succeed(updated.enabled ? `${updated.name} enabled` : `${updated.name} disabled`)
   } catch (error) {
     fail('Could not change the peer', error)
   } finally {
-    actionId.value = null
+    busyId.value = null
   }
 }
 
 async function deleteClient(client: Client) {
   const confirmed = await confirm({
-    title: `Delete ${client.name}`,
-    description: `The config for ${client.name} (${client.address}) stops working on every node as soon as they apply the next revision. This cannot be undone; a new peer gets a new key.`,
+    title: `Delete ${client.name}?`,
+    description: `The config for ${client.name} (${client.address}) stops working on every node once they apply the next revision. A new peer gets a new key.`,
     confirmLabel: 'Delete peer',
     danger: true
   })
@@ -282,75 +286,31 @@ async function deleteClient(client: Client) {
     return
   }
 
-  actionId.value = client.id
+  busyId.value = client.id
 
   try {
     await api.del(`/clients/${client.id}`)
     clients.value = clients.value.filter(item => item.id !== client.id)
-    succeed('Peer deleted')
+    succeed(`${client.name} deleted`)
   } catch (error) {
     fail('Could not delete the peer', error)
   } finally {
-    actionId.value = null
+    busyId.value = null
   }
 }
 
-async function downloadConfig(client: Client) {
-  actionId.value = client.id
-
-  try {
-    const response = await fetch(api.url(`/clients/${client.id}/config`), { credentials: 'include' })
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`)
-    }
-
-    const blob = await response.blob()
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `${client.name}.conf`
-    link.click()
-    URL.revokeObjectURL(url)
-  } catch (error) {
-    fail('Could not download the config', error)
-  } finally {
-    actionId.value = null
-  }
-}
-
-async function openQr(client: Client) {
-  qrClient.value = client
-  qrDataUrl.value = null
-  qrOpen.value = true
-
-  try {
-    const response = await fetch(api.url(`/clients/${client.id}/config`), { credentials: 'include' })
-    const config = await response.text()
-    qrDataUrl.value = await QRCode.toDataURL(config, { width: 320, margin: 1 })
-  } catch (error) {
-    fail('Could not build the QR code', error)
-    qrOpen.value = false
-  }
-}
-
-async function createShare(client: Client) {
-  actionId.value = client.id
-
-  try {
-    share.value = await api.post<ClientShare>(`/clients/${client.id}/share`)
-    shareOpen.value = true
-  } catch (error) {
-    fail('Could not create a share link', error)
-  } finally {
-    actionId.value = null
-  }
-}
-
-async function copyShareUrl() {
-  if (share.value) {
-    await navigator.clipboard.writeText(share.value.url)
-    succeed('Link copied')
-  }
+function menuFor(client: Client): DropdownMenuItem[][] {
+  return [
+    [
+      { label: 'Rename', icon: 'i-lucide-pencil', onSelect: () => openEdit(client) },
+      {
+        label: client.enabled ? 'Disable' : 'Enable',
+        icon: client.enabled ? 'i-lucide-pause' : 'i-lucide-play',
+        onSelect: () => toggleClient(client)
+      }
+    ],
+    [{ label: 'Delete', icon: 'i-lucide-trash-2', color: 'error', onSelect: () => deleteClient(client) }]
+  ]
 }
 
 function handshake(client: Client) {
@@ -362,66 +322,40 @@ usePolling(loadStats, 3000)
 </script>
 
 <template>
-  <div class="flex flex-col">
-    <SheetSection
-      title="Topology"
-      meta="where these peers are answered"
-    >
-      <template #actions>
-        <UButton
-          to="/nodes"
-          variant="ghost"
-          size="sm"
-          trailing-icon="i-lucide-arrow-right"
-        >
-          Sheet 2
-        </UButton>
-      </template>
+  <div class="flex flex-col gap-4 lg:gap-6">
+    <h1 class="sr-only">
+      Overview
+    </h1>
 
-      <FleetSchematic
+    <AppCard
+      title="Fleet"
+      icon="i-lucide-network"
+      description="Where client traffic goes right now. Switch nodes on the node itself."
+    >
+      <FleetGraph
         :nodes="serving"
         :dns="dns"
-        :clients-total="clients.length"
-        :clients-online="counts.up"
-        :subnet="fleet?.subnet"
-        :listen-port="fleet?.listenPort"
+        :fleet="fleet"
+        :clients="{ total: counts.total, online: counts.up, idle: counts.idle, off: counts.off }"
+        :busy-id="nodeActions.busyId.value"
+        @activate="nodeActions.activate"
+        @revoke="nodeActions.revoke"
+        @remove="nodeActions.remove"
+        @new-peer="createOpen = true"
+        @enroll="enrollOpen = true"
       />
-    </SheetSection>
+    </AppCard>
 
-    <SheetSection
-      title="Peer list"
+    <AppCard
+      id="peers"
+      title="Peers"
+      icon="i-lucide-users"
+      :description="`${counts.total} configs issued · ${counts.up} online now`"
       flush
+      class="scroll-mt-20"
     >
-      <template #meta>
-        items {{ visible.length }} of {{ clients.length }} · by address
-      </template>
-
       <template #actions>
-        <UFieldGroup>
-          <UButton
-            v-for="option in filters"
-            :key="option.value"
-            size="sm"
-            :color="filter === option.value ? 'primary' : 'neutral'"
-            :variant="filter === option.value ? 'solid' : 'outline'"
-            :aria-pressed="filter === option.value"
-            @click="filter = option.value"
-          >
-            {{ option.label }}&nbsp;<span class="font-mono opacity-70">{{ option.count }}</span>
-          </UButton>
-        </UFieldGroup>
-        <UInput
-          v-model="search"
-          size="sm"
-          icon="i-lucide-search"
-          placeholder="name or address"
-          aria-label="Find a peer"
-          class="w-40 sm:w-48"
-        />
         <UButton
-          color="primary"
-          variant="solid"
-          size="sm"
           icon="i-lucide-plus"
           @click="createOpen = true"
         >
@@ -429,48 +363,85 @@ usePolling(loadStats, 3000)
         </UButton>
       </template>
 
+      <div class="flex flex-wrap items-center gap-2 border-b border-default px-4 py-3 sm:px-5">
+        <UInput
+          v-model="search"
+          icon="i-lucide-search"
+          placeholder="Find by name or address"
+          aria-label="Find a peer"
+          class="w-full sm:w-72"
+        />
+        <div class="max-w-full overflow-x-auto">
+          <UFieldGroup>
+            <UButton
+              v-for="option in filters"
+              :key="option.value"
+              size="sm"
+              color="neutral"
+              :variant="filter === option.value ? 'solid' : 'outline'"
+              :aria-pressed="filter === option.value"
+              @click="filter = option.value"
+            >
+              {{ option.label }}
+              <span class="tabular opacity-70">{{ option.count }}</span>
+            </UButton>
+          </UFieldGroup>
+        </div>
+      </div>
+
       <UAlert
         v-if="errorMessage"
-        class="m-3 w-auto sm:m-4"
+        class="m-4 w-auto"
         color="error"
         variant="subtle"
         icon="i-lucide-circle-alert"
-        title="Could not read the peer list"
+        title="Could not load peers"
         :description="errorMessage"
       />
 
       <div
-        class="hidden grid-cols-[3rem_minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1.3fr)_13.5rem] items-center gap-x-3 border-b border-accented px-4 py-1.5 lg:grid"
+        class="hidden grid-cols-[minmax(0,1.6fr)_7rem_7.5rem_minmax(0,1.1fr)_minmax(0,1fr)_9rem] items-center gap-x-4 border-b border-default px-5 py-2 text-xs font-medium text-muted lg:grid"
         aria-hidden="true"
       >
-        <span class="caps text-muted">Item</span>
-        <span class="caps text-muted">Peer</span>
-        <span class="caps text-muted">Address</span>
-        <span class="caps text-muted">State</span>
-        <span class="caps text-muted">Now</span>
-        <span class="caps text-muted">Carried</span>
-        <span class="caps text-end text-muted">Actions</span>
+        <span>Peer</span>
+        <span>Status</span>
+        <span>Last handshake</span>
+        <span>Speed now</span>
+        <span>Transferred</span>
+        <span class="text-end">Actions</span>
       </div>
 
-      <p
+      <div
         v-if="loading"
-        class="px-4 py-10 text-center font-mono text-xs text-muted"
+        class="flex items-center justify-center gap-2 px-4 py-12 text-sm text-muted"
       >
-        reading the peer list…
-      </p>
+        <UIcon
+          name="i-lucide-loader-circle"
+          class="size-5 animate-spin"
+        />
+        Loading peers
+      </div>
 
       <div
         v-else-if="clients.length === 0"
-        class="m-3 flex flex-col items-center gap-3 border border-dashed border-default px-6 py-10 text-center sm:m-4"
+        class="flex flex-col items-center gap-3 px-6 py-12 text-center"
       >
-        <span class="caps text-highlighted">No peers issued</span>
-        <p class="max-w-md text-sm text-muted">
-          A peer is one client config. It names the record rather than a server, so it keeps
-          working whichever node the record points at.
-        </p>
+        <span class="flex size-12 items-center justify-center rounded-full bg-elevated">
+          <UIcon
+            name="i-lucide-users"
+            class="size-6 text-muted"
+          />
+        </span>
+        <div>
+          <p class="font-medium text-highlighted">
+            No peers yet
+          </p>
+          <p class="mt-1 max-w-sm text-sm text-muted">
+            A peer is one client config. It names the record rather than a server, so it keeps
+            working whichever node is active.
+          </p>
+        </div>
         <UButton
-          color="primary"
-          variant="solid"
           icon="i-lucide-plus"
           @click="createOpen = true"
         >
@@ -480,121 +451,89 @@ usePolling(loadStats, 3000)
 
       <p
         v-else-if="visible.length === 0"
-        class="px-4 py-10 text-center font-mono text-xs text-muted"
+        class="px-4 py-12 text-center text-sm text-muted"
       >
-        no peer matches this filter
+        No peer matches this search.
       </p>
 
-      <ul v-else>
+      <ul
+        v-else
+        class="divide-y divide-default"
+      >
         <li
           v-for="client in visible"
           :key="client.id"
-          class="grid grid-cols-[2.25rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 border-b border-muted px-3 py-2.5 last:border-b-0 sm:px-4 lg:grid-cols-[3rem_minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1.3fr)_13.5rem] lg:py-1.5"
-          :class="peerState(client) === 'off' ? 'text-muted' : ''"
+          class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-4 py-3 transition-colors hover:bg-elevated/40 sm:px-5 lg:grid-cols-[minmax(0,1.6fr)_7rem_7.5rem_minmax(0,1.1fr)_minmax(0,1fr)_9rem] lg:py-2.5"
         >
-          <span class="font-mono text-[11px] text-muted">{{ itemNumber(itemIndex[client.id] ?? 0) }}</span>
-
-          <div class="min-w-0">
-            <div class="flex flex-wrap items-baseline gap-x-2">
-              <span
-                class="break-all font-mono text-[13.5px]"
-                :class="peerState(client) === 'off' ? '' : 'text-highlighted'"
-              >{{ client.name }}</span>
-              <span
+          <div
+            class="min-w-0"
+            :class="peerState(client) === 'off' ? 'opacity-60' : ''"
+          >
+            <p class="flex min-w-0 items-center gap-2">
+              <span class="truncate font-medium text-highlighted">{{ client.name }}</span>
+              <UBadge
                 v-if="client.obfuscation"
-                class="caps text-muted"
-              >own timings</span>
-            </div>
-            <p class="font-mono text-[11px] text-muted lg:hidden">
-              {{ client.address }} · {{ handshake(client) }}
-              <template v-if="peerState(client) === 'up'">
-                · ↓ {{ formatRate(rates[client.id]?.down) }} ↑ {{ formatRate(rates[client.id]?.up) }}
-              </template>
+                size="sm"
+                color="neutral"
+                variant="subtle"
+              >
+                custom timings
+              </UBadge>
+            </p>
+            <p class="font-mono text-xs text-muted">
+              {{ client.address }}<span class="lg:hidden"> · {{ handshake(client) }}</span>
             </p>
           </div>
 
-          <span class="hidden font-mono text-xs text-toned lg:block">{{ client.address }}</span>
-
-          <div class="flex flex-col items-end lg:items-start">
+          <div class="hidden lg:block">
             <StateMark :state="peerState(client)" />
-            <span class="hidden font-mono text-[11px] text-muted lg:block">{{ handshake(client) }}</span>
           </div>
-
+          <span class="hidden text-sm text-toned lg:block">{{ handshake(client) }}</span>
           <span class="tabular hidden font-mono text-xs lg:block">
             <template v-if="peerState(client) === 'up'">
-              ↓ {{ formatRate(rates[client.id]?.down) }}&nbsp; ↑ {{ formatRate(rates[client.id]?.up) }}
+              ↓ {{ formatRate(rates[client.id]?.down) }} &nbsp;↑ {{ formatRate(rates[client.id]?.up) }}
             </template>
             <span
               v-else
               class="text-dimmed"
             >—</span>
           </span>
-
           <span class="tabular hidden font-mono text-xs text-toned lg:block">
-            ↓ {{ formatBytes(stats[client.id]?.transmittedBytes ?? 0) }}&nbsp; ↑ {{ formatBytes(stats[client.id]?.receivedBytes ?? 0) }}
+            ↓ {{ formatBytes(stats[client.id]?.transmittedBytes ?? 0) }} &nbsp;↑ {{ formatBytes(stats[client.id]?.receivedBytes ?? 0) }}
           </span>
 
-          <div class="col-span-3 flex justify-end gap-0.5 lg:col-span-1">
+          <div class="flex items-center justify-end gap-1.5">
+            <StateMark
+              class="lg:hidden"
+              :state="peerState(client)"
+            />
             <UButton
+              size="sm"
+              color="neutral"
+              variant="outline"
               icon="i-lucide-qr-code"
-              variant="ghost"
-              size="sm"
-              square
-              :aria-label="`QR code for ${client.name}`"
-              title="QR code"
-              @click="openQr(client)"
-            />
-            <UButton
-              icon="i-lucide-download"
-              variant="ghost"
-              size="sm"
-              square
-              :aria-label="`Download config for ${client.name}`"
-              title="Download config"
-              :loading="actionId === client.id"
-              @click="downloadConfig(client)"
-            />
-            <UButton
-              icon="i-lucide-link"
-              variant="ghost"
-              size="sm"
-              square
-              :aria-label="`Share link for ${client.name}`"
-              title="Share link"
-              @click="createShare(client)"
-            />
-            <UButton
-              icon="i-lucide-pencil-line"
-              variant="ghost"
-              size="sm"
-              square
-              :aria-label="`Rename ${client.name}`"
-              title="Rename"
-              @click="openEdit(client)"
-            />
-            <UButton
-              :icon="client.enabled ? 'i-lucide-pause' : 'i-lucide-play'"
-              variant="ghost"
-              size="sm"
-              square
-              :aria-label="`${client.enabled ? 'Disable' : 'Enable'} ${client.name}`"
-              :title="client.enabled ? 'Disable' : 'Enable'"
-              @click="toggleClient(client)"
-            />
-            <UButton
-              icon="i-lucide-trash-2"
-              color="error"
-              variant="ghost"
-              size="sm"
-              square
-              :aria-label="`Delete ${client.name}`"
-              title="Delete"
-              @click="deleteClient(client)"
-            />
+              :aria-label="`Config for ${client.name}`"
+              @click="openConfig(client)"
+            >
+              <span class="hidden sm:inline">Config</span>
+            </UButton>
+            <UDropdownMenu
+              :items="menuFor(client)"
+              :content="{ align: 'end' }"
+            >
+              <UButton
+                size="sm"
+                color="neutral"
+                variant="ghost"
+                icon="i-lucide-ellipsis-vertical"
+                :loading="busyId === client.id"
+                :aria-label="`More actions for ${client.name}`"
+              />
+            </UDropdownMenu>
           </div>
         </li>
       </ul>
-    </SheetSection>
+    </AppCard>
 
     <UModal
       v-model:open="createOpen"
@@ -615,18 +554,14 @@ usePolling(loadStats, 3000)
 
           <USwitch
             v-model="useObfuscation"
-            label="Own timings for this peer"
-            description="Off inherits the fleet defaults from sheet 3. The wire format is fleet-wide and cannot differ."
+            label="Custom timings for this peer"
+            description="Leave off to use the fleet defaults from Settings. The wire format is fleet-wide and cannot differ."
           />
 
-          <fieldset
+          <div
             v-if="useObfuscation"
-            class="flex flex-col gap-4 border border-default p-3"
+            class="flex flex-col gap-4 rounded-lg border border-default bg-elevated/40 p-3"
           >
-            <legend class="caps px-1 text-muted">
-              May differ per client
-            </legend>
-
             <div class="grid grid-cols-3 gap-2">
               <UFormField
                 :ui="paramField"
@@ -692,25 +627,24 @@ usePolling(loadStats, 3000)
               v-model="form.disableCookies"
               label="DisableCookies"
             />
-          </fieldset>
+          </div>
         </div>
       </template>
 
       <template #footer>
         <div class="flex w-full justify-end gap-2">
           <UButton
+            color="neutral"
             variant="ghost"
             @click="createOpen = false"
           >
             Cancel
           </UButton>
           <UButton
-            color="primary"
-            variant="solid"
             :loading="saving"
             @click="createClient"
           >
-            Issue peer
+            Create peer
           </UButton>
         </div>
       </template>
@@ -734,15 +668,14 @@ usePolling(loadStats, 3000)
       <template #footer>
         <div class="flex w-full justify-end gap-2">
           <UButton
+            color="neutral"
             variant="ghost"
             @click="editOpen = false"
           >
             Cancel
           </UButton>
           <UButton
-            color="primary"
-            variant="solid"
-            :loading="actionId === editingClient?.id"
+            :loading="busyId === editingClient?.id"
             @click="saveName"
           >
             Save
@@ -751,69 +684,11 @@ usePolling(loadStats, 3000)
       </template>
     </UModal>
 
-    <UModal
-      v-model:open="qrOpen"
-      :title="qrClient ? `Fig. 1 — ${qrClient.name}.conf` : 'Fig. 1'"
-    >
-      <template #body>
-        <figure class="m-0 flex flex-col items-center gap-3">
-          <div class="relative p-3">
-            <span
-              v-for="corner in ['top-0 left-0 border-t border-l', 'top-0 right-0 border-t border-r', 'bottom-0 left-0 border-b border-l', 'bottom-0 right-0 border-b border-r']"
-              :key="corner"
-              class="absolute size-4 border-accented"
-              :class="corner"
-              aria-hidden="true"
-            />
-            <!-- Always black on white: a scanner reads contrast, not the sheet's palette. -->
-            <img
-              v-if="qrDataUrl"
-              :src="qrDataUrl"
-              alt="Configuration QR code"
-              class="size-72 bg-white p-2"
-            >
-            <div
-              v-else
-              class="flex size-72 items-center justify-center font-mono text-xs text-muted"
-            >
-              drawing…
-            </div>
-          </div>
-          <figcaption class="text-center font-mono text-[11px] text-muted">
-            scan in the AmneziaWG app · contains the peer's private key
-          </figcaption>
-        </figure>
-      </template>
-    </UModal>
+    <PeerConfigModal
+      v-model:open="configOpen"
+      :client="configClient"
+    />
 
-    <UModal
-      v-model:open="shareOpen"
-      title="Share link"
-      :description="share ? `For ${share.clientName}, valid until ${formatUtc(share.expiresAt)}.` : undefined"
-    >
-      <template #body>
-        <div class="flex flex-col gap-4">
-          <UAlert
-            color="warning"
-            variant="subtle"
-            icon="i-lucide-triangle-alert"
-            title="Anyone holding this link gets the config"
-            description="It works without signing in until it expires. Send it the way you would send a password."
-          />
-
-          <div class="border border-default bg-muted p-3">
-            <code class="block break-all font-mono text-xs text-default">{{ share?.url }}</code>
-          </div>
-
-          <UButton
-            icon="i-lucide-copy"
-            block
-            @click="copyShareUrl"
-          >
-            Copy link
-          </UButton>
-        </div>
-      </template>
-    </UModal>
+    <EnrollNodeModal v-model:open="enrollOpen" />
   </div>
 </template>

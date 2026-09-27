@@ -40,62 +40,37 @@ const visible = computed(() => area.value === 'all'
 
 function toneFor(kind: string) {
   if (kind.includes('failed') || kind.includes('revoked') || kind.includes('deleted')) {
-    return 'text-error'
+    return 'bg-error/10 text-error'
   }
   if (kind.startsWith('node.')) {
-    return 'text-info'
+    return 'bg-info/10 text-info'
   }
   if (kind.startsWith('fleet.')) {
-    return 'text-warning'
+    return 'bg-warning/10 text-warning'
   }
-  return 'text-toned'
+  return 'bg-elevated text-toned'
 }
 
 usePolling(loadEvents, 15000)
 </script>
 
 <template>
-  <div class="flex flex-col">
-    <SheetSection
-      title="Revision history"
+  <div class="flex flex-col gap-4 lg:gap-6">
+    <h1 class="sr-only">
+      Log
+    </h1>
+
+    <AppCard
+      title="Activity log"
+      icon="i-lucide-scroll-text"
+      description="Who changed what, and which nodes pulled configuration. Newest first, times in UTC."
       flush
     >
-      <template #meta>
-        {{ visible.length }} of {{ events.length }} entries · newest first · utc
-      </template>
-
       <template #actions>
-        <!-- Areas come from the data, so there may be more than a phone is wide. -->
-        <div
-          v-if="areas.length > 1"
-          class="max-w-full overflow-x-auto"
-        >
-          <UFieldGroup>
-            <UButton
-              size="sm"
-              :color="area === 'all' ? 'primary' : 'neutral'"
-              :variant="area === 'all' ? 'solid' : 'outline'"
-              :aria-pressed="area === 'all'"
-              @click="area = 'all'"
-            >
-              All
-            </UButton>
-            <UButton
-              v-for="[name, count] in areas"
-              :key="name"
-              size="sm"
-              :color="area === name ? 'primary' : 'neutral'"
-              :variant="area === name ? 'solid' : 'outline'"
-              :aria-pressed="area === name"
-              @click="area = name"
-            >
-              {{ name }}&nbsp;<span class="font-mono opacity-70">{{ count }}</span>
-            </UButton>
-          </UFieldGroup>
-        </div>
         <UButton
           icon="i-lucide-refresh-cw"
-          size="sm"
+          color="neutral"
+          variant="outline"
           :loading="loading"
           @click="loadEvents"
         >
@@ -103,63 +78,83 @@ usePolling(loadEvents, 15000)
         </UButton>
       </template>
 
+      <!-- Areas come from the data, so there may be more than a phone is wide. -->
+      <div
+        v-if="areas.length > 1"
+        class="max-w-full overflow-x-auto border-b border-default px-4 py-3 sm:px-5"
+      >
+        <UFieldGroup>
+          <UButton
+            size="sm"
+            color="neutral"
+            :variant="area === 'all' ? 'solid' : 'outline'"
+            :aria-pressed="area === 'all'"
+            @click="area = 'all'"
+          >
+            All <span class="tabular opacity-70">{{ events.length }}</span>
+          </UButton>
+          <UButton
+            v-for="[name, count] in areas"
+            :key="name"
+            size="sm"
+            color="neutral"
+            :variant="area === name ? 'solid' : 'outline'"
+            :aria-pressed="area === name"
+            @click="area = name"
+          >
+            {{ name }} <span class="tabular opacity-70">{{ count }}</span>
+          </UButton>
+        </UFieldGroup>
+      </div>
+
       <UAlert
         v-if="errorMessage"
-        class="m-3 w-auto sm:m-4"
+        class="m-4 w-auto"
         color="error"
         variant="subtle"
         icon="i-lucide-circle-alert"
-        title="Could not read the log"
+        title="Could not load the log"
         :description="errorMessage"
       />
 
       <div
-        class="hidden grid-cols-[4.5rem_10.5rem_12rem_7rem_minmax(0,1fr)] gap-x-4 border-b border-accented px-4 py-1.5 lg:grid"
-        aria-hidden="true"
+        v-if="loading && events.length === 0"
+        class="flex items-center justify-center gap-2 px-4 py-12 text-sm text-muted"
       >
-        <span class="caps text-muted">No.</span>
-        <span class="caps text-muted">Date</span>
-        <span class="caps text-muted">Change</span>
-        <span class="caps text-muted">By</span>
-        <span class="caps text-muted">Description</span>
+        <UIcon
+          name="i-lucide-loader-circle"
+          class="size-5 animate-spin"
+        />
+        Loading
       </div>
 
       <p
-        v-if="loading && events.length === 0"
-        class="px-4 py-10 text-center font-mono text-xs text-muted"
-      >
-        reading the log…
-      </p>
-
-      <p
         v-else-if="visible.length === 0"
-        class="px-4 py-10 text-center font-mono text-xs text-muted"
+        class="px-4 py-12 text-center text-sm text-muted"
       >
-        nothing recorded yet
+        Nothing recorded yet.
       </p>
 
-      <ol v-else>
+      <ol
+        v-else
+        class="divide-y divide-default"
+      >
         <li
           v-for="event in visible"
           :key="event.id"
-          class="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 border-b border-muted px-3 py-2 last:border-b-0 sm:px-4 lg:grid-cols-[4.5rem_10.5rem_12rem_7rem_minmax(0,1fr)] lg:items-baseline"
+          class="grid gap-x-4 gap-y-1 px-4 py-3 sm:px-5 lg:grid-cols-[9.5rem_13rem_minmax(0,1fr)_7rem] lg:items-center"
         >
-          <span class="hidden font-mono text-[11px] text-muted lg:block">{{ event.id }}</span>
-          <span class="order-2 font-mono text-[11px] text-muted lg:order-none">{{ formatUtc(event.at).replace(' UTC', '') }}</span>
-          <span
-            class="order-1 break-all font-mono text-xs lg:order-none"
-            :class="toneFor(event.kind)"
-          >{{ event.kind }}</span>
-          <span class="order-3 hidden font-mono text-xs text-toned lg:order-none lg:block">{{ event.actor ?? '—' }}</span>
-          <span class="order-4 col-span-2 text-[13px] leading-snug text-default lg:order-none lg:col-span-1">
-            {{ event.message }}
+          <span class="tabular font-mono text-xs text-muted">{{ formatUtc(event.at).replace(' UTC', '') }}</span>
+          <span>
             <span
-              v-if="event.actor"
-              class="font-mono text-[11px] text-muted lg:hidden"
-            > · {{ event.actor }}</span>
+              class="inline-block max-w-full truncate rounded-md px-2 py-0.5 font-mono text-xs"
+              :class="toneFor(event.kind)"
+            >{{ event.kind }}</span>
           </span>
+          <span class="text-sm text-default">{{ event.message }}</span>
+          <span class="text-xs text-muted lg:text-end">{{ event.actor ?? 'system' }}</span>
         </li>
       </ol>
-    </SheetSection>
+    </AppCard>
   </div>
 </template>

@@ -198,12 +198,13 @@ signed; it covers a hash of the body. Node revocation is a flag checked per requ
 - No ORM. Hand-written SQL via `Microsoft.Data.Sqlite` and the helpers in `SqliteExtensions`.
 - Frontend: Nuxt UI components, semantic Tailwind tokens (`text-muted`, `border-default`, …).
   The API models "unset" as `null`, form inputs need `undefined` — convert at the boundary.
-- The panel is drawn as a technical drawing sheet (paper in light mode, cyanotype in dark).
-  `main.css` remaps Nuxt UI's tokens onto that palette and `app.config.ts` squares and flattens
-  the components, so keep using the semantic tokens rather than raw colours. `live` is reserved
-  for the path traffic actually takes; do not reuse it for emphasis. Peer states are the marks
-  `● ○ –` via `StateMark`, not coloured pills. Labels are `caps`, except AmneziaWG parameter
-  names, which keep their exact spelling through `paramField`.
+- Every page section is an `AppCard` on the darker canvas, and a section's actions live in its
+  own header. Keep an action next to the thing it acts on: switching nodes is a button on the
+  node (`NodeCard`), handing out a config is the peer's Config dialog (`PeerConfigModal`). Node
+  actions go through `useNodeActions` so the overview graph and the nodes page behave the same.
+  `live` is reserved for the path traffic actually takes - the record, the active node and the
+  line between them in `FleetGraph`; do not reuse it for emphasis. AmneziaWG parameter names keep
+  their exact spelling in mono through `paramField`.
 - Everything under `/api` requires an authenticated admin except `/health`, `/auth/*` and
   `/shares/*`. Do not add an endpoint to the anonymous set without a reason worth stating.
 

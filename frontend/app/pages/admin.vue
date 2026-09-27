@@ -178,42 +178,51 @@ onMounted(loadFleet)
 </script>
 
 <template>
-  <div class="flex flex-col">
+  <div class="flex flex-col gap-4 lg:gap-6">
+    <h1 class="sr-only">
+      Settings
+    </h1>
+
     <UAlert
       v-if="errorMessage"
-      class="m-3 w-auto sm:m-4"
       color="error"
       variant="subtle"
       icon="i-lucide-circle-alert"
-      title="Could not read the fleet"
+      title="Could not load the fleet"
       :description="errorMessage"
     />
 
-    <SheetSection
-      title="Identity"
-      meta="shared by every node — never regenerated"
+    <AppCard
+      title="Fleet identity"
+      icon="i-lucide-fingerprint"
+      description="Shared by every node and pinned by every client config. It is never regenerated."
     >
       <template #actions>
         <UButton
           v-if="fleet"
           icon="i-lucide-copy"
-          size="sm"
+          color="neutral"
+          variant="outline"
           @click="copyPublicKey"
         >
           Copy public key
         </UButton>
       </template>
 
-      <p
+      <div
         v-if="loading"
-        class="py-6 text-center font-mono text-xs text-muted"
+        class="flex items-center gap-2 text-sm text-muted"
       >
-        reading the fleet…
-      </p>
+        <UIcon
+          name="i-lucide-loader-circle"
+          class="size-5 animate-spin"
+        />
+        Loading
+      </div>
 
       <dl
         v-else-if="fleet"
-        class="grid grid-cols-2 gap-x-6 gap-y-3 md:grid-cols-4"
+        class="grid grid-cols-2 gap-x-6 gap-y-4 md:grid-cols-4"
       >
         <SpecItem
           label="Server public key"
@@ -252,47 +261,37 @@ onMounted(loadFleet)
         >
           r{{ fleet.revision }} · generation {{ fleet.generation }}
         </SpecItem>
-        <SpecItem
-          label="Issued"
-          mono
-        >
+        <SpecItem label="Issued">
           {{ fleet.clientsCount }} peers · {{ fleet.nodesCount }} nodes
         </SpecItem>
       </dl>
-    </SheetSection>
+    </AppCard>
 
-    <SheetSection
+    <AppCard
       title="Obfuscation"
-      meta="saving bumps the fleet revision"
-      flush
+      icon="i-lucide-shield-ellipsis"
+      description="Saving bumps the fleet revision; nodes pick it up on their next poll."
+      sticky-footer
     >
-      <template #actions>
-        <UButton
-          color="primary"
-          variant="solid"
-          size="sm"
-          icon="i-lucide-save"
-          :loading="saving"
-          :disabled="loading"
-          @click="saveObfuscation"
-        >
-          Save profile
-        </UButton>
-      </template>
-
-      <div class="grid lg:grid-cols-2">
-        <!-- must match -->
-        <div class="flex flex-col gap-4 border-b border-default p-3 sm:p-4 lg:border-e lg:border-b-0">
-          <div>
-            <h3 class="caps text-highlighted">
-              Wire format · must match on both ends
-            </h3>
-            <p class="mt-1 text-[13px] leading-snug text-muted">
-              Applied to every node interface and copied into every client config. A client and
-              its node must carry identical values or the handshake is never recognised, so none
-              of these can differ per client.
-            </p>
-          </div>
+      <div class="grid gap-4 lg:grid-cols-2">
+        <section class="flex flex-col gap-4 rounded-lg border border-default p-4">
+          <header class="flex items-start gap-3">
+            <span class="flex size-8 shrink-0 items-center justify-center rounded-md bg-error/10 text-error">
+              <UIcon
+                name="i-lucide-lock"
+                class="size-4"
+              />
+            </span>
+            <div>
+              <h3 class="font-semibold text-highlighted">
+                Wire format — must match on both ends
+              </h3>
+              <p class="text-sm text-muted">
+                Applied to every node and copied into every client config. A mismatch is a
+                handshake that never happens, so changing these means handing out every config again.
+              </p>
+            </div>
+          </header>
 
           <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <UFormField
@@ -328,7 +327,7 @@ onMounted(loadFleet)
           <UFormField
             :ui="paramField"
             label="HeaderProtectionKey"
-            help="AmneziaWG 3.x. Encrypts the packet header, so the message type is unreadable rather than renamed. Needs S1–S4 of at least 12, and every client config has to be reissued when it changes."
+            help="AmneziaWG 3.x. Encrypts the packet header. Needs S1–S4 of at least 12."
           >
             <UFieldGroup class="w-full">
               <UInput
@@ -337,7 +336,9 @@ onMounted(loadFleet)
                 placeholder="base64, 32 bytes"
               />
               <UButton
-                icon="i-lucide-key"
+                color="neutral"
+                variant="outline"
+                icon="i-lucide-key-round"
                 :loading="generatingKey"
                 @click="generateHeaderProtectionKey"
               >
@@ -349,21 +350,28 @@ onMounted(loadFleet)
           <USwitch
             v-model="form.randomTrailers"
             label="RandomTrailers"
-            description="AmneziaWG 3.x. Appends random trailing bytes to every packet. Must match on both ends."
+            description="AmneziaWG 3.x. Appends random trailing bytes to every packet."
           />
-        </div>
+        </section>
 
-        <!-- may differ -->
-        <div class="flex flex-col gap-4 p-3 sm:p-4">
-          <div>
-            <h3 class="caps text-highlighted">
-              Client defaults · may differ per client
-            </h3>
-            <p class="mt-1 text-[13px] leading-snug text-muted">
-              Seeds for new client configs. Any peer may override them on sheet 1, and differing is
-              the point: two clients that rekey on the same schedule are a correlatable pair.
-            </p>
-          </div>
+        <section class="flex flex-col gap-4 rounded-lg border border-default p-4">
+          <header class="flex items-start gap-3">
+            <span class="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+              <UIcon
+                name="i-lucide-shuffle"
+                class="size-4"
+              />
+            </span>
+            <div>
+              <h3 class="font-semibold text-highlighted">
+                Client defaults — may differ per client
+              </h3>
+              <p class="text-sm text-muted">
+                Seeds for new configs; any peer can override them. Differing is the point: two
+                clients that rekey on the same schedule are a correlatable pair.
+              </p>
+            </div>
+          </header>
 
           <div class="grid grid-cols-3 gap-3">
             <UFormField
@@ -432,49 +440,56 @@ onMounted(loadFleet)
           <USwitch
             v-model="form.defaultDisableCookies"
             label="DisableCookies"
-            description="AmneziaWG 3.x. Stops the peer answering with a cookie reply under load, which is a recognisable message of its own."
+            description="AmneziaWG 3.x. Stops the peer answering with a cookie reply under load."
           />
-        </div>
+        </section>
       </div>
-    </SheetSection>
 
-    <SheetSection
-      title="Import"
-      meta="from a single-server deployment"
-    >
-      <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:gap-10">
-        <p class="max-w-xl text-[13px] leading-snug text-toned">
-          Upload the old <span class="font-mono">state.json</span> or a backup export. The original
-          server key pair is preserved, so configs already handed out keep working. An obfuscation
-          profile that would not apply is dropped with a warning rather than rolled out.
-        </p>
-
-        <div class="flex flex-col gap-3">
-          <USwitch
-            v-model="replaceExisting"
-            label="Replace existing clients"
-            description="Required if this panel already has clients."
-          />
-
-          <label
-            class="inline-flex w-fit cursor-pointer items-center gap-2 border border-accented px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] transition-colors hover:bg-elevated focus-within:outline-2 focus-within:outline-primary"
-            :class="importing ? 'pointer-events-none opacity-60' : ''"
+      <template #footer>
+        <div class="flex flex-wrap items-center justify-end gap-3">
+          <span class="text-sm text-muted">Rolls out to every node on their next poll.</span>
+          <UButton
+            icon="i-lucide-save"
+            :loading="saving"
+            :disabled="loading"
+            @click="saveObfuscation"
           >
-            <UIcon
-              :name="importing ? 'i-lucide-loader-circle' : 'i-lucide-upload'"
-              class="size-4"
-              :class="importing ? 'animate-spin' : ''"
-            />
-            {{ importing ? 'Importing…' : 'Choose state.json' }}
-            <input
-              type="file"
-              accept="application/json,.json"
-              class="sr-only"
-              :disabled="importing"
-              @change="importLegacyState"
-            >
-          </label>
+            Save obfuscation
+          </UButton>
         </div>
+      </template>
+    </AppCard>
+
+    <AppCard
+      title="Import"
+      icon="i-lucide-upload"
+      description="Adopt a single-server deployment. Its key pair is preserved, so configs already handed out keep working."
+    >
+      <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-8">
+        <USwitch
+          v-model="replaceExisting"
+          label="Replace existing clients"
+          description="Required if this panel already has clients."
+        />
+
+        <label
+          class="inline-flex w-fit cursor-pointer items-center gap-2 rounded-md border border-accented px-3 py-2 text-sm font-medium text-default transition-colors hover:bg-elevated focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary"
+          :class="importing ? 'pointer-events-none opacity-60' : ''"
+        >
+          <UIcon
+            :name="importing ? 'i-lucide-loader-circle' : 'i-lucide-file-up'"
+            class="size-4"
+            :class="importing ? 'animate-spin' : ''"
+          />
+          {{ importing ? 'Importing…' : 'Choose state.json' }}
+          <input
+            type="file"
+            accept="application/json,.json"
+            class="sr-only"
+            :disabled="importing"
+            @change="importLegacyState"
+          >
+        </label>
       </div>
 
       <UAlert
@@ -499,6 +514,6 @@ onMounted(loadFleet)
           </ul>
         </template>
       </UAlert>
-    </SheetSection>
+    </AppCard>
   </div>
 </template>

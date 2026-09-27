@@ -35,59 +35,65 @@ useHead({ title: 'Sign in · AWG Easy' })
 </script>
 
 <template>
-  <LooseSheet
-    drawing="fleet control"
-    :rows="[
-      { label: 'Drawing', value: 'access' },
-      { label: 'Sheet', value: '0 of 4' }
-    ]"
-  >
-    <h1 class="caps text-sm text-highlighted">
-      Sign in
-    </h1>
-    <p class="mt-1 text-[13px] text-muted">
-      To read and change the fleet.
-    </p>
+  <div class="flex min-h-screen items-center justify-center px-4 py-10">
+    <div class="w-full max-w-sm">
+      <div class="mb-6 flex items-center justify-center gap-2.5">
+        <span class="flex size-9 items-center justify-center rounded-md bg-inverted text-inverted">
+          <UIcon
+            name="i-lucide-shield-check"
+            class="size-5"
+          />
+        </span>
+        <span class="text-lg font-semibold text-highlighted">AWG Easy</span>
+      </div>
 
-    <form
-      class="mt-5 flex flex-col gap-4"
-      @submit.prevent="submit"
-    >
-      <UFormField label="Username">
-        <UInput
-          v-model="username"
-          autocomplete="username"
-          autofocus
-          class="w-full"
-        />
-      </UFormField>
+      <section class="rounded-xl border border-default bg-default p-6 shadow-xs">
+        <h1 class="text-lg font-semibold text-highlighted">
+          Sign in
+        </h1>
+        <p class="mt-1 text-sm text-muted">
+          To manage the fleet.
+        </p>
 
-      <UFormField label="Password">
-        <UInput
-          v-model="password"
-          type="password"
-          autocomplete="current-password"
-          class="w-full"
-        />
-      </UFormField>
+        <form
+          class="mt-6 flex flex-col gap-4"
+          @submit.prevent="submit"
+        >
+          <UFormField label="Username">
+            <UInput
+              v-model="username"
+              autocomplete="username"
+              autofocus
+              class="w-full"
+            />
+          </UFormField>
 
-      <UAlert
-        v-if="errorMessage"
-        color="error"
-        variant="subtle"
-        icon="i-lucide-circle-alert"
-        :description="errorMessage"
-      />
+          <UFormField label="Password">
+            <UInput
+              v-model="password"
+              type="password"
+              autocomplete="current-password"
+              class="w-full"
+            />
+          </UFormField>
 
-      <UButton
-        type="submit"
-        color="primary"
-        variant="solid"
-        block
-        :loading="submitting"
-      >
-        Sign in
-      </UButton>
-    </form>
-  </LooseSheet>
+          <UAlert
+            v-if="errorMessage"
+            color="error"
+            variant="subtle"
+            icon="i-lucide-circle-alert"
+            :description="errorMessage"
+          />
+
+          <UButton
+            type="submit"
+            block
+            :loading="submitting"
+          >
+            Sign in
+          </UButton>
+        </form>
+      </section>
+    </div>
+  </div>
 </template>
