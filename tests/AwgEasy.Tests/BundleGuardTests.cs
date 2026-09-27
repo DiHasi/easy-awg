@@ -62,6 +62,38 @@ public class BundleGuardTests
         Assert.Equal("bundle_expired", error.Code);
     }
 
+    // Fail-static. A node re-applies its cached bundle at boot, before it has reached the control
+    // plane at all, so expiring that copy would mean a node that reboots during an outage never
+    // brings its tunnel up - the exact failure the cache exists to prevent.
+    [Fact]
+    public void Accepts_a_long_expired_bundle_read_from_the_node_s_own_disk()
+    {
+        var cached = Bundle(issuedAt: Now.AddDays(-30), expiresAt: Now.AddDays(-30).AddMinutes(15));
+
+        Assert.True(
+            BundleGuard.TryAccept(cached, appliedRevision: 10, "node-a", Now, out var error, BundleOrigin.Local),
+            error.Message);
+    }
+
+    // Skipping expiry on disk must not cost the rollback protection that goes with it.
+    [Fact]
+    public void Still_refuses_a_rolled_back_revision_read_from_disk()
+    {
+        var rolledBack = Bundle(revision: 9, issuedAt: Now.AddDays(-30), expiresAt: Now.AddDays(-30).AddMinutes(15));
+
+        Assert.False(BundleGuard.TryAccept(rolledBack, appliedRevision: 10, "node-a", Now, out var error, BundleOrigin.Local));
+        Assert.Equal("bundle_stale_revision", error.Code);
+    }
+
+    [Fact]
+    public void Still_refuses_a_bundle_from_disk_that_belongs_to_another_node()
+    {
+        var other = Bundle(nodeId: "node-b", issuedAt: Now.AddDays(-30), expiresAt: Now.AddDays(-30).AddMinutes(15));
+
+        Assert.False(BundleGuard.TryAccept(other, appliedRevision: 0, "node-a", Now, out var error, BundleOrigin.Local));
+        Assert.Equal("bundle_node_mismatch", error.Code);
+    }
+
     [Fact]
     public void Tolerates_clock_skew_within_the_allowed_window()
     {

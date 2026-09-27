@@ -112,7 +112,8 @@ internal static class DryRun
             Console.Error.WriteLine($"Signature OK (key {envelope.KeyId}).");
         }
 
-        if (!BundleGuard.TryAccept(bundle, appliedRevision: 0, bundle.NodeId, DateTimeOffset.UtcNow, out var guardError))
+        // A saved bundle, inspected by hand: the same reason a cached one is not expired on disk.
+        if (!BundleGuard.TryAccept(bundle, appliedRevision: 0, bundle.NodeId, DateTimeOffset.UtcNow, out var guardError, BundleOrigin.Local))
         {
             Console.Error.WriteLine($"Bundle rejected: {guardError.Code} - {guardError.Message}");
             exitCode = 1;

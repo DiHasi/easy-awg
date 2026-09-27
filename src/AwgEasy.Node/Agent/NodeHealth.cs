@@ -59,6 +59,19 @@ public sealed class NodeHealth
         }
     }
 
+    /// <summary>
+    /// Forgets the last error. Applying a bundle already does this; this is for the cycle that had
+    /// nothing to apply because the node is already converged, which is otherwise the one state
+    /// that can never shake off a stale error.
+    /// </summary>
+    public void ClearError()
+    {
+        lock (_lock)
+        {
+            LastError = null;
+        }
+    }
+
     public void RecordError(string message)
     {
         lock (_lock)

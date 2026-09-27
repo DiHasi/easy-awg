@@ -77,7 +77,7 @@ public sealed class ReconcileService(
             await File.ReadAllTextAsync(options.BundleFile, cancellationToken),
             NodeJsonContext.Default.SignedBundle);
 
-        if (envelope is not null && await TryApplyAsync(envelope, identity, cancellationToken))
+        if (envelope is not null && await TryApplyAsync(envelope, identity, cancellationToken, BundleOrigin.Local))
         {
             bundleStore.Save(envelope);
         }
@@ -93,7 +93,7 @@ public sealed class ReconcileService(
         }
 
         logger.LogInformation("Applying cached bundle before contacting the control plane.");
-        await TryApplyAsync(cached, identity, cancellationToken);
+        await TryApplyAsync(cached, identity, cancellationToken, BundleOrigin.Local);
     }
 
     private async Task EnsureEnrolledAsync(AgentIdentityDocument identity, CancellationToken cancellationToken)
@@ -141,7 +141,14 @@ public sealed class ReconcileService(
             return;
         }
 
-        if (fetch.Bundle is not null && await TryApplyAsync(fetch.Bundle, identity, cancellationToken))
+        if (fetch.Outcome == FetchOutcome.NotModified)
+        {
+            // Converged, and the control plane agrees. Whatever failed on an earlier cycle is no
+            // longer true, and leaving it set would report this node degraded until some unrelated
+            // revision happened along - there is nothing to apply here that would clear it.
+            health.ClearError();
+        }
+        else if (fetch.Bundle is not null && await TryApplyAsync(fetch.Bundle, identity, cancellationToken))
         {
             bundleStore.Save(fetch.Bundle);
         }
@@ -186,9 +193,13 @@ public sealed class ReconcileService(
         await EnsureEnrolledAsync(identity, cancellationToken);
     }
 
-    private async Task<bool> TryApplyAsync(SignedBundle envelope, AgentIdentityDocument identity, CancellationToken cancellationToken)
+    private async Task<bool> TryApplyAsync(
+        SignedBundle envelope,
+        AgentIdentityDocument identity,
+        CancellationToken cancellationToken,
+        BundleOrigin origin = BundleOrigin.ControlPlane)
     {
-        if (!acceptor.TryAccept(envelope, identity, DateTimeOffset.UtcNow, out var bundle, out var error))
+        if (!acceptor.TryAccept(envelope, identity, DateTimeOffset.UtcNow, out var bundle, out var error, origin))
         {
             health.RecordError($"{error.Code}: {error.Message}");
             return false;

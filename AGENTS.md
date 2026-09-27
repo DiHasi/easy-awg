@@ -34,7 +34,7 @@ scripts/install.sh       Node enrollment one-liner, served by Control at /instal
 
 ```bash
 dotnet build Awg-easy.sln          # whole solution
-dotnet test Awg-easy.sln           # 137 tests, all must pass
+dotnet test Awg-easy.sln           # 140 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
 cd frontend && pnpm run generate   # static build into .output/public
@@ -83,6 +83,15 @@ request signature, so either would let a downgrade be forced from the network.
 **Nodes are fail-static.** If the control plane is unreachable, the agent re-applies its cached
 bundle and keeps serving traffic indefinitely. Losing management is never a reason to lose the
 data plane. Do not add TTLs, config expiry-on-disk, or peer teardown on connection loss.
+
+That is why `BundleGuard` takes a `BundleOrigin`. `ExpiresAt` is replay protection for a bundle
+arriving over the network and is enforced there; it is deliberately *not* enforced on a bundle read
+from the node's own disk - the cached one, one handed over as `AWG_BUNDLE_FILE`, or one being
+inspected with `--render-bundle`. Bundles live 15 minutes, so enforcing it on the cache meant a node
+rebooting more than that after its last poll refused its own configuration and brought no interface
+up at all, precisely when the control plane was unreachable. Getting a stale bundle into that cache
+requires root on the node, which already defeats every check here, and the monotonic revision check
+still refuses a rollback. Do not collapse the two paths back together.
 
 **Address allocation belongs to the control plane only.** Because every node runs the same
 identity, a client must work on any node, so addresses must be unique fleet-wide. Never allocate

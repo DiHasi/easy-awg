@@ -1,5 +1,15 @@
 namespace AwgEasy.Contracts;
 
+/// <summary>Where a bundle came from, which decides whether its expiry still means anything.</summary>
+public enum BundleOrigin
+{
+    /// <summary>Arrived over the network just now. Expiry is enforced - that is what it is for.</summary>
+    ControlPlane,
+
+    /// <summary>Read from this node's own disk: its cached bundle, or one handed to it directly.</summary>
+    Local
+}
+
 /// <summary>
 /// Checks a bundle is acceptable before it is applied. Signature verification alone is not
 /// enough: a correctly signed bundle stays valid forever, so an attacker who once captured
@@ -15,7 +25,8 @@ public static class BundleGuard
         long appliedRevision,
         string expectedNodeId,
         DateTimeOffset now,
-        out ApiError error)
+        out ApiError error,
+        BundleOrigin origin = BundleOrigin.ControlPlane)
     {
         error = ApiError.Empty;
 
@@ -59,7 +70,12 @@ public static class BundleGuard
             return false;
         }
 
-        if (bundle.ExpiresAt + ClockSkew < now)
+        // Expiry is a freshness rule for the wire, not a property of a file on disk. A node re-applies
+        // its cached bundle at boot to bring the tunnel up before it has spoken to anyone, and an
+        // unreachable - or permanently gone - control plane must never be the reason it stops carrying
+        // traffic. Getting a stale bundle into that cache means root on the node, which already beats
+        // every check here, and the revision check above still refuses a rollback.
+        if (origin == BundleOrigin.ControlPlane && bundle.ExpiresAt + ClockSkew < now)
         {
             error = new ApiError("bundle_expired", "Bundle has expired.");
             return false;

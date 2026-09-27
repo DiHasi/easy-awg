@@ -14,7 +14,8 @@ public sealed class BundleAcceptor(ILogger<BundleAcceptor> logger)
         AgentIdentityDocument identity,
         DateTimeOffset now,
         out DesiredStateBundle bundle,
-        out ApiError error)
+        out ApiError error,
+        BundleOrigin origin = BundleOrigin.ControlPlane)
     {
         bundle = default!;
 
@@ -31,7 +32,7 @@ public sealed class BundleAcceptor(ILogger<BundleAcceptor> logger)
             return false;
         }
 
-        if (!BundleGuard.TryAccept(decoded, identity.AppliedRevision, identity.NodeId ?? string.Empty, now, out error))
+        if (!BundleGuard.TryAccept(decoded, identity.AppliedRevision, identity.NodeId ?? string.Empty, now, out error, origin))
         {
             logger.LogError("Rejected bundle revision {Revision}: {Code} - {Message}", decoded.Revision, error.Code, error.Message);
             return false;
