@@ -7,8 +7,9 @@ server pull that configuration and converge onto it. The point of the fleet desi
 failover**: when a server is blocked or dies, you move traffic to another one without reissuing a
 single client config.
 
-> Status: the fleet architecture is in place with **manual switchover**. Automatic failover,
-> external probes and notifications are designed but not yet built. See [Roadmap](#roadmap).
+> Status: the fleet architecture is in place with **manual switchover** - one button in the panel
+> moves the DNS record to another node. Automatic failover, external probes and notifications are
+> designed but not yet built. See [Roadmap](#roadmap).
 
 ## How it works
 
@@ -45,8 +46,9 @@ Client private keys and client names never leave the control plane.
   agent uses host networking, so it also takes `127.0.0.1:8081` on that server for its health
   endpoint (configurable via `AWG_HEALTH_URL`).
 - **A DNS record you control.** `AWG_ENDPOINT_HOST` goes into client configs, and failover means
-  repointing it. Set the TTL to 30–60 seconds ahead of time. If your provider offers a floating
-  IP, prefer it — reassignment is instant and completely invisible to clients.
+  repointing it. Set the TTL to 30–60 seconds ahead of time. Give the panel a Cloudflare API
+  token and it moves the record for you; without one it tells you what to change. If your provider
+  offers a floating IP, prefer it — reassignment is instant and completely invisible to clients.
 - **TLS in front of the panel.** Over plain HTTP it would hand the fleet private key to agents in
   the clear. Put Caddy or nginx with Let's Encrypt in front of it.
 
@@ -138,6 +140,33 @@ services:
 
 Plain values — hostnames, ports, credentials — belong in `.env` instead.
 
+## Switching which node clients use
+
+Every client config names one host and pins the fleet's server public key. Failover is therefore
+nothing more than making that host resolve to a different node: same key, same subnet, same
+obfuscation profile, different server. Nothing is reissued, no node re-applies anything, and the
+fleet revision deliberately does not move.
+
+In the panel: **Nodes → Make active** on the node you want clients on. Each node shows the public
+address its own agent discovered, which is what the record is pointed at, and the card at the top
+of the page shows the record, its TTL, and whether the panel's own resolver already agrees.
+
+With `AWG_CLOUDFLARE_API_TOKEN` and `AWG_CLOUDFLARE_ZONE_ID` set, the panel edits the record
+itself - an A or AAAA record, never proxied, since the orange cloud carries HTTP only and would
+swallow the tunnel. The token needs `Zone:DNS:Edit` on that zone and nothing else. If the API
+refuses, the switch is refused with it: the panel never claims a node is active while the record
+still points elsewhere.
+
+Without a token the button still works - it records which node is active and shows the record to
+set - and the resolver check is what confirms you made the change.
+
+Clients move over as resolvers expire the answer they were handed, so the record's TTL is the real
+speed limit. A node does not need to be reachable for this: switching away from a dead node is
+exactly the case it is for.
+
+If a node reports no address at all, its agent could not reach any echo service. Set `AWG_PUBLIC_IP`
+on that node to state it directly.
+
 ## Recovering a node
 
 Revoking or deleting a node in the panel cuts off its configuration, but it does **not** stop the
@@ -183,6 +212,10 @@ For a fresh panel you can instead point `AWG_IMPORT_LEGACY_STATE` at a mounted `
 | `AWG_CONTROL_DB` | SQLite file. Default `/etc/awg-control/control.db`. |
 | `AWG_BUNDLE_LIFETIME_MINUTES` | How long a signed bundle stays valid. Default 15. |
 | `AWG_IMPORT_LEGACY_STATE` | One-shot adoption of an old `state.json`. |
+| `AWG_CLOUDFLARE_API_TOKEN` | Lets the panel move the record itself. Needs `Zone:DNS:Edit`. |
+| `AWG_CLOUDFLARE_ZONE_ID` | The zone the record lives in. Both are required, or switching stays manual. |
+| `AWG_DNS_RECORD_NAME` | Record to move. Defaults to `AWG_ENDPOINT_HOST`. |
+| `AWG_DNS_TTL` | TTL written with the record, and the speed limit on failover. Default 60. |
 
 ### Node
 
@@ -195,6 +228,9 @@ For a fresh panel you can instead point `AWG_IMPORT_LEGACY_STATE` at a mounted `
 | `AWG_POLL_INTERVAL_SECONDS` | How often to check for a new revision. Default 20. |
 | `AWG_NODE_STATE_PATH` | Agent identity and cached bundle. Default `/etc/awg-node`. |
 | `AWG_INTERFACE` | Interface name. Default `awg0`. |
+| `AWG_PUBLIC_IP` | States the node's public address instead of discovering it. |
+| `AWG_PUBLIC_IP_URLS` | Echo services used to discover it. Empty switches discovery off. |
+| `AWG_PUBLIC_IP_REFRESH_MINUTES` | How often a known address is checked again. Default 10. |
 
 Obfuscation is **not** configured through environment variables. It is fleet-wide and lives in the
 panel under **Fleet**, so a change applies to every node at once.
@@ -259,8 +295,9 @@ bundled `amneziawg-go` need nothing beyond the new image.
 - **Clients** — create, rename, enable, disable and delete clients; download a config, show a QR
   code, or create a 24-hour share link for someone without an account. Live traffic and handshake
   data is aggregated across every node.
-- **Nodes** — status of each agent, whether it has picked up the current revision, enrollment
-  commands, and revocation. Revoking a node cuts off its configuration on its very next request.
+- **Nodes** — status of each agent, its public address, whether it has picked up the current
+  revision, which one clients are currently sent to, enrollment commands, and revocation. Revoking
+  a node cuts off its configuration on its very next request.
 - **Fleet** — the shared identity, obfuscation settings, and the legacy import.
 - **Events** — an audit trail of who changed what and which nodes fetched configuration.
 
@@ -322,8 +359,10 @@ Phase 1 — multi-server with manual switchover — is done. What comes next:
   agent reports in, the interface is up, and clients simply cannot reach it. Detecting that needs
   probes from the networks users actually connect from, comparing agent heartbeats against real
   AmneziaWG handshakes from several vantage points.
-- **Automatic failover** driven by that signal, with quorum and hysteresis, updating DNS or
-  reassigning a floating IP, and notifying the operator.
+- **Automatic failover** driven by that signal, with quorum and hysteresis, and notifying the
+  operator. The switch itself already exists and is what a probe would call; what is missing is the
+  judgement about when to call it. Reassigning a floating IP would be a second provider behind the
+  same interface.
 - **Fleet identity rotation**, so a compromised or seized node is recoverable without rebuilding
   everything by hand.
 - **Converge the node's firewall rules, not just its peers.** The NAT and forwarding rules live in
@@ -351,8 +390,9 @@ VPN-сервере забирают эту конфигурацию и прив�
 переключение**: когда сервер блокируют или он падает, трафик переезжает на другой без
 перевыпуска хотя бы одного клиентского конфига.
 
-> Статус: архитектура флота готова, переключение **ручное**. Автофейловер, внешние пробы и
-> уведомления спроектированы, но ещё не построены. См. [Дорожную карту](#дорожная-карта).
+> Статус: архитектура флота готова, переключение **ручное** — одна кнопка в панели переводит
+> DNS-запись на другую ноду. Автофейловер, внешние пробы и уведомления спроектированы, но ещё не
+> построены. См. [Дорожную карту](#дорожная-карта).
 
 ## Как это работает
 
@@ -378,8 +418,10 @@ VPN-сервере забирают эту конфигурацию и прив�
   host-режиме сети, поэтому займёт на сервере ещё `127.0.0.1:8081` под health-эндпоинт
   (меняется через `AWG_HEALTH_URL`).
 - **DNS-запись, которой вы управляете.** `AWG_ENDPOINT_HOST` попадает в клиентские конфиги, и
-  переключение — это смена этой записи. Поставьте TTL 30–60 секунд заранее. Если провайдер даёт
-  floating IP, он лучше: переезд мгновенный и совершенно незаметный для клиентов.
+  переключение — это смена этой записи. Поставьте TTL 30–60 секунд заранее. Дайте панели токен
+  Cloudflare API — и она будет менять запись сама; без токена она скажет, что вписать вручную.
+  Если провайдер даёт floating IP, он лучше: переезд мгновенный и совершенно незаметный для
+  клиентов.
 - **TLS перед панелью.** По обычному HTTP она отдаст агенту приватный ключ флота в открытом виде.
   Поставьте перед ней Caddy или nginx с Let's Encrypt.
 
@@ -466,6 +508,33 @@ services:
 
 Обычные значения — хосты, порты, учётные данные — задавайте в `.env`.
 
+## Переключение ноды для клиентов
+
+В каждом клиентском конфиге указано одно имя хоста и прибит публичный ключ флота. Поэтому
+фейловер — это всего лишь заставить это имя разрешаться в другую ноду: тот же ключ, та же подсеть,
+тот же профиль обфускации, другой сервер. Ничего не перевыпускается, ни одна нода ничего не
+переприменяет, и ревизия флота осознанно остаётся на месте.
+
+В панели: **Nodes → Make active** на нужной ноде. У каждой ноды показан внешний адрес, который её
+агент определил сам — именно на него и переводится запись, — а карточка сверху показывает саму
+запись, её TTL и согласен ли с ней уже резолвер самой панели.
+
+Если заданы `AWG_CLOUDFLARE_API_TOKEN` и `AWG_CLOUDFLARE_ZONE_ID`, панель правит запись сама —
+A или AAAA, всегда без проксирования: оранжевая тучка пропускает только HTTP и проглотила бы
+туннель. Токену нужно право `Zone:DNS:Edit` на эту зону и ничего больше. Если API отказал,
+переключение отменяется вместе с ним: панель никогда не утверждает, что нода активна, пока запись
+смотрит в другую сторону.
+
+Без токена кнопка тоже работает — она фиксирует активную ноду и показывает, что вписать, — а
+проверка резолвом подтверждает, что вы это сделали.
+
+Клиенты переезжают по мере того, как у резолверов истекает выданный им ответ, так что TTL записи и
+есть реальное ограничение скорости. Доступность ноды для этого не нужна: уход с мёртвой ноды — это
+ровно тот случай, для которого всё и сделано.
+
+Если у ноды вообще нет адреса, её агент не смог достучаться ни до одного эхо-сервиса. Задайте на
+этой ноде `AWG_PUBLIC_IP` напрямую.
+
 ## Восстановление ноды
 
 Отзыв или удаление ноды в панели обрывает выдачу конфигурации, но **не останавливает туннель**:
@@ -512,6 +581,10 @@ docker rm -f awg-node && rm -rf /etc/awg-node/*
 | `AWG_CONTROL_DB` | Файл SQLite. По умолчанию `/etc/awg-control/control.db`. |
 | `AWG_BUNDLE_LIFETIME_MINUTES` | Срок жизни подписанного бандла. По умолчанию 15. |
 | `AWG_IMPORT_LEGACY_STATE` | Разовое усыновление старого `state.json`. |
+| `AWG_CLOUDFLARE_API_TOKEN` | Позволяет панели менять запись сама. Нужно право `Zone:DNS:Edit`. |
+| `AWG_CLOUDFLARE_ZONE_ID` | Зона, в которой живёт запись. Без обоих значений переключение остаётся ручным. |
+| `AWG_DNS_RECORD_NAME` | Какую запись переводить. По умолчанию `AWG_ENDPOINT_HOST`. |
+| `AWG_DNS_TTL` | TTL записи, он же ограничение скорости фейловера. По умолчанию 60. |
 
 ### Нода
 
@@ -524,6 +597,9 @@ docker rm -f awg-node && rm -rf /etc/awg-node/*
 | `AWG_POLL_INTERVAL_SECONDS` | Частота опроса новой ревизии. По умолчанию 20. |
 | `AWG_NODE_STATE_PATH` | Идентичность агента и кэш бандла. По умолчанию `/etc/awg-node`. |
 | `AWG_INTERFACE` | Имя интерфейса. По умолчанию `awg0`. |
+| `AWG_PUBLIC_IP` | Задать внешний адрес ноды вручную вместо автоопределения. |
+| `AWG_PUBLIC_IP_URLS` | Эхо-сервисы для автоопределения. Пустое значение выключает его. |
+| `AWG_PUBLIC_IP_REFRESH_MINUTES` | Как часто перепроверять известный адрес. По умолчанию 10. |
 
 Обфускация настраивается **не** переменными окружения. Она общая для флота и задаётся в панели в
 разделе **Fleet**, поэтому изменение применяется сразу ко всем нодам.
@@ -590,8 +666,9 @@ userspace, если проверка не прошла. Нодам на встр
 - **Clients** — создание, переименование, включение, отключение и удаление клиентов; скачивание
   конфига, QR-код, share-ссылка на 24 часа для того, у кого нет аккаунта. Статистика трафика и
   handshake агрегируется по всем нодам.
-- **Nodes** — состояние агентов, забрали ли они текущую ревизию, команды подключения и отзыв
-  доступа. Отзыв обрывает выдачу конфигурации со следующего же запроса ноды.
+- **Nodes** — состояние агентов, их внешние адреса, забрали ли они текущую ревизию, куда сейчас
+  ходят клиенты, команды подключения и отзыв доступа. Отзыв обрывает выдачу конфигурации со
+  следующего же запроса ноды.
 - **Fleet** — общая идентичность, настройки обфускации, импорт со старого сервера.
 - **Events** — журнал: кто что менял и какие ноды забирали конфигурацию.
 
@@ -653,8 +730,10 @@ awg-node --render-bundle bundle.json --control-key <base64url> --egress ens3
   рапортует, интерфейс поднят, а клиенты просто не могут до неё достучаться. Чтобы это увидеть,
   нужны пробы из сетей, откуда реально подключаются пользователи, и сопоставление heartbeat агента
   с настоящими AmneziaWG-хендшейками с нескольких точек.
-- **Автоматический фейловер** по этому сигналу — с кворумом и гистерезисом, с обновлением DNS или
-  переносом floating IP и уведомлением администратора.
+- **Автоматический фейловер** по этому сигналу — с кворумом, гистерезисом и уведомлением
+  администратора. Само переключение уже есть, и проба будет вызывать именно его; не хватает
+  решения о том, когда его вызывать. Перенос floating IP — это второй провайдер за тем же
+  интерфейсом.
 - **Ротация идентичности флота**, чтобы скомпрометированная или изъятая нода не означала ручную
   пересборку всего.
 - **Сводить не только пиров, но и правила фаервола ноды.** Правила NAT и форвардинга живут в

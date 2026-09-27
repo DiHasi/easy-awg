@@ -31,9 +31,9 @@ public sealed class NodeRepository(Database database)
             """
             INSERT INTO nodes (id, name, hostname, endpoint_host, agent_public_key, agent_version,
                                status, applied_revision, interface_up, backend, bundle_schema_version,
-                               egress_interface, mtu, last_seen_at, last_error, revoked, enrolled_at)
+                               egress_interface, mtu, public_ip, last_seen_at, last_error, revoked, enrolled_at)
             VALUES ($id, $name, $hostname, $endpointHost, $agentKey, $agentVersion,
-                    $status, 0, 0, NULL, $bundleSchema, $egress, $mtu, NULL, NULL, 0, $enrolledAt)
+                    $status, 0, 0, NULL, $bundleSchema, $egress, $mtu, $publicIp, NULL, NULL, 0, $enrolledAt)
             """,
             ("$id", node.Id),
             ("$name", node.Name),
@@ -45,6 +45,7 @@ public sealed class NodeRepository(Database database)
             ("$bundleSchema", node.BundleSchemaVersion),
             ("$egress", node.EgressInterface),
             ("$mtu", node.Mtu),
+            ("$publicIp", node.PublicIp),
             ("$enrolledAt", node.EnrolledAt.ToStorage()));
 
         command.ExecuteNonQuery();
@@ -61,6 +62,7 @@ public sealed class NodeRepository(Database database)
                    backend          = $backend,
                    bundle_schema_version = $bundleSchema,
                    agent_version    = $agentVersion,
+                   public_ip        = COALESCE($publicIp, public_ip),
                    last_seen_at     = $seenAt,
                    last_error       = $lastError,
                    status           = $status
@@ -72,6 +74,10 @@ public sealed class NodeRepository(Database database)
             ("$backend", report.Backend),
             ("$bundleSchema", BundleSchema.Normalize(report.BundleSchemaVersion)),
             ("$agentVersion", report.AgentVersion),
+            // COALESCE, not a plain assignment: a node whose address lookup failed this cycle
+            // reports null, and forgetting the address it had would drop it out of the failover
+            // rotation over a hiccup at an echo service.
+            ("$publicIp", report.PublicIp),
             ("$seenAt", report.ReportedAt.ToStorage()),
             ("$lastError", report.LastError),
             ("$status", status));
@@ -187,6 +193,7 @@ public sealed class NodeRepository(Database database)
                 reader.GetInt32("bundle_schema_version"),
                 reader.GetStringOrNull("egress_interface"),
                 reader.GetInt32OrNull("mtu"),
+                reader.GetStringOrNull("public_ip"),
                 reader.GetTimestampOrNull("last_seen_at"),
                 reader.GetStringOrNull("last_error"),
                 reader.GetBoolean("revoked"),

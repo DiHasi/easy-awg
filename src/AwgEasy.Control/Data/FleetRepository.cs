@@ -63,6 +63,43 @@ public sealed class FleetRepository(Database database)
         command.ExecuteNonQuery();
     }
 
+    /// <summary>
+    /// Which node the failover DNS record currently points at, and when it was pointed there.
+    ///
+    /// Kept out of <see cref="FleetRecord"/> on purpose: it is not part of what a node runs, it
+    /// never reaches a bundle, and nothing in the config-building path should be able to read it
+    /// by accident.
+    /// </summary>
+    public (string? NodeId, DateTimeOffset? SetAt) FindActiveNode()
+    {
+        using var connection = database.Open();
+        using var command = connection.Sql("SELECT active_node_id, active_node_set_at FROM fleet WHERE id = 1");
+        using var reader = command.ExecuteReader();
+
+        return reader.Read()
+            ? (reader.GetStringOrNull("active_node_id"), reader.GetTimestampOrNull("active_node_set_at"))
+            : (null, null);
+    }
+
+    /// <summary>Null clears it, which is what removing the active node from the fleet has to do.</summary>
+    public void SetActiveNode(string? nodeId, DateTimeOffset now)
+    {
+        using var connection = database.Open();
+        using var command = connection.Sql(
+            """
+            UPDATE fleet
+               SET active_node_id = $nodeId,
+                   active_node_set_at = $setAt,
+                   updated_at = $now
+             WHERE id = 1
+            """,
+            ("$nodeId", nodeId),
+            ("$setAt", nodeId is null ? null : now.ToStorage()),
+            ("$now", now.ToStorage()));
+
+        command.ExecuteNonQuery();
+    }
+
     public void UpdateObfuscation(ServerObfuscationProfile? obfuscation, DateTimeOffset now)
     {
         using var connection = database.Open();

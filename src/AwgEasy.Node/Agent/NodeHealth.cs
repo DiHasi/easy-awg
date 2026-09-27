@@ -7,7 +7,8 @@ public sealed record NodeHealthResponse(
     string? Backend,
     DateTimeOffset? LastAppliedAt,
     string? LastError,
-    string AgentVersion);
+    string AgentVersion,
+    string? PublicIp);
 
 /// <summary>
 /// In-memory view of what the agent is currently doing, exposed on a loopback-bound endpoint.
@@ -29,6 +30,8 @@ public sealed class NodeHealth
 
     public string? LastError { get; private set; }
 
+    public string? PublicIp { get; private set; }
+
     public void RecordApplied(long revision)
     {
         lock (_lock)
@@ -45,6 +48,14 @@ public sealed class NodeHealth
         {
             InterfaceUp = isUp;
             Backend = backend;
+        }
+    }
+
+    public void RecordPublicIp(string? address)
+    {
+        lock (_lock)
+        {
+            PublicIp = address;
         }
     }
 
@@ -73,7 +84,8 @@ public sealed class NodeHealth
                 Backend,
                 LastAppliedAt,
                 LastError,
-                AgentVersion.Current);
+                AgentVersion.Current,
+                PublicIp);
         }
     }
 }

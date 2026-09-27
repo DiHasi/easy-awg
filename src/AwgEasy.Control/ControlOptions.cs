@@ -12,7 +12,8 @@ public sealed record ControlOptions(
     TimeSpan BundleLifetime,
     string? BootstrapAdminUser,
     string? BootstrapAdminPassword,
-    string? LegacyStateImportPath)
+    string? LegacyStateImportPath,
+    DnsFailoverOptions Dns)
 {
     public static ControlOptions FromEnvironment()
         => new(
@@ -26,7 +27,8 @@ public sealed record ControlOptions(
             TimeSpan.FromMinutes(ReadInt("AWG_BUNDLE_LIFETIME_MINUTES", 15)),
             Value("AWG_ADMIN_USER"),
             Value("AWG_ADMIN_PASSWORD"),
-            Value("AWG_IMPORT_LEGACY_STATE"));
+            Value("AWG_IMPORT_LEGACY_STATE"),
+            DnsFailoverOptions.FromEnvironment(Value, ReadInt));
 
     /// <summary>
     /// Settings that have no safe default. AWG_ENDPOINT_HOST in particular is written into every
@@ -49,4 +51,31 @@ public sealed record ControlOptions(
         => int.TryParse(Environment.GetEnvironmentVariable(key), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) && value > 0
             ? value
             : fallback;
+}
+
+/// <summary>
+/// How the failover record is moved. Credentials stay in the environment rather than the database:
+/// a token that can edit a DNS zone should not be readable through the panel, and nothing here is
+/// per-fleet state worth backing up.
+/// </summary>
+/// <param name="RecordName">The record to move. Null means the host clients already connect to.</param>
+/// <param name="Ttl">
+/// Deliberately low. Failover is only as fast as the TTL resolvers were handed before the switch,
+/// so a long one leaves clients on a dead node for exactly that long.
+/// </param>
+public sealed record DnsFailoverOptions(
+    string? RecordName,
+    int Ttl,
+    string? CloudflareApiToken,
+    string? CloudflareZoneId)
+{
+    public bool CloudflareConfigured
+        => !string.IsNullOrWhiteSpace(CloudflareApiToken) && !string.IsNullOrWhiteSpace(CloudflareZoneId);
+
+    public static DnsFailoverOptions FromEnvironment(Func<string, string?> value, Func<string, int, int> readInt)
+        => new(
+            value("AWG_DNS_RECORD_NAME"),
+            readInt("AWG_DNS_TTL", 60),
+            value("AWG_CLOUDFLARE_API_TOKEN"),
+            value("AWG_CLOUDFLARE_ZONE_ID"));
 }

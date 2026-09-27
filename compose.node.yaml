@@ -37,6 +37,10 @@ services:
       AWG_POLL_INTERVAL_SECONDS: "${AWG_POLL_INTERVAL_SECONDS:-20}"
       # Binds on the host in this mode; change it if 8081 is taken.
       AWG_HEALTH_URL: "${AWG_HEALTH_URL:-http://127.0.0.1:8081}"
+      # The agent discovers its own public address and reports it, which is what the panel points
+      # the failover record at. Set this only if it cannot - a static NAT in front of the server,
+      # say, or a host with no route to the echo services.
+      AWG_PUBLIC_IP: "${AWG_PUBLIC_IP:-}"
     volumes:
       - awg-node-state:/etc/awg-node
       - awg-node-config:/etc/amnezia/amneziawg

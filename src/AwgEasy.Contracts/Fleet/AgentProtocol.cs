@@ -25,6 +25,12 @@ public sealed record EnrollResponse(
     string ControlSigningPublicKey,
     string ControlSigningKeyId);
 
+/// <param name="PublicIp">
+/// The address this node believes it is reachable at, discovered from outside. The control plane
+/// uses it as the target of the DNS record clients follow, so a node that could not determine it
+/// reports null rather than a guess. Unlike the bundle this report is not signed content shared
+/// byte for byte, so an older agent simply omits the field - no fleet-wide upgrade is involved.
+/// </param>
 public sealed record NodeStatusReport(
     long AppliedRevision,
     bool InterfaceUp,
@@ -34,7 +40,8 @@ public sealed record NodeStatusReport(
     PeerStatus[] Peers,
     NodeMetrics? Metrics,
     string? LastError,
-    int BundleSchemaVersion = 0);
+    int BundleSchemaVersion = 0,
+    string? PublicIp = null);
 
 /// <summary>
 /// Traffic counters are reported per public key. The node does not know which client a key

@@ -2,7 +2,7 @@
 # Installs the awg-easy node agent and enrolls it with a control plane.
 #
 #   curl -fsSL https://panel.example.com/install.sh | sh -s -- \
-#       --url https://panel.example.com --token <token>
+#       --url https://panel.example.com --token <token> [--public-ip 1.2.3.4]
 #
 # Re-running is safe: it upgrades the agent in place and keeps the node's identity, so the
 # tunnel is not disturbed.
@@ -10,6 +10,9 @@ set -eu
 
 CONTROL_URL=""
 ENROLLMENT_TOKEN=""
+# Only for a server whose own public address the agent cannot discover - behind a static NAT, or
+# with no route out to an echo service. Left empty, the agent finds it and reports it by itself.
+PUBLIC_IP=""
 IMAGE="${AWG_NODE_IMAGE:-dihasi/awg-node:latest}"
 STATE_DIR="/etc/awg-node"
 
@@ -18,6 +21,7 @@ while [ $# -gt 0 ]; do
         --url)   CONTROL_URL="$2"; shift 2 ;;
         --token) ENROLLMENT_TOKEN="$2"; shift 2 ;;
         --image) IMAGE="$2"; shift 2 ;;
+        --public-ip) PUBLIC_IP="$2"; shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -68,6 +72,7 @@ docker run -d \
     -e AWG_CONTROL_URL="$CONTROL_URL" \
     -e AWG_ENROLLMENT_TOKEN="$ENROLLMENT_TOKEN" \
     -e AWG_NODE_STATE_PATH="$STATE_DIR" \
+    -e AWG_PUBLIC_IP="$PUBLIC_IP" \
     -v "$STATE_DIR":"$STATE_DIR" \
     -v awg-node-config:/etc/amnezia/amneziawg \
     "$IMAGE"

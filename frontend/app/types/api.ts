@@ -95,6 +95,10 @@ export type Node = {
   name: string
   hostname?: string | null
   endpointHost?: string | null
+  /** Where the agent found itself to be reachable. Null until it has reported once. */
+  publicIp?: string | null
+  /** The one node the failover DNS record currently points at. */
+  isActive: boolean
   status: 'provisioning' | 'healthy' | 'degraded' | 'down' | 'retired'
   appliedRevision: number
   fleetRevision: number
@@ -108,6 +112,21 @@ export type Node = {
   lastError?: string | null
   revoked: boolean
   enrolledAt: string
+}
+
+export type DnsStatus = {
+  provider: string
+  providerConfigured: boolean
+  recordName: string
+  recordType: string
+  ttl: number
+  activeNodeId?: string | null
+  activeNodeName?: string | null
+  targetAddress?: string | null
+  resolvedAddresses: string[]
+  matches: boolean
+  activatedAt?: string | null
+  warning?: string | null
 }
 
 export type EnrollmentToken = {

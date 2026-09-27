@@ -10,8 +10,10 @@ fleet design is **seamless failover**: when a node is blocked or dies, traffic m
 node without reissuing a single client config.
 
 The project replaced a single-server panel with this architecture. Phase 1 (multi-server with
-manual switchover) is complete. Phase 2 (health probes, blocked-vs-down detection, automatic
-failover) is not started.
+manual switchover) is complete: the panel picks the active node and moves the DNS record clients
+follow, through Cloudflare when a token is configured. Phase 2 (health probes, blocked-vs-down
+detection, automatic failover) is not started - what is missing is the judgement about when to
+switch, not the switch itself.
 
 The predecessor is preserved at tag `v0.9-standalone` and is no longer in the tree. When touching
 the legacy import path, that tag is where its `state.json` format is defined.
@@ -32,7 +34,7 @@ scripts/install.sh       Node enrollment one-liner, served by Control at /instal
 
 ```bash
 dotnet build Awg-easy.sln          # whole solution
-dotnet test Awg-easy.sln           # 105 tests, all must pass
+dotnet test Awg-easy.sln           # 137 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
 cd frontend && pnpm run generate   # static build into .output/public
@@ -109,6 +111,32 @@ nonce rides in that padding), and `RejectAfterTime` must stay above `RekeyAfterT
 import path validates too, and drops an unusable profile with a warning rather than poisoning the
 fleet with it.
 
+**Switching the active node is not a fleet change.** Failover repoints one DNS record; every
+client config already names that host and pins the fleet public key, so the same key, subnet and
+obfuscation profile answer at a different address. Nothing is reissued and no node re-applies
+anything, so `POST /nodes/{id}/activate` deliberately does not bump the revision. If you ever find
+yourself bumping it there, the model has drifted.
+
+**The stored active node means "the record points here".** `FleetRepository.SetActiveNode` is
+written only after the provider confirms the edit; a provider that refuses leaves the previous
+active node in place and the call fails. A panel that claims a node is active while the record
+still answers with another one is worse than no claim at all - it is the one fact an operator
+checks under pressure. `DnsStatusResponse.Matches` is the second opinion, resolved live, and it is
+advisory: the panel's own resolver caches like any other.
+
+**A node's public address comes from the node.** The agent asks an outside echo service and
+reports the answer. Do not switch this to the source address of the agent's request - a
+TLS-terminating proxy or CDN in front of the panel replaces it, and the panel would then point DNS
+at the CDN. A failed lookup reports null and the stored address is kept (`COALESCE` in
+`RecordStatus`), because forgetting an address over one flaky lookup drops that node out of the
+failover rotation. `PublicIpAddress` rejects anything unroutable, so a NAT-ed answer never becomes
+a DNS target; an explicit `AWG_PUBLIC_IP` bypasses that check on purpose.
+
+**Status-report fields are not bundle fields.** `NodeStatusReport` is not signed content shared
+byte for byte, so adding an optional field there needs no synchronized fleet upgrade: an older
+agent omits it and reads as null. The bundle rules above still apply to anything inside
+`DesiredStateBundle`.
+
 **Bump the fleet revision for anything that changes what a node runs.** Client create/delete/
 enable/disable and obfuscation changes bump it. Renaming a client deliberately does not — it
 changes no peer material.
@@ -178,8 +206,14 @@ never assert on a specific allocated address — assert on what the API returned
 - The pair has only been exercised in containers on one host, never across real servers.
 - The frontend has no automated tests.
 - `Microsoft.OpenApi` 2.0.0 arrives transitively with a known high-severity advisory (NU1903).
-- Phase 2 (external probes, blocked-vs-down detection, DNS/floating-IP failover, notifications)
-  is designed but not built. Failover is manual today.
+- Phase 2 (external probes, blocked-vs-down detection, notifications) is designed but not built.
+  Failover is manual today: an operator decides, and `DnsFailoverService.ActivateAsync` is what a
+  probe would call in its place.
+- Only Cloudflare is implemented behind `IDnsRecordUpdater`. Without a token the panel records the
+  active node and leaves the record to the operator; a floating-IP provider would be a third
+  implementation of the same interface.
+- Cloudflare is driven by a name lookup on every switch, so a zone holding several records of the
+  same name takes the first. Nothing checks that the zone is the one the endpoint host belongs to.
 - A node's firewall rules are only applied by `PostUp`, so they are installed once when the
   interface comes up and never reconciled. `awg syncconf`, which every later revision goes
   through, does not run hooks. A flushed rule or a changed egress interface leaves a tunnel that

@@ -30,6 +30,13 @@ builder.Services.AddSingleton<AwgRuntime>();
 builder.Services.AddSingleton<AwgInterface>();
 builder.Services.AddSingleton<NodeHealth>();
 builder.Services.AddHttpClient<ControlPlaneClient>(client => client.Timeout = TimeSpan.FromSeconds(20));
+builder.Services.AddHttpClient<PublicIpResolver>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(10);
+    // These services answer with one short line. Capping the buffer means a misconfigured URL that
+    // serves a whole web page is a failed lookup rather than something the agent reads into memory.
+    client.MaxResponseContentBufferSize = 4096;
+});
 builder.Services.AddHostedService<ReconcileService>();
 
 var app = builder.Build();

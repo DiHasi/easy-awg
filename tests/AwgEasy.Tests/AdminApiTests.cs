@@ -18,6 +18,7 @@ public class AdminAuthTests(ControlPlaneFixture fixture) : IClassFixture<Control
     [InlineData("/api/clients/stats")]
     [InlineData("/api/fleet")]
     [InlineData("/api/nodes")]
+    [InlineData("/api/dns")]
     [InlineData("/api/events")]
     public async Task Admin_endpoints_reject_anonymous_callers(string path)
     {

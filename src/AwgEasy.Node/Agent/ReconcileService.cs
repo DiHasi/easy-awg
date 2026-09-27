@@ -18,6 +18,7 @@ public sealed class ReconcileService(
     AwgInterface awgInterface,
     AwgRuntime runtime,
     ControlPlaneClient controlPlane,
+    PublicIpResolver publicIp,
     NodeHealth health,
     ILogger<ReconcileService> logger) : BackgroundService
 {
@@ -207,6 +208,11 @@ public sealed class ReconcileService(
         var status = await runtime.GetStatusAsync(cancellationToken);
         health.RecordInterface(status.IsRunning, status.Backend);
 
+        // Looked up here rather than on its own timer: the address is only ever wanted alongside a
+        // status report, and the resolver decides on its own when the cached answer is stale.
+        var address = await publicIp.GetAsync(cancellationToken);
+        health.RecordPublicIp(address);
+
         var report = new NodeStatusReport(
             identity.AppliedRevision,
             status.IsRunning,
@@ -216,7 +222,8 @@ public sealed class ReconcileService(
             peers,
             Metrics: null,
             health.LastError,
-            DesiredStateBundle.CurrentSchemaVersion);
+            DesiredStateBundle.CurrentSchemaVersion,
+            address);
 
         await controlPlane.ReportStatusAsync(identity, report, cancellationToken);
     }

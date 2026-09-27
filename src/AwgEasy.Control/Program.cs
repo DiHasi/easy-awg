@@ -60,6 +60,28 @@ builder.Services.AddSingleton<AdminAccounts>();
 builder.Services.AddSingleton<EnrollmentService>();
 builder.Services.AddSingleton<AgentAuthenticator>();
 builder.Services.AddSingleton<LegacyStateImporter>();
+// Scoped, not a singleton: the Cloudflare updater is a typed HttpClient, and holding one for the
+// life of the process would pin its handler - and with it the resolved address of the API - forever.
+builder.Services.AddScoped<DnsFailoverService>();
+builder.Services.AddSingleton<IHostAddressResolver, SystemHostAddressResolver>();
+
+// The provider is decided at startup from what is configured, so an unconfigured panel still
+// switches nodes - it just tells the operator which record to edit instead of editing it.
+if (options.Dns.CloudflareConfigured)
+{
+    builder.Services.AddHttpClient<IDnsRecordUpdater, CloudflareDnsUpdater>(client =>
+    {
+        client.BaseAddress = new Uri("https://api.cloudflare.com/client/v4/");
+        client.Timeout = TimeSpan.FromSeconds(15);
+        // The token stays in the environment and is attached here, so nothing else has to carry it.
+        client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", options.Dns.CloudflareApiToken);
+    });
+}
+else
+{
+    builder.Services.AddSingleton<IDnsRecordUpdater, ManualDnsRecordUpdater>();
+}
 
 var app = builder.Build();
 

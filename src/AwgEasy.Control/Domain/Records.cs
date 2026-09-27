@@ -46,6 +46,7 @@ public sealed record NodeRecord(
     int BundleSchemaVersion,
     string? EgressInterface,
     int? Mtu,
+    string? PublicIp,
     DateTimeOffset? LastSeenAt,
     string? LastError,
     bool Revoked,

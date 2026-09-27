@@ -27,6 +27,13 @@ services:
       AWG_ADMIN_PASSWORD: "${AWG_ADMIN_PASSWORD:-}"
       # One-shot adoption of an existing single-server deployment; point at its state.json.
       AWG_IMPORT_LEGACY_STATE: "${AWG_IMPORT_LEGACY_STATE:-}"
+      # Manual failover. With a Cloudflare token the panel moves the record itself; without one it
+      # records which node is active and shows you the record to set.
+      AWG_CLOUDFLARE_API_TOKEN: "${AWG_CLOUDFLARE_API_TOKEN:-}"
+      AWG_CLOUDFLARE_ZONE_ID: "${AWG_CLOUDFLARE_ZONE_ID:-}"
+      # Defaults to AWG_ENDPOINT_HOST. The TTL is what limits how fast clients follow a switch.
+      AWG_DNS_RECORD_NAME: "${AWG_DNS_RECORD_NAME:-}"
+      AWG_DNS_TTL: "${AWG_DNS_TTL:-60}"
     volumes:
       - awg-control-state:/etc/awg-control
 

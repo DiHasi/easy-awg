@@ -36,11 +36,15 @@ public sealed record FleetResponse(
     int ClientsCount,
     int NodesCount);
 
+/// <param name="PublicIp">Where this node says it is reachable, as discovered by the agent itself.</param>
+/// <param name="IsActive">True for the one node the failover DNS record currently points at.</param>
 public sealed record NodeResponse(
     string Id,
     string Name,
     string? Hostname,
     string? EndpointHost,
+    string? PublicIp,
+    bool IsActive,
     string Status,
     long AppliedRevision,
     long FleetRevision,
@@ -55,15 +59,37 @@ public sealed record NodeResponse(
     bool Revoked,
     DateTimeOffset EnrolledAt)
 {
-    public static NodeResponse From(NodeRecord node, long fleetRevision)
+    public static NodeResponse From(NodeRecord node, long fleetRevision, string? activeNodeId)
         => new(
-            node.Id, node.Name, node.Hostname, node.EndpointHost, node.Status,
+            node.Id, node.Name, node.Hostname, node.EndpointHost,
+            node.PublicIp, string.Equals(node.Id, activeNodeId, StringComparison.Ordinal),
+            node.Status,
             node.AppliedRevision, fleetRevision, node.AppliedRevision == fleetRevision,
             node.InterfaceUp, node.Backend, node.AgentVersion,
             node.BundleSchemaVersion,
             node.BundleSchemaVersion >= DesiredStateBundle.CurrentSchemaVersion,
             node.LastSeenAt, node.LastError, node.Revoked, node.EnrolledAt);
 }
+
+/// <summary>
+/// The state of manual failover: which node the record points at, and whether the world agrees.
+/// </summary>
+/// <param name="ProviderConfigured">False means the record is the operator&apos;s to edit by hand.</param>
+/// <param name="ResolvedAddresses">What the panel&apos;s own resolver currently answers with.</param>
+/// <param name="Matches">Whether that answer is the active node&apos;s address.</param>
+public sealed record DnsStatusResponse(
+    string Provider,
+    bool ProviderConfigured,
+    string RecordName,
+    string RecordType,
+    int Ttl,
+    string? ActiveNodeId,
+    string? ActiveNodeName,
+    string? TargetAddress,
+    string[] ResolvedAddresses,
+    bool Matches,
+    DateTimeOffset? ActivatedAt,
+    string? Warning);
 
 public sealed record CreateNodeRequest(string Name, string? EndpointHost, string? EgressInterface, int? Mtu);
 

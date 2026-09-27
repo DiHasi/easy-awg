@@ -36,6 +36,45 @@ public sealed class FakeKeyGenerator : IAwgKeyGenerator
 }
 
 /// <summary>
+/// Stand-in DNS provider. Records what the panel asked for instead of editing a real zone, and can
+/// be told to refuse, which is the case that must never leave the panel claiming a node is active.
+/// </summary>
+public sealed class RecordingDnsUpdater : IDnsRecordUpdater
+{
+    public string ProviderName => "test";
+
+    public bool IsConfigured { get; set; } = true;
+
+    public DnsUpdateOutcome Outcome { get; set; } = DnsUpdateOutcome.Applied;
+
+    public List<DnsRecordTarget> Applied { get; } = [];
+
+    public DnsRecordTarget? Last => Applied.Count == 0 ? null : Applied[^1];
+
+    public Task<DnsUpdateResult> PointAsync(DnsRecordTarget target, CancellationToken cancellationToken)
+    {
+        if (Outcome == DnsUpdateOutcome.Failed)
+        {
+            return Task.FromResult(new DnsUpdateResult(
+                DnsUpdateOutcome.Failed,
+                Error: new ApiError("dns_update_failed", "The stand-in provider was told to refuse.")));
+        }
+
+        Applied.Add(target);
+        return Task.FromResult(new DnsUpdateResult(Outcome, "recorded"));
+    }
+}
+
+/// <summary>Keeps real name resolution out of the suite: what the panel sees is what a test says.</summary>
+public sealed class StubHostAddressResolver : IHostAddressResolver
+{
+    public string[] Addresses { get; set; } = [];
+
+    public Task<string[]> ResolveAsync(string name, CancellationToken cancellationToken)
+        => Task.FromResult(Addresses);
+}
+
+/// <summary>
 /// Hosts the real control plane against a throwaway SQLite file so the agent protocol can be
 /// exercised end to end, rather than mocked and assumed.
 /// </summary>
@@ -43,6 +82,10 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<ControlPlaneEntr
 {
     public const string AdminUser = "admin";
     public const string AdminPassword = "correct-horse-battery-staple";
+
+    public RecordingDnsUpdater Dns { get; } = new();
+
+    public StubHostAddressResolver Resolver { get; } = new();
 
     private readonly string _databasePath = Path.Combine(
         Path.GetTempPath(),
@@ -66,10 +109,17 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<ControlPlaneEntr
                 BundleLifetime: TimeSpan.FromMinutes(15),
                 BootstrapAdminUser: AdminUser,
                 BootstrapAdminPassword: AdminPassword,
-                LegacyStateImportPath: null));
+                LegacyStateImportPath: null,
+                Dns: new DnsFailoverOptions(RecordName: null, Ttl: 60, CloudflareApiToken: null, CloudflareZoneId: null)));
 
             services.RemoveAll<IAwgKeyGenerator>();
             services.AddSingleton<IAwgKeyGenerator, FakeKeyGenerator>();
+
+            services.RemoveAll<IDnsRecordUpdater>();
+            services.AddSingleton<IDnsRecordUpdater>(Dns);
+
+            services.RemoveAll<IHostAddressResolver>();
+            services.AddSingleton<IHostAddressResolver>(Resolver);
         });
 
         return base.CreateHost(builder);

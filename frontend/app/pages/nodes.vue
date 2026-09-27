@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { EnrollmentToken, Node } from '~/types/api'
+import type { DnsStatus, EnrollmentToken, Node } from '~/types/api'
 
 definePageMeta({ middleware: 'auth' })
 
@@ -7,6 +7,7 @@ const api = useControlApi()
 const toast = useToast()
 
 const nodes = ref<Node[]>([])
+const dns = ref<DnsStatus | null>(null)
 const loading = ref(true)
 const errorMessage = ref<string | null>(null)
 const actionId = ref<string | null>(null)
@@ -23,13 +24,68 @@ const healthyCount = computed(() => nodes.value.filter(node => node.status === '
 
 async function loadNodes() {
   try {
-    nodes.value = await api.get<Node[]>('/nodes')
+    // Loaded together: which node is active is DNS state, and showing the list without it would
+    // leave the page saying nothing about where clients are actually going.
+    const [loaded, status] = await Promise.all([
+      api.get<Node[]>('/nodes'),
+      api.get<DnsStatus>('/dns')
+    ])
+
+    nodes.value = loaded
+    dns.value = status
     errorMessage.value = null
   } catch (error) {
     errorMessage.value = describeError(error, 'Failed to load nodes.')
   } finally {
     loading.value = false
   }
+}
+
+async function activateNode(node: Node) {
+  if (!node.publicIp) {
+    toast.add({
+      title: 'No address reported yet',
+      description: `${node.name} has not told the panel where it is reachable, so there is nothing to point DNS at.`,
+      color: 'warning',
+      icon: 'i-lucide-circle-alert'
+    })
+    return
+  }
+
+  const record = dns.value ? `${dns.value.recordName} ${dns.value.recordType}` : 'the failover record'
+  const ttl = dns.value ? ` Clients move over as resolvers expire the old answer, up to ${dns.value.ttl}s.` : ''
+  if (!confirm(`Point ${record} at "${node.name}" (${node.publicIp})?${ttl}`)) {
+    return
+  }
+
+  actionId.value = node.id
+
+  try {
+    dns.value = await api.post<DnsStatus>(`/nodes/${node.id}/activate`)
+    await loadNodes()
+
+    toast.add({
+      title: `${node.name} is now active`,
+      description: dns.value?.providerConfigured
+        ? undefined
+        : `Set ${dns.value?.recordName} ${dns.value?.recordType} to ${node.publicIp} at your DNS provider.`,
+      icon: 'i-lucide-check',
+      color: 'success'
+    })
+  } catch (error) {
+    toast.add({ title: 'Could not switch over', description: describeError(error, ''), color: 'error', icon: 'i-lucide-circle-alert' })
+  } finally {
+    actionId.value = null
+  }
+}
+
+async function copyRecord() {
+  if (!dns.value?.targetAddress) {
+    return
+  }
+
+  await navigator.clipboard.writeText(`${dns.value.recordName} ${dns.value.ttl} IN ${dns.value.recordType} ${dns.value.targetAddress}`)
+  toast.add({ title: 'Copied', icon: 'i-lucide-check', color: 'success' })
 }
 
 async function issueToken() {
@@ -199,6 +255,81 @@ onBeforeUnmount(() => {
         :description="errorMessage"
       />
 
+      <section
+        v-if="dns"
+        class="rounded-lg border border-default bg-default p-4"
+      >
+        <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2">
+              <h2 class="text-base font-medium text-highlighted">
+                Failover record
+              </h2>
+              <UBadge
+                color="neutral"
+                variant="subtle"
+              >
+                {{ dns.providerConfigured ? dns.provider : 'manual' }}
+              </UBadge>
+              <!--
+                The record answering with something other than the active node is the normal state
+                for a minute after a switch, and the abnormal state after that - either way it is
+                the one thing an operator needs to see while traffic moves.
+              -->
+              <UBadge
+                v-if="dns.targetAddress"
+                :color="dns.matches ? 'success' : 'warning'"
+                variant="subtle"
+                :icon="dns.matches ? 'i-lucide-check' : 'i-lucide-clock'"
+              >
+                {{ dns.matches ? 'resolving here' : 'not resolving here yet' }}
+              </UBadge>
+            </div>
+
+            <p class="mt-1 break-all font-mono text-sm text-default">
+              {{ dns.recordName }} {{ dns.recordType }} → {{ dns.targetAddress ?? 'unset' }}
+              <span class="text-muted">· TTL {{ dns.ttl }}s</span>
+            </p>
+
+            <p class="mt-1 text-sm text-muted">
+              <span v-if="dns.activeNodeName">active node {{ dns.activeNodeName }}</span>
+              <span v-else>no active node yet</span>
+              <span v-if="dns.activatedAt"> · switched {{ relativeTime(dns.activatedAt) }}</span>
+              <span v-if="dns.resolvedAddresses.length"> · resolves to {{ dns.resolvedAddresses.join(', ') }}</span>
+            </p>
+          </div>
+
+          <UButton
+            v-if="!dns.providerConfigured && dns.targetAddress"
+            icon="i-lucide-copy"
+            color="neutral"
+            variant="subtle"
+            class="shrink-0"
+            @click="copyRecord"
+          >
+            Copy record
+          </UButton>
+        </div>
+
+        <UAlert
+          v-if="dns.warning"
+          class="mt-3"
+          color="warning"
+          variant="subtle"
+          icon="i-lucide-triangle-alert"
+          :description="dns.warning"
+        />
+
+        <p
+          v-if="!dns.providerConfigured"
+          class="mt-3 text-sm text-muted"
+        >
+          No DNS provider is configured, so switching records the active node here and leaves the
+          record to you. Set <code class="font-mono">AWG_CLOUDFLARE_API_TOKEN</code> and
+          <code class="font-mono">AWG_CLOUDFLARE_ZONE_ID</code> on the panel to have it edited for you.
+        </p>
+      </section>
+
       <div class="overflow-hidden rounded-lg border border-default bg-default">
         <div
           v-if="loading"
@@ -259,6 +390,14 @@ onBeforeUnmount(() => {
                   {{ node.revoked ? 'revoked' : node.status }}
                 </UBadge>
                 <UBadge
+                  v-if="node.isActive"
+                  color="primary"
+                  variant="subtle"
+                  icon="i-lucide-globe"
+                >
+                  active
+                </UBadge>
+                <UBadge
                   v-if="!node.inSync && !node.revoked"
                   color="warning"
                   variant="subtle"
@@ -282,8 +421,16 @@ onBeforeUnmount(() => {
               </div>
 
               <p class="mt-1 text-sm text-muted">
-                <span v-if="node.hostname">{{ node.hostname }} · </span>
-                seen {{ relativeTime(node.lastSeenAt) }}
+                <span
+                  v-if="node.publicIp"
+                  class="font-mono text-default"
+                >{{ node.publicIp }}</span>
+                <span
+                  v-else
+                  class="italic"
+                >address unknown</span>
+                <span v-if="node.hostname"> · {{ node.hostname }}</span>
+                · seen {{ relativeTime(node.lastSeenAt) }}
                 <span v-if="node.backend"> · {{ node.backend }}</span>
                 <span v-if="node.agentVersion"> · agent {{ node.agentVersion }}</span>
               </p>
@@ -297,6 +444,15 @@ onBeforeUnmount(() => {
             </div>
 
             <div class="flex shrink-0 gap-2">
+              <UButton
+                v-if="!node.isActive && !node.revoked"
+                icon="i-lucide-globe"
+                :disabled="!node.publicIp"
+                :loading="actionId === node.id"
+                @click="activateNode(node)"
+              >
+                Make active
+              </UButton>
               <UButton
                 v-if="!node.revoked"
                 icon="i-lucide-ban"

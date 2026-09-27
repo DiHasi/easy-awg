@@ -52,6 +52,12 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
         // older one, so it is never handed settings its AmneziaWG build would reject.
         EnsureColumn(connection, "nodes", "bundle_schema_version", "INTEGER NOT NULL DEFAULT 1");
 
+        // Both added with DNS failover. A node fills its address in on the next status report, and
+        // no fleet has an active node until an operator picks one, so NULL is the honest start.
+        EnsureColumn(connection, "nodes", "public_ip", "TEXT NULL");
+        EnsureColumn(connection, "fleet", "active_node_id", "TEXT NULL");
+        EnsureColumn(connection, "fleet", "active_node_set_at", "TEXT NULL");
+
         if (!OperatingSystem.IsWindows() && File.Exists(options.DatabasePath))
         {
             // The database holds the fleet private key: never group- or world-readable.
@@ -91,6 +97,8 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             endpoint_host        TEXT    NOT NULL,
             obfuscation_json     TEXT    NULL,
             revision             INTEGER NOT NULL,
+            active_node_id       TEXT    NULL,
+            active_node_set_at   TEXT    NULL,
             created_at           TEXT    NOT NULL,
             updated_at           TEXT    NOT NULL
         );
@@ -125,6 +133,7 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             bundle_schema_version INTEGER NOT NULL DEFAULT 1,
             egress_interface  TEXT    NULL,
             mtu               INTEGER NULL,
+            public_ip         TEXT    NULL,
             last_seen_at      TEXT    NULL,
             last_error        TEXT    NULL,
             revoked           INTEGER NOT NULL DEFAULT 0,
