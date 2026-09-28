@@ -154,6 +154,25 @@ changes no peer material.
 detected at runtime. The old code assumed `eth0`, which silently broke NAT on hosts using `ens3`
 or `enp1s0`: the tunnel came up, peers handshook, and no traffic reached the internet.
 
+**`awg syncconf` applies the device, not the interface.** It carries keys, listen port,
+obfuscation and peers. The address, the MTU and the `PostUp`/`PostDown` hooks belong to
+awg-quick, and `awg-quick strip` removes them before syncconf ever sees them. So an interface
+that outlives the config that created it — a node re-enrolled into a fleet on a different subnet,
+most of all — keeps the old address forever while the agent reports every revision as applied,
+and the panel shows it healthy and in sync. What it actually does is decrypt client packets and
+drop every one for failing the `AllowedIPs` check: `received` climbs, `sent` stays at zero.
+`AwgInterface` therefore compares the running address and MTU against the bundle before it
+chooses a path, and takes the interface down *before* overwriting the config file, so the old
+`PostDown` withdraws the rules its own `PostUp` installed. Anything else you add that syncconf
+cannot apply belongs in that comparison too.
+
+**The node's firewall rules are checked on every apply, not just installed by `PostUp`.** The
+hooks run only at bring-up, and syncconf runs no hooks, so a rule flushed by a Docker daemon
+restart — or an interface that was already up when the agent arrived — would otherwise never come
+back. `NodeFirewall.Rules` is the single list both the hooks and the `iptables -C` check are
+built from; keep it that way, or the check stops matching what the hook wrote and every apply
+appends a duplicate.
+
 ## Platform notes
 
 **AOT is asymmetric and deliberate.** `AwgEasy.Node` is AOT-published (it ships to every server);
@@ -230,7 +249,6 @@ never assert on a specific allocated address — assert on what the API returned
   implementation of the same interface.
 - Cloudflare is driven by a name lookup on every switch, so a zone holding several records of the
   same name takes the first. Nothing checks that the zone is the one the endpoint host belongs to.
-- A node's firewall rules are only applied by `PostUp`, so they are installed once when the
-  interface comes up and never reconciled. `awg syncconf`, which every later revision goes
-  through, does not run hooks. A flushed rule or a changed egress interface leaves a tunnel that
-  is up, healthy and in sync, and carries no traffic.
+- A changed egress interface leaves the previous `MASQUERADE` rule behind. The agent installs
+  the new one, so traffic flows, but nothing withdraws the old rule until the interface is next
+  brought down through `awg-quick`.

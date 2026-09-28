@@ -7,6 +7,12 @@ public sealed record AwgCommandStatus(string Command, int ExitCode, string Outpu
 
 public sealed record AwgToolStatus(string? Awg, string? AwgQuick, string? AmneziawgGo, string? UserspaceImplementation);
 
+/// <summary>
+/// What the running interface actually is, as opposed to what its config file says. The two part
+/// company whenever the interface outlives the configuration that created it.
+/// </summary>
+public sealed record AwgLinkState(string? Address, int? Mtu);
+
 public sealed record AwgRuntimeStatus(
     string InterfaceName,
     bool IsRunning,
@@ -27,6 +33,57 @@ public sealed class AwgRuntime(NodeOptions options, ILogger<AwgRuntime> logger)
         }
 
         return result.ExitCode == 0;
+    }
+
+    /// <summary>
+    /// Reads the address and MTU the interface is actually carrying. `awg syncconf` applies
+    /// neither, so on a node whose interface predates the current bundle these are the two
+    /// settings that silently stay behind.
+    /// </summary>
+    public async Task<AwgLinkState> GetLinkStateAsync(CancellationToken cancellationToken)
+    {
+        var result = await ProcessRunner.TryRunAsync("ip", ["-4", "addr", "show", "dev", options.InterfaceName], input: null, cancellationToken);
+        if (result is null || result.ExitCode != 0)
+        {
+            logger.LogWarning("Could not read the state of {InterfaceName}; assuming it matches the bundle.", options.InterfaceName);
+            return new AwgLinkState(null, null);
+        }
+
+        return ParseLinkState(result.Output);
+    }
+
+    /// <summary>
+    /// Parses `ip -4 addr show dev awg0`:
+    ///
+    ///   4: awg0: &lt;POINTOPOINT,NOARP,UP,LOWER_UP&gt; mtu 1420 qdisc noqueue state UNKNOWN ...
+    ///       inet 10.8.0.1/24 scope global awg0
+    ///
+    /// A missing address is reported as null rather than guessed at: an interface that is up
+    /// with no address of its own routes nothing, and the caller treats that as a mismatch.
+    /// </summary>
+    internal static AwgLinkState ParseLinkState(string output)
+    {
+        string? address = null;
+        int? mtu = null;
+
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var tokens = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            for (var i = 0; i < tokens.Length - 1; i++)
+            {
+                if (mtu is null && tokens[i] == "mtu" && int.TryParse(tokens[i + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+                {
+                    mtu = parsed;
+                }
+
+                if (address is null && tokens[i] == "inet")
+                {
+                    address = tokens[i + 1];
+                }
+            }
+        }
+
+        return new AwgLinkState(address, mtu);
     }
 
     public async Task<AwgRuntimeStatus> GetStatusAsync(CancellationToken cancellationToken)

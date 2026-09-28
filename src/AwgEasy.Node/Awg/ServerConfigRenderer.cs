@@ -29,8 +29,10 @@ public static class ServerConfigRenderer
         // those describe what an initiator sends, and the node only has to tolerate them.
         builder.AppendTuning(bundle.Obfuscation?.GetDefaults());
 
-        builder.AppendSetting("PostUp", NatRule("-A", egressInterface));
-        builder.AppendSetting("PostDown", NatRule("-D", egressInterface));
+        // `%i` is awg-quick's placeholder for the interface name. The same rules are re-checked
+        // by the agent on every apply, because these hooks run only at bring-up.
+        builder.AppendSetting("PostUp", NodeFirewall.Hook("-A", "%i", egressInterface));
+        builder.AppendSetting("PostDown", NodeFirewall.Hook("-D", "%i", egressInterface));
 
         foreach (var peer in bundle.Peers)
         {
@@ -55,16 +57,4 @@ public static class ServerConfigRenderer
             .Append(" identity-generation=").Append(bundle.Identity.Generation.ToString(CultureInfo.InvariantCulture))
             .Append(" issued=").AppendLine(bundle.IssuedAt.ToString("O", CultureInfo.InvariantCulture));
     }
-
-    /// <summary>
-    /// Both forward directions, not just the one out of the tunnel. The agent runs in Docker, and
-    /// Docker sets the host FORWARD policy to DROP, so a rule for `-i %i` alone lets a client reach
-    /// the internet while every reply is dropped on the way back: the tunnel handshakes, the node
-    /// decrypts and masquerades, and the client still sees nothing. On a host without Docker the
-    /// policy is ACCEPT and the missing rule costs nothing, which is what kept this hidden.
-    /// </summary>
-    private static string NatRule(string op, string egressInterface)
-        => $"iptables {op} FORWARD -i %i -j ACCEPT; "
-            + $"iptables {op} FORWARD -o %i -j ACCEPT; "
-            + $"iptables -t nat {op} POSTROUTING -o {egressInterface} -j MASQUERADE";
 }

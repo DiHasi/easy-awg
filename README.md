@@ -193,7 +193,9 @@ Existing users are not disconnected, because the import preserves the original s
 3. Check that **Server public key** on the Fleet page matches the old one.
 4. Replace the old container on that server with the agent (the install command above).
 5. The agent applies the configuration with `awg syncconf`, so the interface is never brought
-   down and existing tunnels survive.
+   down and existing tunnels survive - unless the subnet or the MTU differs from what the
+   interface is already carrying, which no in-place sync can change. Then it restarts the
+   interface once and says so in its log.
 
 For a fresh panel you can instead point `AWG_IMPORT_LEGACY_STATE` at a mounted `state.json`.
 
@@ -365,12 +367,6 @@ Phase 1 — multi-server with manual switchover — is done. What comes next:
   same interface.
 - **Fleet identity rotation**, so a compromised or seized node is recoverable without rebuilding
   everything by hand.
-- **Converge the node's firewall rules, not just its peers.** The NAT and forwarding rules live in
-  `PostUp`, which only runs when the interface is brought up. Once it is up the agent applies every
-  later revision with `awg syncconf`, which never runs `PostUp` - so a rule someone flushed, or an
-  egress interface that changed under the node, is never restored. The tunnel stays up and carries
-  nothing, and the panel reports the node healthy and in sync throughout. The agent should check
-  the rules it expects on every apply and reinstate them, instead of trusting a one-shot hook.
 
 ## Known gaps
 
@@ -561,7 +557,9 @@ docker rm -f awg-node && rm -rf /etc/awg-node/*
 3. Убедитесь, что **Server public key** на странице Fleet совпадает со старым.
 4. Замените на этом сервере старый контейнер агентом (командой выше).
 5. Агент применит конфигурацию через `awg syncconf` — интерфейс не опускается, существующие
-   туннели переживают переход.
+   туннели переживают переход. Исключение — подсеть или MTU, отличающиеся от того, что интерфейс
+   уже несёт: применить их на живом интерфейсе нельзя, поэтому агент один раз перезапустит его и
+   напишет об этом в лог.
 
 Для чистой панели можно вместо этого указать `AWG_IMPORT_LEGACY_STATE` на смонтированный
 `state.json`.
@@ -736,14 +734,6 @@ awg-node --render-bundle bundle.json --control-key <base64url> --egress ens3
   интерфейсом.
 - **Ротация идентичности флота**, чтобы скомпрометированная или изъятая нода не означала ручную
   пересборку всего.
-- **Сводить не только пиров, но и правила фаервола ноды.** Правила NAT и форвардинга живут в
-  `PostUp`, а он выполняется только при поднятии интерфейса. Дальше агент применяет каждую
-  следующую ревизию через `awg syncconf`, который `PostUp` не запускает, — поэтому смытое правило
-  или сменившийся под нодой egress-интерфейс не восстановятся никогда. Туннель при этом поднят и
-  не несёт ничего, а панель всё это время показывает ноду здоровой и синхронной. Агент должен
-  проверять ожидаемые правила при каждом применении и восстанавливать их, а не полагаться на
-  одноразовый хук.
-
 ## Известные пробелы
 
 - Связка проверена в контейнерах на одной машине, но ещё не на разнесённых серверах.
