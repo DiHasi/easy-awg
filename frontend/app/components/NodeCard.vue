@@ -44,8 +44,13 @@ const menu = computed(() => {
 </script>
 
 <template>
+  <!--
+    `min-w-0` because the endpoint line is `truncate`: nowrap makes this card's min-content the
+    whole address, and a grid or flex item cannot shrink below its min-content. Without it the
+    card pushes the page sideways on a phone rather than ellipsising the address, as intended.
+  -->
   <article
-    class="rounded-lg border bg-default p-3.5 transition-colors"
+    class="min-w-0 rounded-lg border bg-default p-3.5 transition-colors"
     :class="node.isActive && !node.revoked ? 'border-live/60 ring-1 ring-live/25' : 'border-default'"
   >
     <header class="flex items-start gap-2">

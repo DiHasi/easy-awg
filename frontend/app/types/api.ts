@@ -74,6 +74,8 @@ export type ClientStats = {
   transmittedBytes: number
   online: boolean
   nodeId?: string | null
+  /** When the counters were last zeroed in the panel; null means they are lifetime totals. */
+  statsResetAt?: string | null
 }
 
 export type Fleet = {

@@ -194,7 +194,7 @@ public class ClientShareTests(ControlPlaneFixture fixture) : IClassFixture<Contr
         var anonymous = fixture.CreateClient();
 
         var details = await anonymous.GetFromJsonAsync<PublicShareResponse>($"/api/shares/{share.Token}");
-        Assert.Equal("shared-phone", details!.ClientName);
+        Assert.True(details!.ExpiresAt > DateTimeOffset.UtcNow);
 
         var config = await anonymous.GetAsync($"/api/shares/{share.Token}/config");
         config.EnsureSuccessStatusCode();
@@ -205,18 +205,24 @@ public class ClientShareTests(ControlPlaneFixture fixture) : IClassFixture<Contr
     }
 
     [Fact]
-    public async Task A_share_link_reveals_nothing_beyond_the_client_name_and_expiry()
+    public async Task A_share_link_reveals_nothing_beyond_its_expiry()
     {
         var (admin, client) = await ClientAsync("private-details");
 
         var shareResponse = await admin.PostAsync($"/api/clients/{client.Id}/share", null);
         var share = (await shareResponse.Content.ReadFromJsonAsync<ClientShareResponse>())!;
 
-        var payload = await fixture.CreateClient().GetStringAsync($"/api/shares/{share.Token}");
+        var anonymous = fixture.CreateClient();
+        var payload = await anonymous.GetStringAsync($"/api/shares/{share.Token}");
 
         // The lookup endpoint is a preview, not a config dump: no keys, no tunnel address.
         Assert.DoesNotContain(client.PublicKey, payload);
         Assert.DoesNotContain(client.Address, payload);
+        // The name is the operator's own label for this person, not something the link hands over.
+        Assert.DoesNotContain(client.Name, payload, StringComparison.OrdinalIgnoreCase);
+
+        var config = await anonymous.GetAsync($"/api/shares/{share.Token}/config");
+        Assert.DoesNotContain(client.Name, config.Content.Headers.ContentDisposition?.ToString() ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

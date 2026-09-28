@@ -283,7 +283,8 @@ async function copyRecord() {
       </div>
 
       <!-- nodes -->
-      <div class="flex flex-col gap-3">
+      <!-- The grid item here is this column, not the card, so the card's own min-w-0 cannot help. -->
+      <div class="flex min-w-0 flex-col gap-3">
         <div
           v-for="node in nodes"
           :key="node.id"

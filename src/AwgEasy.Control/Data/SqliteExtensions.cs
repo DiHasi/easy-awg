@@ -27,6 +27,12 @@ internal static class SqliteExtensions
 
     public static long GetInt64(this SqliteDataReader reader, string name) => reader.GetInt64(reader.GetOrdinal(name));
 
+    public static long? GetInt64OrNull(this SqliteDataReader reader, string name)
+    {
+        var ordinal = reader.GetOrdinal(name);
+        return reader.IsDBNull(ordinal) ? null : reader.GetInt64(ordinal);
+    }
+
     public static int GetInt32(this SqliteDataReader reader, string name) => reader.GetInt32(reader.GetOrdinal(name));
 
     public static int? GetInt32OrNull(this SqliteDataReader reader, string name)

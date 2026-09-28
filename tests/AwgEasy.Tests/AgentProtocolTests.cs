@@ -213,6 +213,69 @@ public class AgentProtocolTests(ControlPlaneFixture fixture) : IClassFixture<Con
         Assert.Equal(agent.NodeId, clientStats.NodeId);
     }
 
+    // The kernel will not zero a peer counter without tearing the peer down, so a reset is the
+    // panel subtracting from what the node reports. It has to survive the node counting on.
+    [Fact]
+    public async Task Resetting_a_peer_counter_reports_only_the_traffic_that_follows()
+    {
+        var (admin, agentClient, agent) = await EnrolledAgentAsync("node-counters");
+
+        var created = await admin.PostAsJsonAsync("/api/clients", new CreateClientRequest("counted", null));
+        var client = (await created.Content.ReadFromJsonAsync<ClientResponse>())!;
+
+        async Task ReportAsync(long received, long transmitted)
+        {
+            var report = new NodeStatusReport(
+                AppliedRevision: 1,
+                InterfaceUp: true,
+                Backend: "Kernel module",
+                AgentVersion: "test-agent/1.0",
+                ReportedAt: DateTimeOffset.UtcNow,
+                Peers: [new PeerStatus(client.PublicKey, DateTimeOffset.UtcNow, received, transmitted)],
+                Metrics: null,
+                LastError: null,
+                BundleSchemaVersion: DesiredStateBundle.CurrentSchemaVersion);
+
+            var response = await agentClient.SendAsync(agent.SignedRequest(
+                HttpMethod.Post,
+                $"/api/v1/agents/{agent.NodeId}/status",
+                JsonContent.Create(report)));
+
+            response.EnsureSuccessStatusCode();
+        }
+
+        async Task<ClientStatsResponse> ReadAsync()
+        {
+            var stats = (await admin.GetFromJsonAsync<ClientStatsResponse[]>("/api/clients/stats"))!;
+            return stats.Single(s => s.Id == client.Id);
+        }
+
+        await ReportAsync(5_000, 9_000);
+
+        var reset = await admin.PostAsync($"/api/clients/{client.Id}/stats/reset", null);
+        reset.EnsureSuccessStatusCode();
+
+        var afterReset = (await reset.Content.ReadFromJsonAsync<ClientStatsResponse>())!;
+        Assert.Equal(0, afterReset.ReceivedBytes);
+        Assert.Equal(0, afterReset.TransmittedBytes);
+        Assert.NotNull(afterReset.StatsResetAt);
+
+        // The node knows nothing of the reset and keeps counting up from where it was.
+        await ReportAsync(5_400, 9_250);
+
+        var later = await ReadAsync();
+        Assert.Equal(400, later.ReceivedBytes);
+        Assert.Equal(250, later.TransmittedBytes);
+
+        // A node that rebooted starts from zero; everything it reads now is traffic since the
+        // reset, so the baseline has to stop applying rather than swallow it.
+        await ReportAsync(120, 60);
+
+        var afterReboot = await ReadAsync();
+        Assert.Equal(120, afterReboot.ReceivedBytes);
+        Assert.Equal(60, afterReboot.TransmittedBytes);
+    }
+
     // An operator who revokes a node, then deletes it, must not be left with a server that can
     // never rejoin. A fresh token is the authorization to adopt it again.
     [Fact]

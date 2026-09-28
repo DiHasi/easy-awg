@@ -19,15 +19,29 @@ public static class ClientApi
             var stats = nodes.AggregatePeerStats();
             var now = DateTimeOffset.UtcNow;
 
-            return TypedResults.Ok(clients.List().Select(client =>
-            {
-                stats.TryGetValue(client.PublicKey, out var peer);
-                var online = client.Enabled
-                    && peer.Handshake.HasValue
-                    && now - peer.Handshake.Value <= TimeSpan.FromMinutes(3);
+            return TypedResults.Ok(clients.List().Select(client => Stats(client, stats, now)).ToArray());
+        });
 
-                return new ClientStatsResponse(client.Id, peer.Handshake, peer.Rx, peer.Tx, online, peer.NodeId);
-            }).ToArray());
+        // The counters belong to the kernel and cannot be zeroed without tearing the peer down, so
+        // this records where they stand and the panel reports the difference from here on.
+        admin.MapPost("/clients/{id}/stats/reset", (
+            string id,
+            ClientRepository clients,
+            NodeRepository nodes,
+            EventLog events,
+            HttpContext context) =>
+        {
+            var client = clients.Find(id);
+            if (client is null)
+            {
+                return Results.NotFound(new ApiError("client_not_found", "Client was not found."));
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            nodes.ResetPeerCounters(client.PublicKey, now);
+            events.Record("client.stats_reset", $"Traffic counters for {client.Name} reset.", actor: context.User.Identity?.Name);
+
+            return Results.Ok(Stats(client, nodes.AggregatePeerStats(), now));
         });
 
         admin.MapPost("/clients", (
@@ -115,7 +129,7 @@ public static class ClientApi
         admin.MapPost("/clients/{id}/disable", (string id, ClientRepository clients, FleetService fleet, EventLog events, HttpContext context)
             => SetEnabled(id, false, clients, fleet, events, context));
 
-        admin.MapDelete("/clients/{id}", (string id, ClientRepository clients, FleetService fleet, EventLog events, HttpContext context) =>
+        admin.MapDelete("/clients/{id}", (string id, ClientRepository clients, NodeRepository nodes, FleetService fleet, EventLog events, HttpContext context) =>
         {
             var client = clients.Find(id);
             if (client is null || !clients.Delete(id))
@@ -123,6 +137,7 @@ public static class ClientApi
                 return Results.NotFound(new ApiError("client_not_found", "Client was not found."));
             }
 
+            nodes.ForgetPeer(client.PublicKey);
             fleet.BumpRevision($"client {client.Name} deleted");
             events.Record("client.deleted", $"Client {client.Name} deleted.", actor: context.User.Identity?.Name);
             return Results.NoContent();
@@ -160,6 +175,21 @@ public static class ClientApi
             var config = ClientConfigRenderer.Render(current, client, current.EndpointHost);
             return Results.File(Encoding.UTF8.GetBytes(config), "text/plain; charset=utf-8", ClientConfigRenderer.FileName(client.Name));
         });
+    }
+
+    /// <summary>A peer with no handshake in three minutes is not carrying traffic: AmneziaWG rekeys
+    /// well inside that, so a longer silence means the tunnel is idle or gone.</summary>
+    private static ClientStatsResponse Stats(
+        ClientRecord client,
+        IReadOnlyDictionary<string, PeerTotals> stats,
+        DateTimeOffset now)
+    {
+        stats.TryGetValue(client.PublicKey, out var peer);
+        var online = client.Enabled
+            && peer.Handshake.HasValue
+            && now - peer.Handshake.Value <= TimeSpan.FromMinutes(3);
+
+        return new ClientStatsResponse(client.Id, peer.Handshake, peer.Rx, peer.Tx, online, peer.NodeId, peer.ResetAt);
     }
 
     private static IResult SetEnabled(

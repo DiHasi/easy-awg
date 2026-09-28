@@ -226,6 +226,10 @@ signed; it covers a hash of the body. Node revocation is a flag checked per requ
   their exact spelling in mono through `paramField`.
 - Everything under `/api` requires an authenticated admin except `/health`, `/auth/*` and
   `/shares/*`. Do not add an endpoint to the anonymous set without a reason worth stating.
+- A share link belongs to the person receiving the config, not to the operator. It carries no
+  client name - not in the lookup response, not in the config filename - because that label is
+  the operator's own bookkeeping about a person, and it is the one thing the link would leak
+  that the config itself does not.
 
 ## Testing expectations
 

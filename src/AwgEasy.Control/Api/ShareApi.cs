@@ -17,7 +17,7 @@ public static class ShareApi
 
             return client is null
                 ? Results.NotFound(new ApiError("share_not_found", "This link is not valid or has expired."))
-                : Results.Ok(new PublicShareResponse(client.Name, share!.ExpiresAt));
+                : Results.Ok(new PublicShareResponse(share!.ExpiresAt));
         }).AllowAnonymous();
 
         api.MapGet("/shares/{token}/config", (string token, ShareRepository shares, ClientRepository clients, FleetService fleet) =>
@@ -31,7 +31,9 @@ public static class ShareApi
 
             var current = fleet.Current;
             var config = ClientConfigRenderer.Render(current, client, current.EndpointHost);
-            return Results.File(Encoding.UTF8.GetBytes(config), "text/plain; charset=utf-8", ClientConfigRenderer.FileName(client.Name));
+            // Not the client name: the file lands in someone else's downloads folder, and the label
+            // an operator filed them under is not theirs to read.
+            return Results.File(Encoding.UTF8.GetBytes(config), "text/plain; charset=utf-8", "amneziawg.conf");
         }).AllowAnonymous();
     }
 }

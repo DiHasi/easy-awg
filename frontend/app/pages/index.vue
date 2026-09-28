@@ -27,6 +27,8 @@ const useObfuscation = ref(false)
 const editingClient = ref<Client | null>(null)
 const editName = ref('')
 const configClient = ref<Client | null>(null)
+const statsOpen = ref(false)
+const statsClient = ref<Client | null>(null)
 
 type PeerState = 'up' | 'idle' | 'off'
 const filter = ref<'all' | PeerState>('all')
@@ -235,6 +237,25 @@ function openConfig(client: Client) {
   configOpen.value = true
 }
 
+function openStats(client: Client) {
+  statsClient.value = client
+  statsOpen.value = true
+}
+
+/** The node the newest handshake came through, so the modal can name where this peer is. */
+const statsNode = computed(() => {
+  const nodeId = statsClient.value ? stats.value[statsClient.value.id]?.nodeId : null
+  return nodeId ? serving.value.find(node => node.id === nodeId) ?? null : null
+})
+
+function applyStats(updated: ClientStats) {
+  stats.value = { ...stats.value, [updated.id]: updated }
+  // The rate is a delta against the previous sample; comparing the next one against pre-reset
+  // counters would read as one enormous burst.
+  previousStats = null
+  previousAt = null
+}
+
 function openEdit(client: Client) {
   editingClient.value = client
   editName.value = client.name
@@ -302,6 +323,7 @@ async function deleteClient(client: Client) {
 function menuFor(client: Client): DropdownMenuItem[][] {
   return [
     [
+      { label: 'Traffic', icon: 'i-lucide-activity', onSelect: () => openStats(client) },
       { label: 'Rename', icon: 'i-lucide-pencil', onSelect: () => openEdit(client) },
       {
         label: client.enabled ? 'Disable' : 'Enable',
@@ -483,6 +505,21 @@ usePolling(loadStats, 3000)
             <p class="font-mono text-xs text-muted">
               {{ client.address }}<span class="lg:hidden"> · {{ handshake(client) }}</span>
             </p>
+            <!-- The traffic columns do not fit on a phone, so the numbers move here and open the
+                 full picture on a tap. -->
+            <button
+              type="button"
+              class="tabular mt-1 flex items-center gap-2.5 font-mono text-xs text-toned lg:hidden"
+              :aria-label="`Traffic for ${client.name}`"
+              @click="openStats(client)"
+            >
+              <span>↓ {{ formatBytes(stats[client.id]?.transmittedBytes ?? 0) }}</span>
+              <span>↑ {{ formatBytes(stats[client.id]?.receivedBytes ?? 0) }}</span>
+              <UIcon
+                name="i-lucide-activity"
+                class="size-3.5 text-muted"
+              />
+            </button>
           </div>
 
           <div class="hidden lg:block">
@@ -687,6 +724,15 @@ usePolling(loadStats, 3000)
     <PeerConfigModal
       v-model:open="configOpen"
       :client="configClient"
+    />
+
+    <PeerStatsModal
+      v-model:open="statsOpen"
+      :client="statsClient"
+      :stats="statsClient ? stats[statsClient.id] : null"
+      :rate="statsClient ? rates[statsClient.id] : null"
+      :node="statsNode"
+      @reset="applyStats"
     />
 
     <EnrollNodeModal v-model:open="enrollOpen" />

@@ -137,39 +137,101 @@ public sealed class NodeRepository(Database database)
     }
 
     /// <summary>
+    /// Zeroes a peer's counters as the panel reports them, by recording what every node reads for
+    /// it right now. The counters themselves live in the kernel and cannot be reset without
+    /// tearing the peer down, which would drop a live tunnel, so the panel subtracts instead.
+    /// </summary>
+    public void ResetPeerCounters(string publicKey, DateTimeOffset at)
+    {
+        using var connection = database.Open();
+        using var command = connection.Sql(
+            """
+            INSERT INTO peer_stat_baselines (node_id, public_key, received_bytes, transmitted_bytes, reset_at)
+            SELECT node_id, public_key, received_bytes, transmitted_bytes, $at
+              FROM peer_stats
+             WHERE public_key = $publicKey
+            ON CONFLICT (node_id, public_key) DO UPDATE
+               SET received_bytes    = excluded.received_bytes,
+                   transmitted_bytes = excluded.transmitted_bytes,
+                   reset_at          = excluded.reset_at
+            """,
+            ("$publicKey", publicKey),
+            ("$at", at.ToStorage()));
+
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>Drops everything the fleet remembers about a peer. A node stops reporting a deleted
+    /// peer on its next status report, but nothing else would ever clear its baseline.</summary>
+    public void ForgetPeer(string publicKey)
+    {
+        using var connection = database.Open();
+        using var transaction = connection.BeginTransaction();
+
+        foreach (var table in (string[])["peer_stats", "peer_stat_baselines"])
+        {
+            using var delete = connection.Sql($"DELETE FROM {table} WHERE public_key = $publicKey", ("$publicKey", publicKey));
+            delete.Transaction = transaction;
+            delete.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
+    /// <summary>
     /// Aggregates counters across the fleet: a client may be connected through any node, and with
     /// active-active it may even move between them, so the newest handshake wins and byte counters
     /// are summed.
     /// </summary>
-    public IReadOnlyDictionary<string, (DateTimeOffset? Handshake, long Rx, long Tx, string? NodeId)> AggregatePeerStats()
+    public IReadOnlyDictionary<string, PeerTotals> AggregatePeerStats()
     {
         using var connection = database.Open();
-        using var command = connection.Sql("SELECT node_id, public_key, latest_handshake_at, received_bytes, transmitted_bytes FROM peer_stats");
+        using var command = connection.Sql(
+            """
+            SELECT s.node_id, s.public_key, s.latest_handshake_at, s.received_bytes, s.transmitted_bytes,
+                   b.received_bytes AS base_rx, b.transmitted_bytes AS base_tx, b.reset_at
+              FROM peer_stats s
+              LEFT JOIN peer_stat_baselines b
+                     ON b.node_id = s.node_id AND b.public_key = s.public_key
+            """);
         using var reader = command.ExecuteReader();
 
-        var stats = new Dictionary<string, (DateTimeOffset?, long, long, string?)>(StringComparer.Ordinal);
+        var stats = new Dictionary<string, PeerTotals>(StringComparer.Ordinal);
         while (reader.Read())
         {
             var key = reader.GetString("public_key");
             var handshake = reader.GetTimestampOrNull("latest_handshake_at");
-            var rx = reader.GetInt64("received_bytes");
-            var tx = reader.GetInt64("transmitted_bytes");
             var nodeId = reader.GetString("node_id");
+            var resetAt = reader.GetTimestampOrNull("reset_at");
+            var rx = SinceReset(reader.GetInt64("received_bytes"), reader.GetInt64OrNull("base_rx"));
+            var tx = SinceReset(reader.GetInt64("transmitted_bytes"), reader.GetInt64OrNull("base_tx"));
 
             if (stats.TryGetValue(key, out var existing))
             {
-                var newest = existing.Item1 >= handshake ? existing.Item1 : handshake;
-                var newestNode = existing.Item1 >= handshake ? existing.Item4 : nodeId;
-                stats[key] = (newest, existing.Item2 + rx, existing.Item3 + tx, newestNode);
+                var newest = existing.Handshake >= handshake;
+                stats[key] = new PeerTotals(
+                    newest ? existing.Handshake : handshake,
+                    existing.Rx + rx,
+                    existing.Tx + tx,
+                    newest ? existing.NodeId : nodeId,
+                    existing.ResetAt >= resetAt ? existing.ResetAt : resetAt);
             }
             else
             {
-                stats[key] = (handshake, rx, tx, nodeId);
+                stats[key] = new PeerTotals(handshake, rx, tx, nodeId, resetAt);
             }
         }
 
         return stats;
     }
+
+    /// <summary>
+    /// A counter below its own baseline means the device started counting again - the node
+    /// rebooted, or the interface was brought down - so everything it reads now is traffic since
+    /// the reset, and the baseline no longer applies.
+    /// </summary>
+    private static long SinceReset(long reported, long? baseline)
+        => baseline is null || reported < baseline ? reported : reported - baseline.Value;
 
     private static List<NodeRecord> Read(SqliteConnection connection, string sql, params (string Name, object? Value)[] parameters)
     {
@@ -203,6 +265,18 @@ public sealed class NodeRepository(Database database)
         return nodes;
     }
 }
+
+/// <summary>
+/// One client's counters as the whole fleet sees them, already net of any reset.
+/// </summary>
+/// <param name="NodeId">The node that saw the newest handshake - where this peer is right now.</param>
+/// <param name="ResetAt">When an operator last zeroed the counters, or null if never.</param>
+public readonly record struct PeerTotals(
+    DateTimeOffset? Handshake,
+    long Rx,
+    long Tx,
+    string? NodeId,
+    DateTimeOffset? ResetAt);
 
 public static class NodeStatuses
 {

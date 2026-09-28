@@ -100,20 +100,27 @@ public sealed record LoginRequest(string Username, string Password);
 
 public sealed record EventResponse(long Id, DateTimeOffset At, string Kind, string? Actor, string? NodeId, string Message);
 
+/// <param name="ReceivedBytes">Bytes this peer sent into the tunnel, net of any counter reset.</param>
+/// <param name="StatsResetAt">When the counters were last zeroed here, or null if they are lifetime totals.</param>
 public sealed record ClientStatsResponse(
     string Id,
     DateTimeOffset? LatestHandshakeAt,
     long ReceivedBytes,
     long TransmittedBytes,
     bool Online,
-    string? NodeId);
+    string? NodeId,
+    DateTimeOffset? StatsResetAt);
 
 public sealed record ImportResultResponse(int ClientsImported, long Revision, string[] Warnings);
 
 public sealed record ClientShareResponse(string Token, string ClientName, DateTimeOffset ExpiresAt, string Url);
 
-/// <summary>What an anonymous visitor holding a share link is allowed to see: no keys, no address.</summary>
-public sealed record PublicShareResponse(string ClientName, DateTimeOffset ExpiresAt);
+/// <summary>
+/// What an anonymous visitor holding a share link is allowed to see: no keys, no address, and not
+/// the client name either - that label is the operator&apos;s own bookkeeping, and the person on the
+/// other end of the link has no business reading what they were filed under.
+/// </summary>
+public sealed record PublicShareResponse(DateTimeOffset ExpiresAt);
 
 public sealed record HealthResponse(string Status);
 

@@ -176,6 +176,19 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             PRIMARY KEY (node_id, public_key)
         );
 
+        -- What a peer's counters read when an operator last zeroed them in the panel. The kernel
+        -- has no way to reset a peer counter, so "reset" is a subtraction: the totals reported
+        -- here are what the device reports minus this. Kept per node because the nodes count
+        -- independently and restart independently.
+        CREATE TABLE IF NOT EXISTS peer_stat_baselines (
+            node_id           TEXT    NOT NULL,
+            public_key        TEXT    NOT NULL,
+            received_bytes    INTEGER NOT NULL,
+            transmitted_bytes INTEGER NOT NULL,
+            reset_at          TEXT    NOT NULL,
+            PRIMARY KEY (node_id, public_key)
+        );
+
         CREATE TABLE IF NOT EXISTS events (
             id       INTEGER PRIMARY KEY AUTOINCREMENT,
             at       TEXT NOT NULL,

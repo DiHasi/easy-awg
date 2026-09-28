@@ -296,7 +296,11 @@ bundled `amneziawg-go` need nothing beyond the new image.
 
 - **Clients** — create, rename, enable, disable and delete clients; download a config, show a QR
   code, or create a 24-hour share link for someone without an account. Live traffic and handshake
-  data is aggregated across every node.
+  data is aggregated across every node, per client, and the counter can be zeroed from the panel:
+  the kernel will not reset a peer counter without tearing the peer down, so the panel remembers
+  where the counter stood and reports the difference.
+  A share link shows only the QR code, the config and a link to the AmneziaWG build for whatever
+  device opened it - never the name the client is filed under here.
 - **Nodes** — status of each agent, its public address, whether it has picked up the current
   revision, which one clients are currently sent to, enrollment commands, and revocation. Revoking
   a node cuts off its configuration on its very next request.
@@ -663,7 +667,11 @@ userspace, если проверка не прошла. Нодам на встр
 
 - **Clients** — создание, переименование, включение, отключение и удаление клиентов; скачивание
   конфига, QR-код, share-ссылка на 24 часа для того, у кого нет аккаунта. Статистика трафика и
-  handshake агрегируется по всем нодам.
+  handshake агрегируется по всем нодам, по каждому клиенту, и счётчик можно обнулить из панели:
+  ядро не сбрасывает счётчик пира без пересоздания самого пира, поэтому панель запоминает его
+  текущее значение и дальше показывает разницу.
+  Share-страница показывает только QR-код, конфиг и ссылку на сборку AmneziaWG под то устройство,
+  с которого её открыли, — но не имя, под которым клиент записан в панели.
 - **Nodes** — состояние агентов, их внешние адреса, забрали ли они текущую ревизию, куда сейчас
   ходят клиенты, команды подключения и отзыв доступа. Отзыв обрывает выдачу конфигурации со
   следующего же запроса ноды.

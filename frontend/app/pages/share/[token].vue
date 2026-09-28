@@ -5,9 +5,20 @@ import QRCode from 'qrcode'
 definePageMeta({ layout: false })
 
 type PublicShare = {
-  clientName: string
   expiresAt: string
 }
+
+/**
+ * Where to get the client app. AmneziaWG ships per platform, and someone who was handed a link
+ * has no idea which build is theirs - so the page picks, rather than listing five options.
+ */
+const AMNEZIAWG_APPS = {
+  android: { label: 'Get AmneziaWG for Android', url: 'https://play.google.com/store/apps/details?id=org.amnezia.awg' },
+  ios: { label: 'Get AmneziaWG for iPhone', url: 'https://apps.apple.com/app/amneziawg/id6478942365' },
+  macos: { label: 'Get AmneziaWG for macOS', url: 'https://apps.apple.com/app/amneziawg/id6478942365' },
+  linux: { label: 'Get AmneziaWG for Linux', url: 'https://github.com/amnezia-vpn/amneziawg-linux-kernel-module' },
+  windows: { label: 'Get AmneziaWG for Windows', url: 'https://github.com/amnezia-vpn/amneziawg-windows-client/releases/latest' }
+} as const
 
 const route = useRoute()
 const api = useControlApi()
@@ -19,6 +30,29 @@ const errorMessage = ref<string | null>(null)
 const qrDataUrl = ref<string | null>(null)
 
 const configUrl = computed(() => api.url(`/shares/${token.value}/config`))
+
+// Resolved after mount, never during prerender: the static build has no user agent to read, and
+// a Windows link baked into the page would be wrong for most of the people opening it.
+const platform = ref<keyof typeof AMNEZIAWG_APPS>('windows')
+const app = computed(() => AMNEZIAWG_APPS[platform.value])
+
+function detectPlatform(): keyof typeof AMNEZIAWG_APPS {
+  const agent = navigator.userAgent.toLowerCase()
+  if (agent.includes('android')) {
+    return 'android'
+  }
+  if (agent.includes('iphone') || agent.includes('ipad') || agent.includes('ipod')) {
+    return 'ios'
+  }
+  // An iPad on recent iPadOS claims to be a Mac; the App Store listing covers both anyway.
+  if (agent.includes('mac os')) {
+    return 'macos'
+  }
+  if (agent.includes('linux')) {
+    return 'linux'
+  }
+  return 'windows'
+}
 
 // The person opening this is not an operator: their own clock is the one that matters.
 const expiresLocal = computed(() => share.value ? new Date(share.value.expiresAt).toLocaleString() : '')
@@ -38,7 +72,10 @@ async function load() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  platform.value = detectPlatform()
+  load()
+})
 
 useHead({ title: 'Your VPN configuration' })
 </script>
@@ -61,7 +98,7 @@ useHead({ title: 'Your VPN configuration' })
             v-if="share"
             class="text-sm text-muted"
           >
-            for {{ share.clientName }}
+            Scan it or download it below
           </p>
         </div>
       </div>
@@ -101,15 +138,30 @@ useHead({ title: 'Your VPN configuration' })
           >
         </div>
 
-        <UButton
-          :href="configUrl"
-          icon="i-lucide-download"
-          size="lg"
-          block
-          external
-        >
-          Download config
-        </UButton>
+        <div class="grid gap-2">
+          <UButton
+            :href="configUrl"
+            icon="i-lucide-download"
+            size="lg"
+            block
+            external
+          >
+            Download config
+          </UButton>
+          <UButton
+            :href="app.url"
+            icon="i-lucide-external-link"
+            color="neutral"
+            variant="subtle"
+            size="lg"
+            block
+            external
+            target="_blank"
+            rel="noopener"
+          >
+            {{ app.label }}
+          </UButton>
+        </div>
 
         <ol class="flex flex-col gap-2.5 border-t border-default pt-4 text-sm text-toned">
           <li class="flex gap-3">
