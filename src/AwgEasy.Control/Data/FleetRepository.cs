@@ -100,6 +100,24 @@ public sealed class FleetRepository(Database database)
         command.ExecuteNonQuery();
     }
 
+    public string FindFailoverMode()
+    {
+        using var connection = database.Open();
+        using var command = connection.Sql("SELECT failover_mode FROM fleet WHERE id = 1");
+        return command.ExecuteScalar() as string ?? FailoverModes.Manual;
+    }
+
+    public void SetFailoverMode(string mode, DateTimeOffset now)
+    {
+        using var connection = database.Open();
+        using var command = connection.Sql(
+            "UPDATE fleet SET failover_mode = $mode, updated_at = $now WHERE id = 1",
+            ("$mode", mode),
+            ("$now", now.ToStorage()));
+
+        command.ExecuteNonQuery();
+    }
+
     public void UpdateObfuscation(ServerObfuscationProfile? obfuscation, DateTimeOffset now)
     {
         using var connection = database.Open();

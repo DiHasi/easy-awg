@@ -18,13 +18,42 @@ public sealed record AgentAuthResult(bool Succeeded, NodeRecord? Node, string? F
 /// means revoking a node is a single UPDATE that takes effect on the very next request - no CRL,
 /// no OCSP, no distribution delay.
 /// </summary>
-public sealed class AgentAuthenticator(NodeRepository nodes, ILogger<AgentAuthenticator> logger)
+public sealed class AgentAuthenticator(NodeRepository nodes, ProbeRepository probes, ILogger<AgentAuthenticator> logger)
 {
     // Nonces are only remembered for as long as a timestamp stays valid, so this cannot grow
     // without bound.
     private readonly ConcurrentDictionary<string, DateTimeOffset> _seenNonces = new(StringComparer.Ordinal);
 
     public async Task<AgentAuthResult> AuthenticateAsync(HttpContext context)
+    {
+        NodeRecord? node = null;
+        var failure = await VerifyAsync(context, id =>
+        {
+            node = nodes.Find(id);
+            return node is null ? null : (node.AgentPublicKey, node.Revoked);
+        });
+
+        return failure is null ? AgentAuthResult.Ok(node!) : AgentAuthResult.Fail(failure);
+    }
+
+    /// <summary>
+    /// The same check for a probe. Probes sign exactly as agents do, with their id in the node
+    /// header; they are looked up in their own table, so a probe id can never pass as a node and
+    /// be handed a bundle carrying the fleet private key.
+    /// </summary>
+    public async Task<ProbeRecord?> AuthenticateProbeAsync(HttpContext context)
+    {
+        ProbeRecord? probe = null;
+        var failure = await VerifyAsync(context, id =>
+        {
+            probe = probes.Find(id);
+            return probe is null ? null : (probe.AgentPublicKey, probe.Revoked);
+        });
+
+        return failure is null ? probe : null;
+    }
+
+    private async Task<string?> VerifyAsync(HttpContext context, Func<string, (string PublicKey, bool Revoked)?> lookup)
     {
         var nodeId = context.Request.Headers[AgentRequestSignature.NodeHeader].ToString();
         var timestampHeader = context.Request.Headers[AgentRequestSignature.TimestampHeader].ToString();
@@ -34,36 +63,35 @@ public sealed class AgentAuthenticator(NodeRepository nodes, ILogger<AgentAuthen
         if (string.IsNullOrWhiteSpace(nodeId) || string.IsNullOrWhiteSpace(timestampHeader)
             || string.IsNullOrWhiteSpace(nonce) || string.IsNullOrWhiteSpace(signature))
         {
-            return AgentAuthResult.Fail("missing signature headers");
+            return "missing signature headers";
         }
 
         if (!AgentRequestSignature.TryParseTimestamp(timestampHeader, out var timestamp))
         {
-            return AgentAuthResult.Fail("invalid timestamp");
+            return "invalid timestamp";
         }
 
         var now = DateTimeOffset.UtcNow;
         if (Abs(now - timestamp) > AgentRequestSignature.MaxClockSkew)
         {
-            return AgentAuthResult.Fail("timestamp outside the allowed window");
+            return "timestamp outside the allowed window";
         }
 
         PruneNonces(now);
         if (!_seenNonces.TryAdd(nonce, timestamp))
         {
-            return AgentAuthResult.Fail("nonce replay");
+            return "nonce replay";
         }
 
-        var node = nodes.Find(nodeId);
-        if (node is null)
+        if (lookup(nodeId) is not { } registered)
         {
-            return AgentAuthResult.Fail("unknown node");
+            return "unknown agent";
         }
 
-        if (node.Revoked)
+        if (registered.Revoked)
         {
-            logger.LogWarning("Revoked node {NodeId} attempted to authenticate.", nodeId);
-            return AgentAuthResult.Fail("node revoked");
+            logger.LogWarning("Revoked agent {AgentId} attempted to authenticate.", nodeId);
+            return "agent revoked";
         }
 
         var body = await ReadBodyAsync(context);
@@ -74,10 +102,8 @@ public sealed class AgentAuthenticator(NodeRepository nodes, ILogger<AgentAuthen
             nonce,
             body);
 
-        using var publicKey = BundleSigning.ImportPublicKey(node.AgentPublicKey);
-        return AgentRequestSignature.Verify(publicKey, canonical, signature)
-            ? AgentAuthResult.Ok(node)
-            : AgentAuthResult.Fail("signature mismatch");
+        using var publicKey = BundleSigning.ImportPublicKey(registered.PublicKey);
+        return AgentRequestSignature.Verify(publicKey, canonical, signature) ? null : "signature mismatch";
     }
 
     /// <summary>Buffers the body so the signature can cover it and the endpoint can still read it.</summary>

@@ -42,4 +42,44 @@ public static class NodeFirewall
     /// <summary>The rules as one PostUp (`-A`) or PostDown (`-D`) line.</summary>
     public static string Hook(string op, string interfaceToken, string egressInterface)
         => string.Join("; ", Rules(interfaceToken, egressInterface).Select(rule => rule.ToCommand(op)));
+
+    /// <summary>
+    /// The rules a previous configuration installed that the current one does not. Only the
+    /// MASQUERADE rule depends on the egress interface, so in practice this is the one rule that
+    /// masquerades out of an interface the node no longer routes through.
+    /// </summary>
+    public static IptablesRule[] Stale(string interfaceName, string previousEgress, string currentEgress)
+    {
+        var current = Rules(interfaceName, currentEgress).Select(rule => rule.ToCommand("-A")).ToHashSet(StringComparer.Ordinal);
+        return [.. Rules(interfaceName, previousEgress).Where(rule => !current.Contains(rule.ToCommand("-A")))];
+    }
+
+    /// <summary>
+    /// Reads which egress interface a rendered config masquerades through, from its PostUp hook.
+    ///
+    /// The config on disk is the only record of what the running rules were built from: the
+    /// resolver caches its answer per process, so after an agent restart - or a changed override
+    /// in the bundle - nothing else remembers the interface the old rule named.
+    /// </summary>
+    public static string? InstalledEgress(string config)
+    {
+        foreach (var line in config.Split('\n', StringSplitOptions.TrimEntries))
+        {
+            if (!line.StartsWith("PostUp", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var tokens = line.Split([' ', ';'], StringSplitOptions.RemoveEmptyEntries);
+            for (var i = 0; i < tokens.Length - 2; i++)
+            {
+                if (tokens[i] == "POSTROUTING" && tokens[i + 1] == "-o")
+                {
+                    return tokens[i + 2];
+                }
+            }
+        }
+
+        return null;
+    }
 }

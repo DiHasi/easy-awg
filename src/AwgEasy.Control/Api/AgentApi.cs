@@ -75,6 +75,11 @@ public static class AgentApi
                 return Results.BadRequest(new ApiError("status_invalid", "Status report body is required."));
             }
 
+            // Stamped with the panel's clock rather than the agent's. Whether a node has gone
+            // silent is judged here, and automatic failover acts on it: an agent whose clock runs
+            // ahead must not look fresh for minutes after it stopped reporting.
+            report = report with { ReportedAt = DateTimeOffset.UtcNow };
+
             var current = fleet.Current;
             nodes.RecordStatus(auth.Node.Id, report, DeriveStatus(report));
             nodes.ReplacePeerStats(auth.Node.Id, report.Peers, report.ReportedAt);

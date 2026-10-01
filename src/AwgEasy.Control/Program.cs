@@ -58,6 +58,13 @@ builder.Services.AddSingleton<IAwgKeyGenerator, AwgToolKeyGenerator>();
 builder.Services.AddSingleton<FleetService>();
 builder.Services.AddSingleton<AdminAccounts>();
 builder.Services.AddSingleton<EnrollmentService>();
+builder.Services.AddSingleton<ProbeRepository>();
+builder.Services.AddSingleton<ProbeService>();
+builder.Services.AddNotifications(options.Notifications);
+// Registered once and handed to the host as the same instance, so the API reads the rounds the
+// background loop actually ran rather than a second, idle monitor of its own.
+builder.Services.AddSingleton<FailoverMonitor>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<FailoverMonitor>());
 builder.Services.AddSingleton<AgentAuthenticator>();
 builder.Services.AddSingleton<LegacyStateImporter>();
 // Scoped, not a singleton: the Cloudflare updater is a typed HttpClient, and holding one for the
@@ -93,6 +100,7 @@ app.UseAuthorization();
 
 app.MapAdminApi();
 app.MapAgentApi();
+app.MapProbeAgentApi();
 
 // The Nuxt panel is a client-side app served from the same origin; unknown paths fall through
 // to its shell so routes like /nodes resolve on the client.

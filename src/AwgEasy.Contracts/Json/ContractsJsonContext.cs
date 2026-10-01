@@ -15,5 +15,7 @@ namespace AwgEasy.Contracts;
 [JsonSerializable(typeof(EnrollResponse))]
 [JsonSerializable(typeof(NodeStatusReport))]
 [JsonSerializable(typeof(NodeStatusAck))]
+[JsonSerializable(typeof(ProbeAssignment))]
+[JsonSerializable(typeof(ProbeReport))]
 [JsonSerializable(typeof(ApiError))]
 public sealed partial class ContractsJsonContext : JsonSerializerContext;

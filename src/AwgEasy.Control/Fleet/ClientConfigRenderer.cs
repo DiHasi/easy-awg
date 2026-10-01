@@ -41,6 +41,52 @@ public static class ClientConfigRenderer
         return builder.ToString();
     }
 
+    /// <summary>
+    /// The config a probe uses to check one node. The same client material and the same wire
+    /// format as a person's config - a probe that spoke differently would be testing something no
+    /// client does - but aimed at the node's own address instead of the failover record, and
+    /// installing no routes: the probe sends its check through the interface by binding a socket
+    /// to it, so the host it runs on keeps its own routing exactly as it was.
+    /// </summary>
+    public static string RenderProbe(FleetRecord fleet, ClientRecord probeClient, string nodeAddress)
+    {
+        var network = Ipv4Network.Parse(fleet.Subnet);
+        var builder = new StringBuilder();
+
+        builder.AppendLine("[Interface]");
+        builder.AppendSetting("PrivateKey", probeClient.PrivateKey);
+        // A /32 and no routing table: the probe host keeps its own routes exactly as they were,
+        // and no connected route for the fleet subnet appears on it.
+        builder.AppendSetting("Address", $"{probeClient.Address}/32");
+        builder.AppendSetting("Table", "off");
+
+        var tunables = fleet.Obfuscation?.GetDefaults();
+        builder.AppendInterfaceObfuscation(fleet.Obfuscation);
+        builder.AppendTuning(tunables);
+        builder.AppendClientObfuscation(tunables);
+
+        builder.AppendLine();
+        builder.AppendLine("[Peer]");
+        builder.AppendSetting("PublicKey", fleet.ServerPublicKey);
+        builder.AppendSetting("PresharedKey", probeClient.PresharedKey);
+        // Everything, as a person's config has: the check fetches a resource on the internet
+        // through the node, and the replies come back from that resource's address. With
+        // Table = off this installs no route, so it reroutes nothing on the probe host.
+        builder.AppendSetting("AllowedIPs", "0.0.0.0/0");
+        builder.AppendSetting("Endpoint", Endpoint(nodeAddress, fleet.ListenPort));
+        // A keepalive is what makes the interface initiate a handshake the moment it comes up,
+        // with no traffic to send. Short, because the probe waits for exactly that.
+        builder.AppendSetting("PersistentKeepalive", "5");
+
+        return builder.ToString();
+    }
+
+    private static string Endpoint(string address, int port)
+    {
+        var portText = port.ToString(CultureInfo.InvariantCulture);
+        return address.Contains(':', StringComparison.Ordinal) ? $"[{address}]:{portText}" : $"{address}:{portText}";
+    }
+
     public static string FileName(string clientName)
     {
         var safe = new string(clientName.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '-').ToArray()).Trim('-');

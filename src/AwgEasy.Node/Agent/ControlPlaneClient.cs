@@ -108,6 +108,62 @@ public sealed class ControlPlaneClient(HttpClient http, NodeOptions options, ILo
         }
     }
 
+    public async Task<EnrollResponse?> EnrollProbeAsync(AgentIdentityDocument identity, string enrollmentToken, CancellationToken cancellationToken)
+    {
+        var request = new EnrollRequest(enrollmentToken, Environment.MachineName, identity.PublicKey, AgentVersion.Current);
+
+        using var message = new HttpRequestMessage(HttpMethod.Post, Url("/api/v1/probes/enroll"))
+        {
+            Content = JsonContent.Create(request, NodeJsonContext.Default.EnrollRequest)
+        };
+
+        var response = await http.SendAsync(message, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            logger.LogError("Probe enrollment rejected with {StatusCode}: {Body}", (int)response.StatusCode, await SafeReadAsync(response, cancellationToken));
+            return null;
+        }
+
+        return await response.Content.ReadFromJsonAsync(NodeJsonContext.Default.EnrollResponse, cancellationToken);
+    }
+
+    public async Task<(FetchOutcome Outcome, ProbeAssignment? Assignment)> FetchAssignmentAsync(AgentIdentityDocument identity, CancellationToken cancellationToken)
+    {
+        using var message = new HttpRequestMessage(HttpMethod.Get, Url($"/api/v1/probes/{identity.NodeId}/assignment"));
+        await SignRequestAsync(message, identity, cancellationToken);
+
+        var response = await http.SendAsync(message, cancellationToken);
+        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+        {
+            return (FetchOutcome.IdentityRejected, null);
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            logger.LogWarning("Panel returned {StatusCode} for the probe assignment.", (int)response.StatusCode);
+            return (FetchOutcome.Failed, null);
+        }
+
+        var assignment = await response.Content.ReadFromJsonAsync(NodeJsonContext.Default.ProbeAssignment, cancellationToken);
+        return (assignment is null ? FetchOutcome.Failed : FetchOutcome.Ok, assignment);
+    }
+
+    public async Task ReportProbeAsync(AgentIdentityDocument identity, ProbeReport report, CancellationToken cancellationToken)
+    {
+        using var message = new HttpRequestMessage(HttpMethod.Post, Url($"/api/v1/probes/{identity.NodeId}/results"))
+        {
+            Content = JsonContent.Create(report, NodeJsonContext.Default.ProbeReport)
+        };
+
+        await SignRequestAsync(message, identity, cancellationToken);
+
+        var response = await http.SendAsync(message, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            logger.LogWarning("Probe report rejected with {StatusCode}.", (int)response.StatusCode);
+        }
+    }
+
     /// <summary>
     /// Signs the request with the agent key. Body-covering, so a proxy cannot alter a status
     /// report in flight; the timestamp and nonce let the control plane refuse replays.

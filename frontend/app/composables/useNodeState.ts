@@ -10,8 +10,16 @@ export function describeNode(node: Node): { word: string, tone: Tone } {
   if (node.revoked) {
     return { word: 'Revoked', tone: 'muted' }
   }
-  if (node.status === 'down') {
+  if (node.status === 'down' || node.health === 'down') {
     return { word: 'Down', tone: 'error' }
+  }
+  // Running and unreachable from where clients are. Said before "Active" for the same reason as
+  // down: the record pointing here is exactly what makes it urgent.
+  if (node.health === 'blocked') {
+    return { word: 'Blocked', tone: 'error' }
+  }
+  if (node.health === 'silent') {
+    return { word: 'Silent', tone: 'warning' }
   }
   if (node.isActive) {
     return { word: 'Active', tone: 'live' }

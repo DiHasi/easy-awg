@@ -6,6 +6,7 @@ namespace AwgEasy.Node;
 /// <param name="BundleFile">Optional local bundle, for bootstrap and for testing a node without a control plane.</param>
 /// <param name="PublicIpOverride">Stated instead of discovered. Reported verbatim, checks and all skipped.</param>
 /// <param name="PublicIpUrls">Plain-text echo services, tried in order. Empty switches discovery off.</param>
+/// <param name="Role">"node" serves the fleet; "probe" checks it from where clients are. Same binary, same image.</param>
 public sealed record NodeOptions(
     string? ControlUrl,
     string? EnrollmentToken,
@@ -18,8 +19,14 @@ public sealed record NodeOptions(
     string HealthUrl,
     string? PublicIpOverride,
     IReadOnlyList<string> PublicIpUrls,
-    TimeSpan PublicIpRefreshInterval)
+    TimeSpan PublicIpRefreshInterval,
+    string Role = NodeOptions.NodeRole)
 {
+    public const string NodeRole = "node";
+    public const string ProbeRole = "probe";
+
+    public bool IsProbe => Role == ProbeRole;
+
     /// <summary>Kept short: the lookup rides inside a reconcile cycle that must not stall on it.</summary>
     public TimeSpan PublicIpTimeout { get; } = TimeSpan.FromSeconds(5);
 
@@ -42,19 +49,28 @@ public sealed record NodeOptions(
     public bool IsOffline => string.IsNullOrWhiteSpace(ControlUrl);
 
     public static NodeOptions FromEnvironment()
-        => new(
+    {
+        // A probe keeps its identity and its throwaway interface apart from a node's, so the two
+        // can run side by side on one host without one adopting the other's key or config. The
+        // interface name is the config's file name: awg-quick derives one from the other.
+        var probe = string.Equals(Trimmed("AWG_ROLE"), ProbeRole, StringComparison.OrdinalIgnoreCase);
+        var statePath = Trimmed("AWG_NODE_STATE_PATH") ?? (probe ? "/etc/awg-probe" : "/etc/awg-node");
+
+        return new(
             Trimmed("AWG_CONTROL_URL"),
             Trimmed("AWG_ENROLLMENT_TOKEN"),
-            Trimmed("AWG_BUNDLE_FILE"),
-            Trimmed("AWG_NODE_STATE_PATH") ?? "/etc/awg-node",
-            Trimmed("AWG_INTERFACE") ?? "awg0",
-            Trimmed("AWG_INTERFACE_CONFIG_PATH") ?? "/etc/amnezia/amneziawg/awg0.conf",
+            probe ? null : Trimmed("AWG_BUNDLE_FILE"),
+            statePath,
+            probe ? "awgprobe" : Trimmed("AWG_INTERFACE") ?? "awg0",
+            probe ? Path.Combine(statePath, "awgprobe.conf") : Trimmed("AWG_INTERFACE_CONFIG_PATH") ?? "/etc/amnezia/amneziawg/awg0.conf",
             Trimmed("AWG_EGRESS_INTERFACE"),
             TimeSpan.FromSeconds(ReadInt("AWG_POLL_INTERVAL_SECONDS", 20)),
             Trimmed("AWG_HEALTH_URL") ?? "http://127.0.0.1:8081",
             Trimmed("AWG_PUBLIC_IP"),
             ReadUrls("AWG_PUBLIC_IP_URLS"),
-            TimeSpan.FromMinutes(ReadInt("AWG_PUBLIC_IP_REFRESH_MINUTES", 10)));
+            TimeSpan.FromMinutes(ReadInt("AWG_PUBLIC_IP_REFRESH_MINUTES", 10)),
+            probe ? ProbeRole : NodeRole);
+    }
 
     /// <summary>An explicitly empty value switches discovery off; unset falls back to the defaults.</summary>
     private static IReadOnlyList<string> ReadUrls(string key)

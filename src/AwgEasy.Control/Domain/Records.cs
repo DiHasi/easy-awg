@@ -50,4 +50,37 @@ public sealed record NodeRecord(
     DateTimeOffset? LastSeenAt,
     string? LastError,
     bool Revoked,
+    DateTimeOffset EnrolledAt,
+    DateTimeOffset? LastUpAt = null,
+    int FailoverPriority = NodeRecord.DefaultFailoverPriority,
+    bool AutoFailover = true)
+{
+    /// <summary>Lower goes first. Left at this, nodes are tried in the order they enrolled.</summary>
+    public const int DefaultFailoverPriority = 100;
+}
+
+/// <param name="ClientId">The client row whose key the probe tunnels with. Hidden from the client
+/// list, because it is not a person's, but a peer on every node like any other.</param>
+public sealed record ProbeRecord(
+    string Id,
+    string Name,
+    string? Hostname,
+    string AgentPublicKey,
+    string? AgentVersion,
+    string ClientId,
+    DateTimeOffset? LastSeenAt,
+    bool Revoked,
     DateTimeOffset EnrolledAt);
+
+/// <summary>The latest thing one probe found out about one node.</summary>
+public sealed record ProbeObservation(
+    string ProbeId,
+    string NodeId,
+    string Address,
+    string Outcome,
+    DateTimeOffset CheckedAt,
+    DateTimeOffset? LastReachableAt,
+    DateTimeOffset? FailingSince,
+    int? LatencyMs,
+    string? Detail,
+    bool? Handshake = null);

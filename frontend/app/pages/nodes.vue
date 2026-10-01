@@ -190,9 +190,14 @@ async function copyRecord() {
           @activate="nodeActions.activate(node)"
           @revoke="nodeActions.revoke(node)"
           @remove="nodeActions.remove(node)"
+          @failover="nodeActions.editFailover(node)"
         />
       </div>
     </AppCard>
+
+    <FailoverCard />
+
+    <ProbesCard />
 
     <EnrollNodeModal v-model:open="enrollOpen" />
   </div>

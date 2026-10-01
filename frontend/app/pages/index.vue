@@ -363,6 +363,7 @@ usePolling(loadStats, 3000)
         @activate="nodeActions.activate"
         @revoke="nodeActions.revoke"
         @remove="nodeActions.remove"
+        @failover="nodeActions.editFailover"
         @new-peer="createOpen = true"
         @enroll="enrollOpen = true"
       />

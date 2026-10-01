@@ -23,31 +23,52 @@ builder.WebHost.UseUrls(options.HealthUrl);
 
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton<AgentIdentityStore>();
-builder.Services.AddSingleton<BundleStore>();
-builder.Services.AddSingleton<BundleAcceptor>();
-builder.Services.AddSingleton<EgressInterfaceResolver>();
-builder.Services.AddSingleton<AwgRuntime>();
-builder.Services.AddSingleton<AwgInterface>();
-builder.Services.AddSingleton<NodeHealth>();
 builder.Services.AddHttpClient<ControlPlaneClient>(client => client.Timeout = TimeSpan.FromSeconds(20));
-builder.Services.AddHttpClient<PublicIpResolver>(client =>
+
+if (options.IsProbe)
 {
-    client.Timeout = TimeSpan.FromSeconds(10);
-    // These services answer with one short line. Capping the buffer means a misconfigured URL that
-    // serves a whole web page is a failed lookup rather than something the agent reads into memory.
-    client.MaxResponseContentBufferSize = 4096;
-});
-builder.Services.AddHostedService<ReconcileService>();
+    // A probe never receives a bundle and never touches awg0: none of the node's services are
+    // registered, so nothing here can reach for the fleet configuration even by mistake.
+    builder.Services.AddSingleton<TunnelTrafficCheck>();
+    builder.Services.AddSingleton<HandshakeProbe>();
+    builder.Services.AddSingleton<ProbeStatus>();
+    builder.Services.AddHostedService<ProbeLoop>();
+}
+else
+{
+    builder.Services.AddSingleton<BundleStore>();
+    builder.Services.AddSingleton<BundleAcceptor>();
+    builder.Services.AddSingleton<EgressInterfaceResolver>();
+    builder.Services.AddSingleton<AwgRuntime>();
+    builder.Services.AddSingleton<AwgInterface>();
+    builder.Services.AddSingleton<NodeHealth>();
+    builder.Services.AddHttpClient<PublicIpResolver>(client =>
+    {
+        client.Timeout = TimeSpan.FromSeconds(10);
+        // These services answer with one short line. Capping the buffer means a misconfigured URL that
+        // serves a whole web page is a failed lookup rather than something the agent reads into memory.
+        client.MaxResponseContentBufferSize = 4096;
+    });
+    builder.Services.AddHostedService<ReconcileService>();
+}
 
 var app = builder.Build();
 
 // The only endpoint the agent serves, bound to loopback by default: the node opens no
 // management surface to the internet.
-app.MapGet("/health", (NodeHealth health) => TypedResults.Ok(health.Snapshot()));
+if (options.IsProbe)
+{
+    app.MapGet("/health", (ProbeStatus status) => TypedResults.Ok(status.Snapshot()));
+}
+else
+{
+    app.MapGet("/health", (NodeHealth health) => TypedResults.Ok(health.Snapshot()));
+}
 
 app.Logger.LogInformation(
-    "awg-node {Version} starting. interface={Interface} state={State} control={Control}",
+    "awg-node {Version} starting as {Role}. interface={Interface} state={State} control={Control}",
     AgentVersion.Current,
+    options.Role,
     options.InterfaceName,
     options.StatePath,
     options.ControlUrl ?? "<offline>");

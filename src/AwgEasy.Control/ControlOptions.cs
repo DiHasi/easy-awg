@@ -13,7 +13,9 @@ public sealed record ControlOptions(
     string? BootstrapAdminUser,
     string? BootstrapAdminPassword,
     string? LegacyStateImportPath,
-    DnsFailoverOptions Dns)
+    DnsFailoverOptions Dns,
+    FailoverOptions Failover,
+    NotificationOptions Notifications)
 {
     public static ControlOptions FromEnvironment()
         => new(
@@ -28,7 +30,9 @@ public sealed record ControlOptions(
             Value("AWG_ADMIN_USER"),
             Value("AWG_ADMIN_PASSWORD"),
             Value("AWG_IMPORT_LEGACY_STATE"),
-            DnsFailoverOptions.FromEnvironment(Value, ReadInt));
+            DnsFailoverOptions.FromEnvironment(Value, ReadInt),
+            FailoverOptions.FromEnvironment(Value, ReadInt),
+            NotificationOptions.FromEnvironment(Value));
 
     /// <summary>
     /// Settings that have no safe default. AWG_ENDPOINT_HOST in particular is written into every
@@ -78,4 +82,90 @@ public sealed record DnsFailoverOptions(
             readInt("AWG_DNS_TTL", 60),
             value("AWG_CLOUDFLARE_API_TOKEN"),
             value("AWG_CLOUDFLARE_ZONE_ID"));
+}
+
+/// <summary>
+/// When automatic failover acts. Whether it acts at all is not here: that is a switch in the
+/// panel, stored with the fleet, because it is the thing an operator turns off in a hurry.
+/// </summary>
+/// <param name="CheckInterval">How often the panel re-evaluates the fleet.</param>
+/// <param name="Grace">
+/// How long the active node has to be failing before traffic moves. A switch sends every client
+/// through a reconnect, so a blip shorter than this is cheaper to sit out than to fix.
+/// </param>
+/// <param name="Cooldown">
+/// The minimum time between an activation - manual or automatic - and the next automatic one.
+/// Without it two half-broken nodes would pass the traffic back and forth every grace period.
+/// </param>
+/// <param name="AgentStaleAfter">A node whose last status report is older than this is silent.</param>
+/// <param name="ProbeStaleAfter">A probe result older than this is no longer evidence of anything.</param>
+/// <param name="ProbeInterval">How often probes are asked to run a round.</param>
+/// <param name="ProbeHandshakeTimeout">How long a probe waits for one node to answer.</param>
+/// <param name="ProbeCheckUrls">
+/// What a probe fetches through the tunnel after the handshake. Several, and any one answering is
+/// enough, so one site being down does not read as every node being blocked.
+/// </param>
+/// <param name="ProbeTrafficTimeout">How long each of those has to answer.</param>
+public sealed record FailoverOptions(
+    TimeSpan CheckInterval,
+    TimeSpan Grace,
+    TimeSpan Cooldown,
+    TimeSpan AgentStaleAfter,
+    TimeSpan ProbeStaleAfter,
+    TimeSpan ProbeInterval,
+    TimeSpan ProbeHandshakeTimeout,
+    IReadOnlyList<string> ProbeCheckUrls,
+    TimeSpan ProbeTrafficTimeout)
+{
+    /// <summary>
+    /// Plain HTTP, and an address literal first: nothing to resolve and no certificate to trust,
+    /// so the only thing that can stop the answer is the tunnel. Any status counts.
+    /// </summary>
+    public static readonly string[] DefaultProbeCheckUrls =
+    [
+        "http://1.1.1.1/cdn-cgi/trace",
+        "http://connectivitycheck.gstatic.com/generate_204"
+    ];
+
+    public static FailoverOptions FromEnvironment(Func<string, string?> value, Func<string, int, int> readInt)
+        => new(
+            TimeSpan.FromSeconds(readInt("AWG_FAILOVER_CHECK_SECONDS", 30)),
+            TimeSpan.FromSeconds(readInt("AWG_FAILOVER_GRACE_SECONDS", 120)),
+            TimeSpan.FromMinutes(readInt("AWG_FAILOVER_COOLDOWN_MINUTES", 15)),
+            // Agents report every 20 seconds by default, so this is several missed reports.
+            TimeSpan.FromSeconds(readInt("AWG_NODE_STALE_SECONDS", 90)),
+            TimeSpan.FromSeconds(readInt("AWG_PROBE_STALE_SECONDS", 300)),
+            TimeSpan.FromSeconds(readInt("AWG_PROBE_INTERVAL_SECONDS", 60)),
+            // WireGuard retries a handshake every five seconds; this is three attempts.
+            TimeSpan.FromSeconds(readInt("AWG_PROBE_HANDSHAKE_TIMEOUT_SECONDS", 15)),
+            ReadUrls(value("AWG_PROBE_CHECK_URLS")),
+            TimeSpan.FromSeconds(readInt("AWG_PROBE_TRAFFIC_TIMEOUT_SECONDS", 8)));
+
+    /// <summary>Unset uses the defaults. "none" switches the traffic check off, leaving the handshake alone.</summary>
+    private static string[] ReadUrls(string? raw)
+        => raw is null
+            ? DefaultProbeCheckUrls
+            : string.Equals(raw, "none", StringComparison.OrdinalIgnoreCase)
+                ? []
+                : raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+}
+
+/// <summary>
+/// Where the panel says that something happened without being asked. Credentials stay in the
+/// environment for the same reason the DNS token does: nothing that can post as the operator
+/// should be readable through the panel.
+/// </summary>
+public sealed record NotificationOptions(
+    string? WebhookUrl,
+    string? TelegramBotToken,
+    string? TelegramChatId)
+{
+    public bool TelegramConfigured
+        => !string.IsNullOrWhiteSpace(TelegramBotToken) && !string.IsNullOrWhiteSpace(TelegramChatId);
+
+    public static NotificationOptions FromEnvironment(Func<string, string?> value)
+        => new(
+            value("AWG_NOTIFY_WEBHOOK_URL"),
+            value("AWG_NOTIFY_TELEGRAM_BOT_TOKEN"),
+            value("AWG_NOTIFY_TELEGRAM_CHAT_ID"));
 }

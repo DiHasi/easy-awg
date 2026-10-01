@@ -17,5 +17,8 @@ namespace AwgEasy.Node;
 [JsonSerializable(typeof(EnrollResponse))]
 [JsonSerializable(typeof(NodeStatusReport))]
 [JsonSerializable(typeof(NodeStatusAck))]
+[JsonSerializable(typeof(ProbeAssignment))]
+[JsonSerializable(typeof(ProbeReport))]
+[JsonSerializable(typeof(ProbeHealthResponse))]
 [JsonSerializable(typeof(ApiError))]
 internal sealed partial class NodeJsonContext : JsonSerializerContext;

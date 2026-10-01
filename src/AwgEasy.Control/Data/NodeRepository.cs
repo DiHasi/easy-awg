@@ -64,6 +64,8 @@ public sealed class NodeRepository(Database database)
                    agent_version    = $agentVersion,
                    public_ip        = COALESCE($publicIp, public_ip),
                    last_seen_at     = $seenAt,
+                   -- What says how long a node has been failing when no probe is watching it.
+                   last_up_at       = CASE WHEN $interfaceUp = 1 THEN $seenAt ELSE last_up_at END,
                    last_error       = $lastError,
                    status           = $status
              WHERE id = $id
@@ -83,6 +85,18 @@ public sealed class NodeRepository(Database database)
             ("$status", status));
 
         command.ExecuteNonQuery();
+    }
+
+    public bool SetFailoverPreferences(string id, int priority, bool automatic)
+    {
+        using var connection = database.Open();
+        using var command = connection.Sql(
+            "UPDATE nodes SET failover_priority = $priority, auto_failover = $automatic WHERE id = $id",
+            ("$id", id),
+            ("$priority", priority),
+            ("$automatic", automatic ? 1 : 0));
+
+        return command.ExecuteNonQuery() > 0;
     }
 
     public bool SetRevoked(string id, bool revoked)
@@ -259,7 +273,10 @@ public sealed class NodeRepository(Database database)
                 reader.GetTimestampOrNull("last_seen_at"),
                 reader.GetStringOrNull("last_error"),
                 reader.GetBoolean("revoked"),
-                reader.GetTimestamp("enrolled_at")));
+                reader.GetTimestamp("enrolled_at"),
+                reader.GetTimestampOrNull("last_up_at"),
+                reader.GetInt32("failover_priority"),
+                reader.GetBoolean("auto_failover")));
         }
 
         return nodes;

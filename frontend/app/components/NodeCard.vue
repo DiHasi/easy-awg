@@ -22,6 +22,7 @@ const emit = defineEmits<{
   activate: []
   revoke: []
   remove: []
+  failover: []
 }>()
 
 const state = computed(() => describeNode(props.node))
@@ -33,9 +34,21 @@ const endpoint = computed(() => {
   return props.listenPort ? `${props.node.publicIp}:${props.listenPort}` : props.node.publicIp
 })
 
+// Worth a line of its own only when something is wrong: a healthy node's reason is noise.
+const failing = computed(() => ['blocked', 'down', 'silent'].includes(props.node.health))
+
+const reachability = computed(() => {
+  const node = props.node
+  if (node.healthSource === 'probes') {
+    return `${node.probesReachable}/${node.probesReporting} probes reach it`
+  }
+  return 'agent only, no probe'
+})
+
 const menu = computed(() => {
   const groups: DropdownMenuItem[][] = []
   if (!props.node.revoked) {
+    groups.push([{ label: 'Failover settings', icon: 'i-lucide-route', onSelect: () => emit('failover') }])
     groups.push([{ label: 'Revoke access', icon: 'i-lucide-ban', onSelect: () => emit('revoke') }])
   }
   groups.push([{ label: 'Remove from panel', icon: 'i-lucide-trash-2', color: 'error', onSelect: () => emit('remove') }])
@@ -119,6 +132,19 @@ const menu = computed(() => {
       Agent predates AmneziaWG 3.x and speaks an older wire format
     </p>
     <p
+      v-if="failing && !node.revoked"
+      class="mt-2 flex items-start gap-1.5 text-xs text-error"
+    >
+      <UIcon
+        name="i-lucide-shield-alert"
+        class="mt-px size-3.5 shrink-0"
+      />
+      <span>
+        {{ node.healthReason }}
+        <template v-if="node.failingSince"> Started {{ relativeTime(node.failingSince) }}.</template>
+      </span>
+    </p>
+    <p
       v-if="node.lastError"
       class="mt-2 rounded-md bg-error/10 px-2 py-1 font-mono text-xs text-error"
     >
@@ -164,6 +190,19 @@ const menu = computed(() => {
         mono
       >
         {{ formatUtc(node.enrolledAt).slice(0, 10) }}
+      </SpecItem>
+      <SpecItem label="Reachability">
+        {{ reachability }}
+      </SpecItem>
+      <SpecItem label="Auto failover">
+        <span
+          v-if="node.autoFailover"
+          class="font-mono text-[13px]"
+        >priority {{ node.failoverPriority }}</span>
+        <span
+          v-else
+          class="text-muted"
+        >excluded</span>
       </SpecItem>
     </dl>
 

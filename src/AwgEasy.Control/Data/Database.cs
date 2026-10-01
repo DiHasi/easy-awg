@@ -58,6 +58,18 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
         EnsureColumn(connection, "fleet", "active_node_id", "TEXT NULL");
         EnsureColumn(connection, "fleet", "active_node_set_at", "TEXT NULL");
 
+        // Automatic failover. Off until an operator arms it: a panel that starts moving DNS on its
+        // own after an upgrade would be a surprise nobody asked for.
+        EnsureColumn(connection, "fleet", "failover_mode", "TEXT NOT NULL DEFAULT 'manual'");
+        EnsureColumn(connection, "nodes", "last_up_at", "TEXT NULL");
+        EnsureColumn(connection, "nodes", "failover_priority", "INTEGER NOT NULL DEFAULT 100");
+        EnsureColumn(connection, "nodes", "auto_failover", "INTEGER NOT NULL DEFAULT 1");
+
+        // Probes. Every client that exists before this is a person's, and every token a node's.
+        EnsureColumn(connection, "clients", "kind", "TEXT NOT NULL DEFAULT 'user'");
+        EnsureColumn(connection, "enrollment_tokens", "kind", "TEXT NOT NULL DEFAULT 'node'");
+        EnsureColumn(connection, "probe_results", "handshake", "INTEGER NULL");
+
         if (!OperatingSystem.IsWindows() && File.Exists(options.DatabasePath))
         {
             // The database holds the fleet private key: never group- or world-readable.
@@ -99,6 +111,7 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             revision             INTEGER NOT NULL,
             active_node_id       TEXT    NULL,
             active_node_set_at   TEXT    NULL,
+            failover_mode        TEXT    NOT NULL DEFAULT 'manual',
             created_at           TEXT    NOT NULL,
             updated_at           TEXT    NOT NULL
         );
@@ -112,6 +125,7 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             preshared_key  TEXT    NOT NULL,
             enabled        INTEGER NOT NULL DEFAULT 1,
             obfuscation_json TEXT  NULL,
+            kind           TEXT    NOT NULL DEFAULT 'user',
             created_at     TEXT    NOT NULL,
             updated_at     TEXT    NOT NULL
         );
@@ -137,7 +151,10 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             last_seen_at      TEXT    NULL,
             last_error        TEXT    NULL,
             revoked           INTEGER NOT NULL DEFAULT 0,
-            enrolled_at       TEXT    NOT NULL
+            enrolled_at       TEXT    NOT NULL,
+            last_up_at        TEXT    NULL,
+            failover_priority INTEGER NOT NULL DEFAULT 100,
+            auto_failover     INTEGER NOT NULL DEFAULT 1
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_nodes_agent_key ON nodes (agent_public_key);
 
@@ -147,7 +164,8 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             created_at      TEXT NOT NULL,
             expires_at      TEXT NOT NULL,
             used_at         TEXT NULL,
-            used_by_node_id TEXT NULL
+            used_by_node_id TEXT NULL,
+            kind            TEXT NOT NULL DEFAULT 'node'
         );
 
         CREATE TABLE IF NOT EXISTS client_shares (
@@ -198,5 +216,37 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             message  TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS ix_events_at ON events (at DESC);
+
+        -- A probe is a client of the fleet placed where clients are. It authenticates like an
+        -- agent, with a key it generated itself, and tunnels with the client row it is bound to.
+        CREATE TABLE IF NOT EXISTS probes (
+            id               TEXT PRIMARY KEY,
+            name             TEXT    NOT NULL,
+            hostname         TEXT    NULL,
+            agent_public_key TEXT    NOT NULL,
+            agent_version    TEXT    NULL,
+            client_id        TEXT    NOT NULL,
+            last_seen_at     TEXT    NULL,
+            revoked          INTEGER NOT NULL DEFAULT 0,
+            enrolled_at      TEXT    NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_probes_agent_key ON probes (agent_public_key);
+
+        -- The latest result per probe and node, not a history. last_reachable_at and
+        -- failing_since survive the rows that replace them: they are what says how long a node
+        -- has been failing, which a single latest result cannot.
+        CREATE TABLE IF NOT EXISTS probe_results (
+            probe_id          TEXT    NOT NULL,
+            node_id           TEXT    NOT NULL,
+            address           TEXT    NOT NULL,
+            outcome           TEXT    NOT NULL,
+            checked_at        TEXT    NOT NULL,
+            last_reachable_at TEXT    NULL,
+            failing_since     TEXT    NULL,
+            handshake         INTEGER NULL,
+            latency_ms        INTEGER NULL,
+            detail            TEXT    NULL,
+            PRIMARY KEY (probe_id, node_id)
+        );
         """;
 }

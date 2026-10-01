@@ -11,9 +11,10 @@ node without reissuing a single client config.
 
 The project replaced a single-server panel with this architecture. Phase 1 (multi-server with
 manual switchover) is complete: the panel picks the active node and moves the DNS record clients
-follow, through Cloudflare when a token is configured. Phase 2 (health probes, blocked-vs-down
-detection, automatic failover) is not started - what is missing is the judgement about when to
-switch, not the switch itself.
+follow, through Cloudflare when a token is configured. Phase 2 is built too: probes check every
+node with a real handshake from where clients are, the panel tells blocked from down, and
+`FailoverMonitor` moves the record on its own once an operator arms it - through the same call
+the button makes.
 
 The predecessor is preserved at tag `v0.9-standalone` and is no longer in the tree. When touching
 the legacy import path, that tag is where its `state.json` format is defined.
@@ -22,7 +23,7 @@ the legacy import path, that tag is where its `state.json` format is defined.
 
 ```
 src/AwgEasy.Contracts/   Wire contract shared by both sides. Changing it changes the fleet.
-src/AwgEasy.Node/        Agent on each VPN server. AOT-published, privileged, no UI.
+src/AwgEasy.Node/        Agent on each VPN server, and the probe (AWG_ROLE=probe). AOT-published.
 src/AwgEasy.Control/     Panel: database, admin API, agent API, serves the frontend.
 frontend/                Nuxt 4 + Nuxt UI, generated to static files, served by Control.
 tests/AwgEasy.Tests/     xUnit. Unit tests plus integration tests hosting the real Control.
@@ -34,7 +35,7 @@ scripts/install.sh       Node enrollment one-liner, served by Control at /instal
 
 ```bash
 dotnet build Awg-easy.sln          # whole solution
-dotnet test Awg-easy.sln           # 140 tests, all must pass
+dotnet test Awg-easy.sln           # 213 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
 cd frontend && pnpm run generate   # static build into .output/public
@@ -141,6 +142,34 @@ at the CDN. A failed lookup reports null and the stored address is kept (`COALES
 failover rotation. `PublicIpAddress` rejects anything unroutable, so a NAT-ed answer never becomes
 a DNS target; an explicit `AWG_PUBLIC_IP` bypasses that check on purpose.
 
+**Health is judged from two kinds of evidence, and they answer different questions.** The agent's
+reports say whether a node runs; probes say whether a client is actually served. A probe counts a
+node reachable only when a request through the tunnel is answered, not when the handshake
+completes: the block seen in practice lets the first handshake through and drops everything
+after it. `ProbeResult.Handshake` keeps the two apart so the reason can say which block it is. The
+check leaves through the probe interface by binding its socket to it (`SO_BINDTODEVICE`), with
+`Table = off` in the probe config, so a probe never touches its host's routing. A node that
+runs and that no probe reaches is `blocked`, which is the state failover exists for and the one a
+node can never report about itself. `NodeHealthEvaluator` is the single place that combines them;
+keep it pure, so the policy stays testable without a panel. Only current results about the
+address the node has now count, and a probe `error` - the probe could not run its own check -
+never counts against a node: a broken probe must not be able to move a fleet's traffic.
+
+**A probe is a client, never a node.** It enrolls with a probe token, lives in its own table, is
+authenticated against that table, and tunnels with a client row of kind `probe` - a peer on every
+node like anyone's client, hidden from the client list. It must never receive a bundle: probes sit
+in the networks that do the blocking, and a bundle carries the fleet private key. A node token
+cannot enroll a probe and a probe token cannot enroll a node; keep that check in
+`EnrollmentService.ReadToken`.
+
+**Automatic failover is reluctant by design.** It is off until armed, cannot be armed without a
+DNS provider, and runs the provider's `CheckAsync` before it is armed. It waits out the grace
+period, respects the cooldown after any switch, only picks a node that is healthy right now, and
+never switches back on its own. Every switch goes through `DnsFailoverService.ActivateAsync`, so
+the invariants of the manual switch - no revision bump, active only once the provider confirmed -
+hold for it unchanged. The clock that decides staleness is the panel's: status reports and probe
+results are stamped on arrival, so a node with a clock running ahead cannot look fresh.
+
 **Status-report fields are not bundle fields.** `NodeStatusReport` is not signed content shared
 byte for byte, so adding an optional field there needs no synchronized fleet upgrade: an older
 agent omits it and reads as null. The bundle rules above still apply to anything inside
@@ -165,6 +194,12 @@ drop every one for failing the `AllowedIPs` check: `received` climbs, `sent` sta
 chooses a path, and takes the interface down *before* overwriting the config file, so the old
 `PostDown` withdraws the rules its own `PostUp` installed. Anything else you add that syncconf
 cannot apply belongs in that comparison too.
+
+**A changed egress interface withdraws the rule the old one needed.** The MASQUERADE rule names
+the egress interface, and neither syncconf nor a later `awg-quick down` (which runs the new
+config's PostDown) would remove the old one. `AwgInterface` reads which interface the config on
+disk masquerades through before overwriting it, and deletes the stale rule once - checked with
+`-C` first, since a full restart usually withdrew it already.
 
 **The node's firewall rules are checked on every apply, not just installed by `PostUp`.** The
 hooks run only at bring-up, and syncconf runs no hooks, so a rule flushed by a Docker daemon
@@ -244,15 +279,11 @@ never assert on a specific allocated address — assert on what the API returned
 
 - The pair has only been exercised in containers on one host, never across real servers.
 - The frontend has no automated tests.
-- `Microsoft.OpenApi` 2.0.0 arrives transitively with a known high-severity advisory (NU1903).
-- Phase 2 (external probes, blocked-vs-down detection, notifications) is designed but not built.
-  Failover is manual today: an operator decides, and `DnsFailoverService.ActivateAsync` is what a
-  probe would call in its place.
+- `SQLitePCLRaw.lib.e_sqlite3` 2.1.11 arrives transitively with a known advisory (NU1903).
+- The probe's check - handshake, then a request through the tunnel - has not been run against a
+  real node yet; it is covered only through the parser and the panel side of the protocol.
+- A probe's assignment is protected by TLS only, not signed like a bundle. It carries no fleet
+  secret, and results about an address other than the node's current one are ignored.
 - Only Cloudflare is implemented behind `IDnsRecordUpdater`. Without a token the panel records the
   active node and leaves the record to the operator; a floating-IP provider would be a third
   implementation of the same interface.
-- Cloudflare is driven by a name lookup on every switch, so a zone holding several records of the
-  same name takes the first. Nothing checks that the zone is the one the endpoint host belongs to.
-- A changed egress interface leaves the previous `MASQUERADE` rule behind. The agent installs
-  the new one, so traffic flows, but nothing withdraws the old rule until the interface is next
-  brought down through `awg-quick`.

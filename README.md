@@ -83,9 +83,13 @@ for this reason: build once somewhere with room, push, and pull on the servers.
 ```bash
 # On a build machine or in CI. AGENT_VERSION is what each node reports back to
 # the panel; leave it out and the agent identifies itself as 0.0.0-dev.
-docker build -f docker/control.Dockerfile -t dihasi/awg-control:latest .
-docker build -f docker/node.Dockerfile   -t dihasi/awg-node:latest --build-arg AGENT_VERSION=1.3.1 .
-docker push dihasi/awg-control:latest && docker push dihasi/awg-node:latest
+# Both images are multi-arch (amd64 and arm64 - a probe on a Raspberry Pi), built on an amd64
+# machine with a buildx builder that can push manifest lists:
+#   docker buildx create --name awg --driver docker-container --use
+docker buildx build --platform linux/amd64,linux/arm64 -f docker/control.Dockerfile \
+    -t dihasi/awg-control:1.4.0 -t dihasi/awg-control:latest --push .
+docker buildx build --platform linux/amd64,linux/arm64 -f docker/node.Dockerfile \
+    --build-arg AGENT_VERSION=1.4.0 -t dihasi/awg-node:1.4.0 -t dihasi/awg-node:latest --push .
 ```
 
 ```bash
@@ -153,9 +157,14 @@ of the page shows the record, its TTL, and whether the panel's own resolver alre
 
 With `AWG_CLOUDFLARE_API_TOKEN` and `AWG_CLOUDFLARE_ZONE_ID` set, the panel edits the record
 itself - an A or AAAA record, never proxied, since the orange cloud carries HTTP only and would
-swallow the tunnel. The token needs `Zone:DNS:Edit` on that zone and nothing else. If the API
-refuses, the switch is refused with it: the panel never claims a node is active while the record
-still points elsewhere.
+swallow the tunnel. The token needs `Zone:Read` and `Zone:DNS:Edit` on that zone and nothing
+else. If the API refuses, the switch is refused with it: the panel never claims a node is active
+while the record still points elsewhere.
+
+Before every edit the panel checks that the record name actually belongs to the configured zone,
+and that it answers through exactly one address record. A name with several A records, both an A
+and an AAAA record, or a CNAME is refused with a reason rather than having "the first" record
+moved while clients keep resolving the others.
 
 Without a token the button still works - it records which node is active and shows the record to
 set - and the resolver check is what confirms you made the change.
@@ -166,6 +175,53 @@ exactly the case it is for.
 
 If a node reports no address at all, its agent could not reach any echo service. Set `AWG_PUBLIC_IP`
 on that node to state it directly.
+
+## Automatic failover and probes
+
+A blocked node looks perfectly healthy from the inside: its agent reports in, the interface is up,
+and clients simply cannot reach it. So the panel judges each node from two kinds of evidence:
+
+- **the agent's own reports** say whether the node runs - tunnel up, reporting on time;
+- **probes** say whether a client can reach it. A probe is the node image run with
+  `AWG_ROLE=probe` on a host where your clients are - ideally inside the network that does the
+  blocking. Every minute it brings up a throwaway interface against each node, with a real client
+  key and the fleet's wire format, waits for the AmneziaWG handshake, and then fetches a page
+  through the tunnel. Only an answer counts: the common block lets the first handshake through and
+  drops everything after it, so a handshake alone would read a blocked node as healthy. A TCP
+  connect or a ping would sail through exactly the blocks that matter.
+
+Together they give each node one of these states, shown on its card:
+
+| State | Meaning |
+| --- | --- |
+| healthy | A probe completed a handshake - or, with no probe watching, the agent reports the tunnel up. |
+| blocked | The agent reports the tunnel up, and no probe gets traffic through. The reason says whether the handshake itself failed (address or port blocked) or completed with nothing after it (DPI, or the node's egress is broken). |
+| down | The agent reports the tunnel down, or neither the agent nor any probe reaches it. |
+| silent | No status report for `AWG_NODE_STALE_SECONDS` and no probe watching it. |
+
+Add a probe under **Nodes → Probes → Add probe**; the panel hands you a `docker run` line. A probe
+never receives a bundle and never holds the fleet private key: it is a client of the fleet with a
+key of its own, hidden from the client list, and a probe token cannot enroll a node or the other
+way round. If the probe cannot even run its check, that is reported as a probe error and never
+counts against the node, so a broken probe can never move traffic.
+
+**Automatic failover** is off until you arm it under **Nodes → Automatic failover**, and it can
+only be armed with a DNS provider configured - arming it runs the same zone and record checks as a
+switch, so a problem shows up while you are looking. Once armed, the panel moves the record when
+the active node has been blocked, down or silent for `AWG_FAILOVER_GRACE_SECONDS`. It picks a node
+that is healthy right now, has an address, runs the current bundle schema and is not excluded -
+preferring one that has applied the latest revision, then one probes have reached, then the lowest
+priority number (set per node under **Failover settings**). It then waits
+`AWG_FAILOVER_COOLDOWN_MINUTES` before it will switch again, and it never switches back on its own.
+The switch is the very same call as the **Make active** button, so it does not touch the fleet
+revision either.
+
+With failover left manual the panel still watches: it tells you when a node is blocked or down, and
+when a switch is due, and leaves the button to you.
+
+Notifications go to a webhook (`AWG_NOTIFY_WEBHOOK_URL`, a JSON POST) and/or Telegram
+(`AWG_NOTIFY_TELEGRAM_BOT_TOKEN` and `AWG_NOTIFY_TELEGRAM_CHAT_ID`): nodes becoming blocked, down,
+silent or recovering, switches, and a failover that is stuck or refused. **Test** sends one.
 
 ## Recovering a node
 
@@ -214,10 +270,21 @@ For a fresh panel you can instead point `AWG_IMPORT_LEGACY_STATE` at a mounted `
 | `AWG_CONTROL_DB` | SQLite file. Default `/etc/awg-control/control.db`. |
 | `AWG_BUNDLE_LIFETIME_MINUTES` | How long a signed bundle stays valid. Default 15. |
 | `AWG_IMPORT_LEGACY_STATE` | One-shot adoption of an old `state.json`. |
-| `AWG_CLOUDFLARE_API_TOKEN` | Lets the panel move the record itself. Needs `Zone:DNS:Edit`. |
+| `AWG_CLOUDFLARE_API_TOKEN` | Lets the panel move the record itself. Needs `Zone:Read` and `Zone:DNS:Edit`. |
 | `AWG_CLOUDFLARE_ZONE_ID` | The zone the record lives in. Both are required, or switching stays manual. |
 | `AWG_DNS_RECORD_NAME` | Record to move. Defaults to `AWG_ENDPOINT_HOST`. |
 | `AWG_DNS_TTL` | TTL written with the record, and the speed limit on failover. Default 60. |
+| `AWG_FAILOVER_CHECK_SECONDS` | How often the panel evaluates the fleet. Default 30. |
+| `AWG_FAILOVER_GRACE_SECONDS` | How long the active node must be failing before traffic moves. Default 120. |
+| `AWG_FAILOVER_COOLDOWN_MINUTES` | Minimum time after any switch before an automatic one. Default 15. |
+| `AWG_NODE_STALE_SECONDS` | A node silent this long counts as silent. Default 90. |
+| `AWG_PROBE_STALE_SECONDS` | Probe results older than this are ignored. Default 300. |
+| `AWG_PROBE_INTERVAL_SECONDS` | How often probes run a round. Default 60. |
+| `AWG_PROBE_HANDSHAKE_TIMEOUT_SECONDS` | How long a probe waits for one node's handshake. Default 15. |
+| `AWG_PROBE_CHECK_URLS` | What probes fetch through the tunnel, comma-separated; any answer counts. Default `http://1.1.1.1/cdn-cgi/trace`, `http://connectivitycheck.gstatic.com/generate_204`. `none` checks the handshake alone. |
+| `AWG_PROBE_TRAFFIC_TIMEOUT_SECONDS` | How long each of those has to answer. Default 8. |
+| `AWG_NOTIFY_WEBHOOK_URL` | Where to POST notifications as JSON. |
+| `AWG_NOTIFY_TELEGRAM_BOT_TOKEN`, `AWG_NOTIFY_TELEGRAM_CHAT_ID` | Telegram bot and chat for notifications. |
 
 ### Node
 
@@ -233,6 +300,7 @@ For a fresh panel you can instead point `AWG_IMPORT_LEGACY_STATE` at a mounted `
 | `AWG_PUBLIC_IP` | States the node's public address instead of discovering it. |
 | `AWG_PUBLIC_IP_URLS` | Echo services used to discover it. Empty switches discovery off. |
 | `AWG_PUBLIC_IP_REFRESH_MINUTES` | How often a known address is checked again. Default 10. |
+| `AWG_ROLE` | `probe` runs the image as a probe instead of a node. Its state lives in `/etc/awg-probe`. |
 
 Obfuscation is **not** configured through environment variables. It is fleet-wide and lives in the
 panel under **Fleet**, so a change applies to every node at once.
@@ -359,22 +427,18 @@ See [AGENTS.md](AGENTS.md) for the architectural invariants worth knowing before
 
 ## Roadmap
 
-Phase 1 — multi-server with manual switchover — is done. What comes next:
+Phase 1 (multi-server with manual switchover) and Phase 2 (probes, blocked-vs-down detection,
+automatic failover, notifications) are done. What comes next:
 
-- **Health and blocking detection.** A blocked node looks perfectly healthy from the inside: the
-  agent reports in, the interface is up, and clients simply cannot reach it. Detecting that needs
-  probes from the networks users actually connect from, comparing agent heartbeats against real
-  AmneziaWG handshakes from several vantage points.
-- **Automatic failover** driven by that signal, with quorum and hysteresis, and notifying the
-  operator. The switch itself already exists and is what a probe would call; what is missing is the
-  judgement about when to call it. Reassigning a floating IP would be a second provider behind the
-  same interface.
+- **A floating-IP provider** as a second implementation behind the same interface as Cloudflare,
+  for deployments that move an address rather than a record.
 - **Fleet identity rotation**, so a compromised or seized node is recoverable without rebuilding
   everything by hand.
 
 ## Known gaps
 
-- The pair has been exercised in containers on a single host, not yet across real servers.
+- The pair has been exercised in containers on a single host, not yet across real servers. The
+  probe's handshake check has not yet been run against a real node either.
 - The frontend has no automated tests.
 - The predecessor single-server app is preserved at tag `v0.9-standalone` and has been removed
   from the tree.
@@ -455,9 +519,13 @@ docker compose -f compose.node.yaml build
 ```bash
 # На машине сборки или в CI. AGENT_VERSION — это версия, которую нода сообщает
 # панели; без неё агент представляется как 0.0.0-dev.
-docker build -f docker/control.Dockerfile -t dihasi/awg-control:latest .
-docker build -f docker/node.Dockerfile   -t dihasi/awg-node:latest --build-arg AGENT_VERSION=1.3.1 .
-docker push dihasi/awg-control:latest && docker push dihasi/awg-node:latest
+# Both images are multi-arch (amd64 and arm64 - a probe on a Raspberry Pi), built on an amd64
+# machine with a buildx builder that can push manifest lists:
+#   docker buildx create --name awg --driver docker-container --use
+docker buildx build --platform linux/amd64,linux/arm64 -f docker/control.Dockerfile \
+    -t dihasi/awg-control:1.4.0 -t dihasi/awg-control:latest --push .
+docker buildx build --platform linux/amd64,linux/arm64 -f docker/node.Dockerfile \
+    --build-arg AGENT_VERSION=1.4.0 -t dihasi/awg-node:1.4.0 -t dihasi/awg-node:latest --push .
 ```
 
 ```bash
@@ -521,9 +589,14 @@ services:
 
 Если заданы `AWG_CLOUDFLARE_API_TOKEN` и `AWG_CLOUDFLARE_ZONE_ID`, панель правит запись сама —
 A или AAAA, всегда без проксирования: оранжевая тучка пропускает только HTTP и проглотила бы
-туннель. Токену нужно право `Zone:DNS:Edit` на эту зону и ничего больше. Если API отказал,
-переключение отменяется вместе с ним: панель никогда не утверждает, что нода активна, пока запись
-смотрит в другую сторону.
+туннель. Токену нужны права `Zone:Read` и `Zone:DNS:Edit` на эту зону и ничего больше. Если API
+отказал, переключение отменяется вместе с ним: панель никогда не утверждает, что нода активна, пока
+запись смотрит в другую сторону.
+
+Перед каждой правкой панель проверяет, что имя записи действительно лежит в настроенной зоне и что
+оно отвечает ровно одной адресной записью. Имя с несколькими A-записями, с A и AAAA одновременно
+или CNAME отклоняется с объяснением — вместо того чтобы передвинуть «первую» запись, пока клиенты
+продолжают получать остальные.
 
 Без токена кнопка тоже работает — она фиксирует активную ноду и показывает, что вписать, — а
 проверка резолвом подтверждает, что вы это сделали.
@@ -534,6 +607,55 @@ A или AAAA, всегда без проксирования: оранжева�
 
 Если у ноды вообще нет адреса, её агент не смог достучаться ни до одного эхо-сервиса. Задайте на
 этой ноде `AWG_PUBLIC_IP` напрямую.
+
+## Автоматический фейловер и пробы
+
+Заблокированная нода изнутри выглядит совершенно здоровой: агент рапортует, интерфейс поднят, а
+клиенты просто не могут до неё достучаться. Поэтому панель оценивает каждую ноду по двум видам
+данных:
+
+- **отчёты самого агента** говорят, работает ли нода — туннель поднят, отчёты приходят вовремя;
+- **пробы** говорят, может ли до неё достучаться клиент. Проба — это образ ноды, запущенный с
+  `AWG_ROLE=probe` на машине там, где ваши клиенты, лучше всего внутри той сети, которая блокирует.
+  Раз в минуту она поднимает временный интерфейс к каждой ноде — с настоящим клиентским ключом и
+  форматом обфускации флота, — ждёт хендшейк AmneziaWG, а затем открывает страницу через туннель.
+  Засчитывается только ответ: типичная блокировка пропускает первый хендшейк и режет всё, что
+  идёт после, так что по одному хендшейку заблокированная нода выглядела бы здоровой. TCP-коннект
+  или пинг прошли бы как раз сквозь те блокировки, которые важны.
+
+Вместе они дают ноде одно из состояний, которое видно на её карточке:
+
+| Состояние | Значение |
+| --- | --- |
+| healthy | Проба завершила хендшейк — или, если проб нет, агент сообщает, что туннель поднят. |
+| blocked | Агент сообщает, что туннель поднят, но ни одна проба не может пропустить через него трафик. В причине видно, не прошёл ли сам хендшейк (заблокированы адрес или порт) или он прошёл, а дальше тишина (DPI или сломан выход ноды в интернет). |
+| down | Агент сообщает, что туннель лежит, или до ноды не достучались ни агент, ни пробы. |
+| silent | Нет отчёта дольше `AWG_NODE_STALE_SECONDS`, и пробы за нодой не следят. |
+
+Проба добавляется в **Nodes → Probes → Add probe**; панель выдаёт строку `docker run`. Проба
+никогда не получает бандл и не держит приватный ключ флота: это клиент флота со своим ключом,
+скрытый из списка клиентов, а токен пробы не может зарегистрировать ноду и наоборот. Если проба не
+смогла даже выполнить проверку, это считается ошибкой пробы и никогда не засчитывается против
+ноды, так что сломанная проба не может передвинуть трафик.
+
+**Автоматический фейловер** выключен, пока вы не включите его в **Nodes → Automatic failover**, и
+включить его можно только при настроенном DNS-провайдере — при включении выполняются те же проверки
+зоны и записи, что и при переключении, так что проблема всплывает, пока вы смотрите. После
+включения панель переводит запись, когда активная нода пробыла в состоянии blocked, down или silent
+дольше `AWG_FAILOVER_GRACE_SECONDS`. Она выбирает ноду, которая здорова прямо сейчас, имеет адрес,
+поддерживает текущую схему бандла и не исключена — предпочитая ту, что применила последнюю ревизию,
+затем ту, до которой дотянулись пробы, затем с наименьшим числом приоритета (задаётся на ноде в
+**Failover settings**). После этого она ждёт `AWG_FAILOVER_COOLDOWN_MINUTES`, прежде чем
+переключать снова, и никогда не переключает обратно сама. Переключение — ровно тот же вызов, что и
+кнопка **Make active**, поэтому ревизию флота оно тоже не трогает.
+
+В ручном режиме панель всё равно следит: сообщает, что нода заблокирована или лежит и что пора
+переключаться, а нажать кнопку оставляет вам.
+
+Уведомления уходят в webhook (`AWG_NOTIFY_WEBHOOK_URL`, JSON POST) и/или в Telegram
+(`AWG_NOTIFY_TELEGRAM_BOT_TOKEN` и `AWG_NOTIFY_TELEGRAM_CHAT_ID`): нода стала blocked, down, silent
+или восстановилась, произошло переключение, фейловер застрял или провайдер отказал. Кнопка
+**Test** отправляет пробное уведомление.
 
 ## Восстановление ноды
 
@@ -583,10 +705,21 @@ docker rm -f awg-node && rm -rf /etc/awg-node/*
 | `AWG_CONTROL_DB` | Файл SQLite. По умолчанию `/etc/awg-control/control.db`. |
 | `AWG_BUNDLE_LIFETIME_MINUTES` | Срок жизни подписанного бандла. По умолчанию 15. |
 | `AWG_IMPORT_LEGACY_STATE` | Разовое усыновление старого `state.json`. |
-| `AWG_CLOUDFLARE_API_TOKEN` | Позволяет панели менять запись сама. Нужно право `Zone:DNS:Edit`. |
+| `AWG_CLOUDFLARE_API_TOKEN` | Позволяет панели менять запись сама. Нужны права `Zone:Read` и `Zone:DNS:Edit`. |
 | `AWG_CLOUDFLARE_ZONE_ID` | Зона, в которой живёт запись. Без обоих значений переключение остаётся ручным. |
 | `AWG_DNS_RECORD_NAME` | Какую запись переводить. По умолчанию `AWG_ENDPOINT_HOST`. |
 | `AWG_DNS_TTL` | TTL записи, он же ограничение скорости фейловера. По умолчанию 60. |
+| `AWG_FAILOVER_CHECK_SECONDS` | Как часто панель оценивает флот. По умолчанию 30. |
+| `AWG_FAILOVER_GRACE_SECONDS` | Сколько активная нода должна быть недоступна, прежде чем трафик уйдёт. По умолчанию 120. |
+| `AWG_FAILOVER_COOLDOWN_MINUTES` | Минимальная пауза после любого переключения до автоматического. По умолчанию 15. |
+| `AWG_NODE_STALE_SECONDS` | Нода без отчёта дольше этого считается silent. По умолчанию 90. |
+| `AWG_PROBE_STALE_SECONDS` | Результаты проб старше этого игнорируются. По умолчанию 300. |
+| `AWG_PROBE_INTERVAL_SECONDS` | Как часто пробы делают обход. По умолчанию 60. |
+| `AWG_PROBE_HANDSHAKE_TIMEOUT_SECONDS` | Сколько проба ждёт хендшейк одной ноды. По умолчанию 15. |
+| `AWG_PROBE_CHECK_URLS` | Что пробы открывают через туннель, через запятую; засчитывается любой ответ. По умолчанию `http://1.1.1.1/cdn-cgi/trace`, `http://connectivitycheck.gstatic.com/generate_204`. `none` — проверять только хендшейк. |
+| `AWG_PROBE_TRAFFIC_TIMEOUT_SECONDS` | Сколько ждать ответа от каждого из них. По умолчанию 8. |
+| `AWG_NOTIFY_WEBHOOK_URL` | Куда отправлять уведомления JSON-запросом POST. |
+| `AWG_NOTIFY_TELEGRAM_BOT_TOKEN`, `AWG_NOTIFY_TELEGRAM_CHAT_ID` | Бот и чат Telegram для уведомлений. |
 
 ### Нода
 
@@ -602,6 +735,7 @@ docker rm -f awg-node && rm -rf /etc/awg-node/*
 | `AWG_PUBLIC_IP` | Задать внешний адрес ноды вручную вместо автоопределения. |
 | `AWG_PUBLIC_IP_URLS` | Эхо-сервисы для автоопределения. Пустое значение выключает его. |
 | `AWG_PUBLIC_IP_REFRESH_MINUTES` | Как часто перепроверять известный адрес. По умолчанию 10. |
+| `AWG_ROLE` | `probe` запускает образ как пробу вместо ноды. Её состояние лежит в `/etc/awg-probe`. |
 
 Обфускация настраивается **не** переменными окружения. Она общая для флота и задаётся в панели в
 разделе **Fleet**, поэтому изменение применяется сразу ко всем нодам.
@@ -730,21 +864,17 @@ awg-node --render-bundle bundle.json --control-key <base64url> --egress ens3
 
 ## Дорожная карта
 
-Фаза 1 — мультисерверность с ручным переключением — готова. Дальше:
+Фаза 1 (мультисерверность с ручным переключением) и фаза 2 (пробы, различение «заблокирована» и
+«лежит», автоматический фейловер, уведомления) готовы. Дальше:
 
-- **Детект блокировки.** Заблокированная нода изнутри выглядит совершенно здоровой: агент
-  рапортует, интерфейс поднят, а клиенты просто не могут до неё достучаться. Чтобы это увидеть,
-  нужны пробы из сетей, откуда реально подключаются пользователи, и сопоставление heartbeat агента
-  с настоящими AmneziaWG-хендшейками с нескольких точек.
-- **Автоматический фейловер** по этому сигналу — с кворумом, гистерезисом и уведомлением
-  администратора. Само переключение уже есть, и проба будет вызывать именно его; не хватает
-  решения о том, когда его вызывать. Перенос floating IP — это второй провайдер за тем же
-  интерфейсом.
+- **Провайдер floating IP** — вторая реализация за тем же интерфейсом, что и Cloudflare, для
+  установок, где переносится адрес, а не запись.
 - **Ротация идентичности флота**, чтобы скомпрометированная или изъятая нода не означала ручную
   пересборку всего.
 ## Известные пробелы
 
-- Связка проверена в контейнерах на одной машине, но ещё не на разнесённых серверах.
+- Связка проверена в контейнерах на одной машине, но ещё не на разнесённых серверах. Проверка
+  хендшейка пробой против настоящей ноды тоже ещё не запускалась.
 - У фронтенда нет автоматических тестов.
 - Предшественник — одиночное приложение — сохранён под тегом `v0.9-standalone` и удалён из
   дерева.

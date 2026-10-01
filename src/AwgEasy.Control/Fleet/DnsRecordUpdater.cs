@@ -36,6 +36,13 @@ public interface IDnsRecordUpdater
     bool IsConfigured { get; }
 
     Task<DnsUpdateResult> PointAsync(DnsRecordTarget target, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Checks, without changing anything, that a switch could move the record at all. Run before
+    /// automatic failover is armed, so a zone or record problem surfaces while an operator is
+    /// looking rather than at the moment a node dies. Null means nothing is in the way.
+    /// </summary>
+    Task<ApiError?> CheckAsync(string recordName, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -53,4 +60,7 @@ public sealed class ManualDnsRecordUpdater : IDnsRecordUpdater
         => Task.FromResult(new DnsUpdateResult(
             DnsUpdateOutcome.Manual,
             $"Set {target.Name} {target.RecordType} to {target.Address} with a TTL of {target.Ttl}s."));
+
+    public Task<ApiError?> CheckAsync(string recordName, CancellationToken cancellationToken)
+        => Task.FromResult<ApiError?>(null);
 }

@@ -63,6 +63,41 @@ public sealed class RecordingDnsUpdater : IDnsRecordUpdater
         Applied.Add(target);
         return Task.FromResult(new DnsUpdateResult(Outcome, "recorded"));
     }
+
+    /// <summary>What the pre-flight check reports. Null means the record could be moved.</summary>
+    public ApiError? CheckError { get; set; }
+
+    public Task<ApiError?> CheckAsync(string recordName, CancellationToken cancellationToken)
+        => Task.FromResult(CheckError);
+}
+
+/// <summary>Collects what the panel would have announced, instead of posting it anywhere.</summary>
+public sealed class RecordingNotificationChannel : INotificationChannel
+{
+    private readonly List<Notification> _sent = [];
+
+    public string Name => "test";
+
+    public IReadOnlyList<Notification> Sent
+    {
+        get
+        {
+            lock (_sent)
+            {
+                return [.. _sent];
+            }
+        }
+    }
+
+    public Task SendAsync(Notification notification, CancellationToken cancellationToken)
+    {
+        lock (_sent)
+        {
+            _sent.Add(notification);
+        }
+
+        return Task.CompletedTask;
+    }
 }
 
 /// <summary>Keeps real name resolution out of the suite: what the panel sees is what a test says.</summary>
@@ -87,6 +122,8 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<ControlPlaneEntr
 
     public StubHostAddressResolver Resolver { get; } = new();
 
+    public RecordingNotificationChannel Notifications { get; } = new();
+
     private readonly string _databasePath = Path.Combine(
         Path.GetTempPath(),
         "awg-tests",
@@ -110,7 +147,23 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<ControlPlaneEntr
                 BootstrapAdminUser: AdminUser,
                 BootstrapAdminPassword: AdminPassword,
                 LegacyStateImportPath: null,
-                Dns: new DnsFailoverOptions(RecordName: null, Ttl: 60, CloudflareApiToken: null, CloudflareZoneId: null)));
+                Dns: new DnsFailoverOptions(RecordName: null, Ttl: 60, CloudflareApiToken: null, CloudflareZoneId: null),
+                // No grace and no cooldown, so a test decides when a round runs - through
+                // POST /api/failover/evaluate - and what it sees. The background loop is pushed
+                // out of the way for the same reason.
+                Failover: new FailoverOptions(
+                    CheckInterval: TimeSpan.FromHours(1),
+                    Grace: TimeSpan.Zero,
+                    Cooldown: TimeSpan.Zero,
+                    AgentStaleAfter: TimeSpan.FromMinutes(5),
+                    ProbeStaleAfter: TimeSpan.FromMinutes(5),
+                    ProbeInterval: TimeSpan.FromSeconds(60),
+                    ProbeHandshakeTimeout: TimeSpan.FromSeconds(15),
+                    ProbeCheckUrls: FailoverOptions.DefaultProbeCheckUrls,
+                    ProbeTrafficTimeout: TimeSpan.FromSeconds(8)),
+                Notifications: new NotificationOptions(null, null, null)));
+
+            services.AddSingleton<INotificationChannel>(Notifications);
 
             services.RemoveAll<IAwgKeyGenerator>();
             services.AddSingleton<IAwgKeyGenerator, FakeKeyGenerator>();
@@ -195,6 +248,24 @@ public sealed class TestAgent : IDisposable
         PinnedSigningKey = enrolled.ControlSigningPublicKey;
         PinnedSigningKeyId = enrolled.ControlSigningKeyId;
         return enrolled;
+    }
+
+    /// <summary>Enrolls as a probe does: same request, its own endpoint, and a probe id in place of a node id.</summary>
+    public async Task<HttpResponseMessage> EnrollAsProbeAsync(HttpClient client, string token, string hostname = "test-probe")
+    {
+        var response = await client.PostAsJsonAsync(
+            "/api/v1/probes/enroll",
+            new EnrollRequest(token, hostname, PublicKey, "test-probe/1.0"));
+
+        if (response.IsSuccessStatusCode)
+        {
+            var enrolled = (await response.Content.ReadFromJsonAsync<EnrollResponse>())!;
+            NodeId = enrolled.NodeId;
+            PinnedSigningKey = enrolled.ControlSigningPublicKey;
+            PinnedSigningKeyId = enrolled.ControlSigningKeyId;
+        }
+
+        return response;
     }
 
     public HttpRequestMessage SignedRequest(HttpMethod method, string path, HttpContent? content = null, string? asNodeId = null)

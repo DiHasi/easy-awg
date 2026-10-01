@@ -38,6 +38,12 @@ public sealed class AwgInterface(
                 Directory.CreateDirectory(directory);
             }
 
+            // Read before the file is overwritten, for the same reason as the restart decision
+            // below: once the new config is on disk, nothing records what the old rules named.
+            var previousEgress = File.Exists(options.InterfaceConfigPath)
+                ? NodeFirewall.InstalledEgress(await File.ReadAllTextAsync(options.InterfaceConfigPath, cancellationToken))
+                : null;
+
             // Decided, and acted on, before the file is overwritten: taking the interface down
             // runs the PostDown of the config that brought it up, which is the only thing that
             // knows which rules to withdraw.
@@ -71,6 +77,11 @@ public sealed class AwgInterface(
             }
 
             await EnsureFirewallAsync(egress, cancellationToken);
+
+            if (previousEgress is not null && !string.Equals(previousEgress, egress, StringComparison.Ordinal))
+            {
+                await WithdrawStaleRulesAsync(previousEgress, egress, cancellationToken);
+            }
         }
         finally
         {
@@ -194,6 +205,34 @@ public sealed class AwgInterface(
 
             logger.LogWarning("Forwarding rule was missing; restoring it: {Rule}", rule.ToCommand("-A"));
             await RunAsync("iptables", rule.ToArguments("-A"), cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Removes what the previous egress interface left behind. A syncconf apply runs no PostDown,
+    /// and a later `awg-quick down` runs the PostDown of the new config, which names the new
+    /// interface - so without this the old MASQUERADE outlives every restart. A full restart has
+    /// usually withdrawn it already through the old PostDown, which is why each rule is checked
+    /// before it is deleted rather than deleted blind.
+    /// </summary>
+    private async Task WithdrawStaleRulesAsync(string previousEgress, string egress, CancellationToken cancellationToken)
+    {
+        foreach (var rule in NodeFirewall.Stale(options.InterfaceName, previousEgress, egress))
+        {
+            // Once, not until -C stops matching: a rule the operator added by hand with the same
+            // arguments is indistinguishable from ours, and we only ever installed one.
+            var check = await ProcessRunner.TryRunAsync("iptables", rule.ToArguments("-C"), input: null, cancellationToken);
+            if (check is null || check.ExitCode != 0)
+            {
+                continue;
+            }
+
+            logger.LogInformation(
+                "Egress moved from {Previous} to {Current}; withdrawing the old rule: {Rule}",
+                previousEgress,
+                egress,
+                rule.ToCommand("-D"));
+            await RunAsync("iptables", rule.ToArguments("-D"), cancellationToken);
         }
     }
 

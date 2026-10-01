@@ -114,6 +114,67 @@ export type Node = {
   lastError?: string | null
   revoked: boolean
   enrolledAt: string
+  /** Whether clients can reach it, not just whether it runs. `blocked` is up but unreachable from where probes stand. */
+  health: NodeHealth
+  healthReason: string
+  /** `probes` when probe handshakes decided the health, `agent` when only the node's own reports did. */
+  healthSource: 'probes' | 'agent'
+  lastReachableAt?: string | null
+  failingSince?: string | null
+  probesReachable: number
+  probesReporting: number
+  /** Lower is tried first by automatic failover. */
+  failoverPriority: number
+  /** False keeps automatic failover from ever sending traffic here. */
+  autoFailover: boolean
+}
+
+export type NodeHealth = 'healthy' | 'blocked' | 'down' | 'silent' | 'unknown' | 'revoked'
+
+export type FailoverAction = 'none' | 'wait' | 'hold' | 'stuck' | 'switch' | 'recommend' | 'failed'
+
+export type FailoverStatus = {
+  mode: 'manual' | 'automatic'
+  provider: string
+  providerConfigured: boolean
+  checkIntervalSeconds: number
+  graceSeconds: number
+  cooldownSeconds: number
+  nodeStaleSeconds: number
+  probeStaleSeconds: number
+  notificationChannels: string[]
+  /** Null until the monitor has run its first round. */
+  evaluatedAt?: string | null
+  action?: FailoverAction | null
+  message?: string | null
+  activeNodeId?: string | null
+  targetNodeId?: string | null
+}
+
+export type ProbeResult = {
+  nodeId: string
+  address: string
+  outcome: 'reachable' | 'unreachable' | 'error'
+  checkedAt: string
+  lastReachableAt?: string | null
+  latencyMs?: number | null
+  detail?: string | null
+  /**
+   * Whether the handshake completed. True on an `unreachable` result is the DPI pattern: the
+   * handshake gets through and the traffic after it does not.
+   */
+  handshake?: boolean | null
+}
+
+export type Probe = {
+  id: string
+  name: string
+  hostname?: string | null
+  agentVersion?: string | null
+  lastSeenAt?: string | null
+  revoked: boolean
+  enrolledAt: string
+  results: ProbeResult[]
 }
 
 export type DnsStatus = {

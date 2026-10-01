@@ -8,11 +8,48 @@ public static class NodeApi
 {
     public static void MapNodes(this RouteGroupBuilder admin)
     {
-        admin.MapGet("/nodes", (NodeRepository nodes, FleetService fleet, DnsFailoverService failover) =>
+        admin.MapGet("/nodes", (NodeRepository nodes, FleetService fleet, DnsFailoverService failover, FailoverMonitor monitor) =>
         {
             var revision = fleet.Current.Revision;
             var activeNodeId = failover.ActiveNodeId;
-            return TypedResults.Ok(nodes.List().Select(node => NodeResponse.From(node, revision, activeNodeId)).ToArray());
+            var list = nodes.List();
+            var health = monitor.Assess(list, DateTimeOffset.UtcNow);
+            return TypedResults.Ok(list.Select(node => NodeResponse.From(node, revision, activeNodeId, health[node.Id])).ToArray());
+        });
+
+        // Not a fleet change either: which node automatic failover prefers decides nothing any
+        // node runs, so the revision stays put.
+        admin.MapPut("/nodes/{id}/failover", (
+            string id,
+            UpdateNodeFailoverRequest request,
+            NodeRepository nodes,
+            FleetService fleet,
+            DnsFailoverService failover,
+            FailoverMonitor monitor,
+            EventLog events,
+            HttpContext context) =>
+        {
+            if (request.Priority is < 0 or > 1000)
+            {
+                return Results.BadRequest(new ApiError("failover_priority_invalid", "Priority must be between 0 and 1000."));
+            }
+
+            if (!nodes.SetFailoverPreferences(id, request.Priority, request.AutoFailover))
+            {
+                return Results.NotFound(new ApiError("node_not_found", "Node was not found."));
+            }
+
+            events.Record(
+                "node.failover_preferences",
+                request.AutoFailover
+                    ? $"Failover priority set to {request.Priority}."
+                    : "Excluded from automatic failover.",
+                actor: context.User.Identity?.Name,
+                nodeId: id);
+
+            var node = nodes.Find(id)!;
+            var health = monitor.Assess([node], DateTimeOffset.UtcNow);
+            return Results.Ok(NodeResponse.From(node, fleet.Current.Revision, failover.ActiveNodeId, health[node.Id]));
         });
 
         // Manual failover. Deliberately not a fleet change: the record every client config already
@@ -66,12 +103,14 @@ public static class NodeApi
             return Results.NoContent();
         });
 
-        admin.MapDelete("/nodes/{id}", (string id, NodeRepository nodes, DnsFailoverService failover, EventLog events, HttpContext context) =>
+        admin.MapDelete("/nodes/{id}", (string id, NodeRepository nodes, ProbeRepository probes, DnsFailoverService failover, EventLog events, HttpContext context) =>
         {
             if (!nodes.Delete(id))
             {
                 return Results.NotFound(new ApiError("node_not_found", "Node was not found."));
             }
+
+            probes.ForgetNode(id);
 
             // The DNS record may still point here - the panel cannot unpoint it on the operator's
             // behalf - but it must stop claiming a node it has forgotten is the active one.

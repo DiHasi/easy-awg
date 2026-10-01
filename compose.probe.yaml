@@ -1,0 +1,28 @@
+# A probe: the node image run as AWG_ROLE=probe on a host where your clients are - ideally inside
+# the network that does the blocking. It completes a real AmneziaWG handshake with every node and
+# reports the result, which is how the panel tells a blocked node from a healthy one.
+#
+# It needs no host networking, no firewall rules and no open port: it only makes outbound
+# handshakes, so Docker's default bridge is enough. NET_ADMIN and /dev/net/tun are for the
+# throwaway interface it brings up for each check. It never receives the fleet configuration.
+#
+# The panel hands you an equivalent `docker run` line under Nodes -> Probes -> Add probe.
+services:
+  awg-probe:
+    image: dihasi/awg-node:latest
+    container_name: awg-probe
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      AWG_ROLE: "probe"
+      AWG_CONTROL_URL: "${AWG_CONTROL_URL:-}"
+      # A probe token, not a node token: the panel refuses one used for the other.
+      AWG_ENROLLMENT_TOKEN: "${AWG_ENROLLMENT_TOKEN:-}"
+    volumes:
+      - awg-probe-state:/etc/awg-probe
+
+volumes:
+  awg-probe-state:

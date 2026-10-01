@@ -19,7 +19,10 @@ RUN apt-get update \
 
 # Slim: the Nuxt build needs no native toolchain, and the full image costs ~700MB of
 # build-host disk that a small VPS does not have.
-FROM node:24-bookworm-slim AS frontend-build
+# The frontend and the .NET build produce platform-neutral output (static files, IL), so they
+# run on the build machine whatever the target; only the tools build and the final image are
+# per-architecture.
+FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS frontend-build
 WORKDIR /src/frontend
 RUN corepack enable
 COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
@@ -27,14 +30,14 @@ RUN pnpm install --frozen-lockfile
 COPY frontend ./
 RUN pnpm run generate
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
 COPY ["src/AwgEasy.Contracts/AwgEasy.Contracts.csproj", "src/AwgEasy.Contracts/"]
 COPY ["src/AwgEasy.Control/AwgEasy.Control.csproj", "src/AwgEasy.Control/"]
 RUN dotnet restore "src/AwgEasy.Control/AwgEasy.Control.csproj"
 COPY src/ src/
-RUN dotnet publish "src/AwgEasy.Control/AwgEasy.Control.csproj" -c $BUILD_CONFIGURATION -o /app/publish
+RUN dotnet publish "src/AwgEasy.Control/AwgEasy.Control.csproj" -c $BUILD_CONFIGURATION -p:UseAppHost=false -o /app/publish
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app

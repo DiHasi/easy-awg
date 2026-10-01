@@ -38,6 +38,10 @@ public sealed record FleetResponse(
 
 /// <param name="PublicIp">Where this node says it is reachable, as discovered by the agent itself.</param>
 /// <param name="IsActive">True for the one node the failover DNS record currently points at.</param>
+/// <param name="Health">One of <see cref="NodeHealthStates"/>: whether clients can reach it, not just whether it runs.</param>
+/// <param name="HealthSource">"probes" when probe results decided <paramref name="Health"/>, "agent" when only the node's own reports did.</param>
+/// <param name="FailoverPriority">Lower is tried first when automatic failover picks a node.</param>
+/// <param name="AutoFailover">False keeps automatic failover from ever sending traffic here.</param>
 public sealed record NodeResponse(
     string Id,
     string Name,
@@ -57,9 +61,18 @@ public sealed record NodeResponse(
     DateTimeOffset? LastSeenAt,
     string? LastError,
     bool Revoked,
-    DateTimeOffset EnrolledAt)
+    DateTimeOffset EnrolledAt,
+    string Health,
+    string HealthReason,
+    string HealthSource,
+    DateTimeOffset? LastReachableAt,
+    DateTimeOffset? FailingSince,
+    int ProbesReachable,
+    int ProbesReporting,
+    int FailoverPriority,
+    bool AutoFailover)
 {
-    public static NodeResponse From(NodeRecord node, long fleetRevision, string? activeNodeId)
+    public static NodeResponse From(NodeRecord node, long fleetRevision, string? activeNodeId, NodeAssessment health)
         => new(
             node.Id, node.Name, node.Hostname, node.EndpointHost,
             node.PublicIp, string.Equals(node.Id, activeNodeId, StringComparison.Ordinal),
@@ -68,8 +81,57 @@ public sealed record NodeResponse(
             node.InterfaceUp, node.Backend, node.AgentVersion,
             node.BundleSchemaVersion,
             node.BundleSchemaVersion >= DesiredStateBundle.CurrentSchemaVersion,
-            node.LastSeenAt, node.LastError, node.Revoked, node.EnrolledAt);
+            node.LastSeenAt, node.LastError, node.Revoked, node.EnrolledAt,
+            health.State, health.Reason, health.Source, health.LastGoodAt, health.FailingSince,
+            health.ProbesReachable, health.ProbesReporting,
+            node.FailoverPriority, node.AutoFailover);
 }
+
+public sealed record UpdateNodeFailoverRequest(int Priority, bool AutoFailover);
+
+/// <param name="Mode">One of <see cref="FailoverModes"/>.</param>
+/// <param name="NotificationChannels">Where notifications go; empty when none is configured.</param>
+/// <param name="EvaluatedAt">When the monitor last looked at the fleet. Null until its first round.</param>
+/// <param name="Action">What that round decided: none, wait, hold, stuck, switch, recommend or failed.</param>
+public sealed record FailoverStatusResponse(
+    string Mode,
+    string Provider,
+    bool ProviderConfigured,
+    int CheckIntervalSeconds,
+    int GraceSeconds,
+    int CooldownSeconds,
+    int NodeStaleSeconds,
+    int ProbeStaleSeconds,
+    string[] NotificationChannels,
+    DateTimeOffset? EvaluatedAt,
+    string? Action,
+    string? Message,
+    string? ActiveNodeId,
+    string? TargetNodeId);
+
+public sealed record UpdateFailoverRequest(string Mode);
+
+public sealed record CreateProbeRequest(string Name);
+
+public sealed record ProbeResultResponse(
+    string NodeId,
+    string Address,
+    string Outcome,
+    DateTimeOffset CheckedAt,
+    DateTimeOffset? LastReachableAt,
+    int? LatencyMs,
+    string? Detail,
+    bool? Handshake);
+
+public sealed record ProbeResponse(
+    string Id,
+    string Name,
+    string? Hostname,
+    string? AgentVersion,
+    DateTimeOffset? LastSeenAt,
+    bool Revoked,
+    DateTimeOffset EnrolledAt,
+    ProbeResultResponse[] Results);
 
 /// <summary>
 /// The state of manual failover: which node the record points at, and whether the world agrees.

@@ -1,3 +1,4 @@
+import NodeFailoverModal from '~/components/NodeFailoverModal.vue'
 import type { DnsStatus, Node } from '~/types/api'
 
 /**
@@ -8,6 +9,7 @@ export function useNodeActions() {
   const api = useControlApi()
   const toast = useToast()
   const confirm = useConfirm()
+  const failoverDialog = useOverlay().create(NodeFailoverModal)
   const { dns, refresh } = useFleetState()
 
   const busyId = ref<string | null>(null)
@@ -106,5 +108,13 @@ export function useNodeActions() {
     }
   }
 
-  return { busyId, activate, revoke, remove }
+  async function editFailover(node: Node) {
+    const saved = await failoverDialog.open({ node })
+    if (saved) {
+      await refresh()
+      toast.add({ title: `${node.name} updated`, icon: 'i-lucide-check', color: 'success' })
+    }
+  }
+
+  return { busyId, activate, revoke, remove, editFailover }
 }
