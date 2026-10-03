@@ -7,9 +7,9 @@ server pull that configuration and converge onto it. The point of the fleet desi
 failover**: when a server is blocked or dies, you move traffic to another one without reissuing a
 single client config.
 
-> Status: the fleet architecture is in place with **manual switchover** - one button in the panel
-> moves the DNS record to another node. Automatic failover, external probes and notifications are
-> designed but not yet built. See [Roadmap](#roadmap).
+> Status: the fleet architecture is in place, and so is everything built on top of it - external
+> probes, blocked-vs-down detection, automatic failover and notifications. Failover stays a button
+> you press until you arm it yourself. See [Roadmap](#roadmap).
 
 ## How it works
 
@@ -454,9 +454,9 @@ VPN-сервере забирают эту конфигурацию и прив�
 переключение**: когда сервер блокируют или он падает, трафик переезжает на другой без
 перевыпуска хотя бы одного клиентского конфига.
 
-> Статус: архитектура флота готова, переключение **ручное** — одна кнопка в панели переводит
-> DNS-запись на другую ноду. Автофейловер, внешние пробы и уведомления спроектированы, но ещё не
-> построены. См. [Дорожную карту](#дорожная-карта).
+> Статус: архитектура флота готова, и всё, что поверх неё, тоже — внешние пробы, различение
+> «заблокирована» и «лежит», автоматический фейловер и уведомления. Пока автофейловер не взведён
+> вручную, переключение остаётся кнопкой. См. [Дорожную карту](#дорожная-карта).
 
 ## Как это работает
 
@@ -871,6 +871,7 @@ awg-node --render-bundle bundle.json --control-key <base64url> --egress ens3
   установок, где переносится адрес, а не запись.
 - **Ротация идентичности флота**, чтобы скомпрометированная или изъятая нода не означала ручную
   пересборку всего.
+
 ## Известные пробелы
 
 - Связка проверена в контейнерах на одной машине, но ещё не на разнесённых серверах. Проверка
