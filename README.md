@@ -205,6 +205,8 @@ key of its own, hidden from the client list, and a probe token cannot enroll a n
 way round. If the probe cannot even run its check, that is reported as a probe error and never
 counts against the node, so a broken probe can never move traffic.
 
+If you prefer compose, use `.env.probe.example` with `compose.probe.yaml`.
+
 **Automatic failover** is off until you arm it under **Nodes → Automatic failover**, and it can
 only be armed with a DNS provider configured - arming it runs the same zone and record checks as a
 switch, so a problem shows up while you are looking. Once armed, the panel moves the record when
@@ -637,6 +639,8 @@ A или AAAA, всегда без проксирования: оранжева�
 скрытый из списка клиентов, а токен пробы не может зарегистрировать ноду и наоборот. Если проба не
 смогла даже выполнить проверку, это считается ошибкой пробы и никогда не засчитывается против
 ноды, так что сломанная проба не может передвинуть трафик.
+
+Если предпочитаете compose — используйте `.env.probe.example` вместе с `compose.probe.yaml`.
 
 **Автоматический фейловер** выключен, пока вы не включите его в **Nodes → Automatic failover**, и
 включить его можно только при настроенном DNS-провайдере — при включении выполняются те же проверки

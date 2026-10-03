@@ -47,6 +47,7 @@ frontend/.eslintcache
 !.env.example
 !.env.control.example
 !.env.node.example
+!.env.probe.example
 
 # Docker/local runtime state
 docker-compose.override.yml
