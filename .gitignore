@@ -14,6 +14,11 @@ coverage/
 *.coverage
 *.coveragexml
 
+# Agent skills are checked in under .agents/skills. A Claude Code session mirrors them
+# into .claude/skills as absolute symlinks, which would resolve to one machine's paths
+# for anyone else.
+.claude/skills/
+
 # Rider / Visual Studio / VS Code
 .idea/
 .vs/

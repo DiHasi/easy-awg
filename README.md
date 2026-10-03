@@ -406,7 +406,17 @@ pnpm install
 pnpm run dev        # against a locally running control plane
 pnpm run lint
 pnpm run typecheck
+cd ..
+
+# The agent is published ahead of time (AOT), and the trim/AOT analyzer runs only here - a
+# green `dotnet build` says nothing about whether the agent still publishes.
+dotnet publish src/AwgEasy.Node -c Release -r linux-x64
 ```
+
+`.github/workflows/ci.yml` runs all of that on every push and pull request, and fails on a known
+advisory anywhere in the dependency graph. The container images are not built there: they pull a
+Go toolchain and the AmneziaWG sources, which is minutes and gigabytes for something that changes
+far less often than the code.
 
 | Project | Role |
 | --- | --- |
@@ -845,7 +855,16 @@ pnpm install
 pnpm run dev        # против локально запущенной панели
 pnpm run lint
 pnpm run typecheck
+cd ..
+
+# Агент компилируется заранее (AOT), и анализатор trim/AOT работает только здесь — успешный
+# `dotnet build` ничего не говорит о том, собирается ли агент до конца.
+dotnet publish src/AwgEasy.Node -c Release -r linux-x64
 ```
+
+`.github/workflows/ci.yml` гоняет всё это на каждый push и pull request и падает на любой
+известной уязвимости в графе зависимостей. Образы там не собираются: они тянут Go-тулчейн и
+исходники AmneziaWG — минуты и гигабайты ради того, что меняется гораздо реже кода.
 
 | Проект | Роль |
 | --- | --- |

@@ -1,0 +1,94 @@
+# What a reviewer would otherwise have to run by hand. The images are deliberately not built
+# here: they pull a Go toolchain and the AmneziaWG sources, which is minutes and gigabytes for
+# something that changes far less often than the code does. Build those on a release.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push supersedes the run still going for the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dotnet:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - run: dotnet restore Awg-easy.sln
+
+      - run: dotnet build Awg-easy.sln -c Release --no-restore
+
+      - run: dotnet test Awg-easy.sln -c Release --no-build
+
+      # NU1903 is only a warning, so an advisory arriving through a transitive package would
+      # otherwise sit in the log until someone read it. The JSON carries no "vulnerabilities"
+      # key at all when the graph is clean, which keeps this check language-independent.
+      - name: Fail on a known advisory in the dependency graph
+        run: |
+          dotnet list package --vulnerable --include-transitive --format json > vulnerable.json
+          if grep -q '"vulnerabilities"' vulnerable.json; then
+            cat vulnerable.json
+            exit 1
+          fi
+
+  agent-aot:
+    name: Agent AOT publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install what the AOT compiler links against
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang zlib1g-dev
+
+      # The one step that actually enforces the AOT invariant. AwgEasy.Node and AwgEasy.Contracts
+      # promote the IL trim/AOT codes to errors, but the analyzer behind them runs on publish and
+      # nowhere else - a plain build of the solution says nothing about it.
+      - name: Publish the agent
+        run: dotnet publish src/AwgEasy.Node -c Release -r linux-x64
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # pnpm, at the version package.json pins.
+      - run: corepack enable
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run lint
+
+      # Catches the null/undefined drift between the API and the forms that linting does not.
+      - run: pnpm run typecheck
+
+      # The panel serves these static files, so a generate that fails is a panel that ships
+      # without a UI.
+      - run: pnpm run generate

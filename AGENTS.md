@@ -39,10 +39,18 @@ dotnet test Awg-easy.sln           # 213 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
 cd frontend && pnpm run generate   # static build into .output/public
+
+dotnet publish src/AwgEasy.Node -c Release -r linux-x64   # the only check of the AOT invariant
 ```
 
 Run `pnpm run typecheck` after touching anything the frontend consumes. It catches null/undefined
 drift between the API and the forms that plain linting does not.
+
+`.github/workflows/ci.yml` runs all of the above on every push and pull request, plus a
+`dotnet list package --vulnerable` gate. The publish line matters because the IL trim/AOT codes
+are promoted to errors but the analyzer behind them runs on publish and nowhere else - a green
+`dotnet build` says nothing about whether the agent still publishes. The images are not built in
+CI; that is minutes and gigabytes for something that changes far less often than the code.
 
 Both images build and have been run together: an agent enrolls, pulls a bundle and brings up
 awg0, and the panel reports it healthy and in sync. Build them off the VPN nodes though — the
