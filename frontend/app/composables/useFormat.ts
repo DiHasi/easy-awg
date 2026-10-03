@@ -10,10 +10,6 @@ export function formatBytes(bytes: number) {
   return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`
 }
 
-export function formatRate(bytesPerSecond?: number) {
-  return `${formatBytes(bytesPerSecond ?? 0)}/s`
-}
-
 export function relativeTime(value?: string | null, never = 'never') {
   if (!value) {
     return never

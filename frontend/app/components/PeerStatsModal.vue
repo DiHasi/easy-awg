@@ -2,9 +2,9 @@
 import type { Client, ClientStats, Node } from '~/types/api'
 
 /**
- * What one peer is actually doing: how much it has moved, how fast right now, when it last
- * handshook and which node it is on. The list can only afford a couple of numbers per row and
- * drops even those on a narrow screen, so this is where the whole picture lives.
+ * What one peer is actually doing: how much it has moved, when it last handshook and which node
+ * it is on. The list can only afford a couple of numbers per row and drops even those on a narrow
+ * screen, so this is where the whole picture lives.
  *
  * Resetting the counter is here rather than in the peer's menu because this is where the number
  * being reset is on screen.
@@ -12,7 +12,6 @@ import type { Client, ClientStats, Node } from '~/types/api'
 const props = defineProps<{
   client: Client | null
   stats?: ClientStats | null
-  rate?: { down: number, up: number } | null
   node?: Node | null
 }>()
 
@@ -109,18 +108,6 @@ async function reset() {
         <dl class="grid grid-cols-2 gap-3">
           <SpecItem label="Status">
             <StateMark :state="state" />
-          </SpecItem>
-          <SpecItem
-            label="Speed now"
-            mono
-          >
-            <template v-if="state === 'up'">
-              ↓ {{ formatRate(rate?.down) }} &nbsp;↑ {{ formatRate(rate?.up) }}
-            </template>
-            <span
-              v-else
-              class="text-dimmed"
-            >—</span>
           </SpecItem>
           <SpecItem label="Last handshake">
             {{ relativeTime(stats?.latestHandshakeAt) }}

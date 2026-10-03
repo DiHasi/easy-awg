@@ -12,7 +12,6 @@ const nodeActions = useNodeActions()
 
 const clients = ref<Client[]>([])
 const stats = ref<Record<string, ClientStats>>({})
-const rates = ref<Record<string, { down: number, up: number }>>({})
 const loading = ref(true)
 const errorMessage = ref<string | null>(null)
 const busyId = ref<string | null>(null)
@@ -69,10 +68,6 @@ const clientTuningFields = [
   { key: 'persistentKeepalive', label: 'PersistentKeepalive' }
 ] as const
 
-// Counters are cumulative, so a rate only means something as a delta between two samples.
-let previousStats: Record<string, ClientStats> | null = null
-let previousAt: number | null = null
-
 function peerState(client: Client): PeerState {
   if (!client.enabled) {
     return 'off'
@@ -119,37 +114,10 @@ async function loadClients() {
 async function loadStats() {
   try {
     const items = await api.get<ClientStats[]>('/clients/stats')
-    updateRates(items)
     stats.value = Object.fromEntries(items.map(item => [item.id, item]))
   } catch {
     // A dropped stats poll is not worth an error banner; the next tick usually recovers.
   }
-}
-
-function updateRates(items: ClientStats[]) {
-  const now = Date.now()
-  const snapshot = Object.fromEntries(items.map(item => [item.id, item]))
-
-  if (!previousStats || !previousAt) {
-    previousStats = snapshot
-    previousAt = now
-    return
-  }
-
-  const elapsed = Math.max((now - previousAt) / 1000, 1)
-  rates.value = Object.fromEntries(items.map((item) => {
-    const previous = previousStats?.[item.id]
-    // Only count traffic between two samples where the peer was online in both, so an offline
-    // client does not appear to be transferring the moment it reconnects.
-    const active = item.online && previous?.online
-    return [item.id, {
-      down: active ? Math.max(item.transmittedBytes - (previous?.transmittedBytes ?? 0), 0) / elapsed : 0,
-      up: active ? Math.max(item.receivedBytes - (previous?.receivedBytes ?? 0), 0) / elapsed : 0
-    }]
-  }))
-
-  previousStats = snapshot
-  previousAt = now
 }
 
 function resetForm() {
@@ -250,10 +218,6 @@ const statsNode = computed(() => {
 
 function applyStats(updated: ClientStats) {
   stats.value = { ...stats.value, [updated.id]: updated }
-  // The rate is a delta against the previous sample; comparing the next one against pre-reset
-  // counters would read as one enormous burst.
-  previousStats = null
-  previousAt = null
 }
 
 function openEdit(client: Client) {
@@ -340,7 +304,7 @@ function handshake(client: Client) {
 }
 
 onMounted(loadClients)
-usePolling(loadStats, 3000)
+usePolling(loadStats, 10000)
 </script>
 
 <template>
@@ -423,13 +387,12 @@ usePolling(loadStats, 3000)
       />
 
       <div
-        class="hidden grid-cols-[minmax(0,1.6fr)_7rem_7.5rem_minmax(0,1.1fr)_minmax(0,1fr)_9rem] items-center gap-x-4 border-b border-default px-5 py-2 text-xs font-medium text-muted lg:grid"
+        class="hidden grid-cols-[minmax(0,1.6fr)_7rem_7.5rem_minmax(0,1.1fr)_9rem] items-center gap-x-4 border-b border-default px-5 py-2 text-xs font-medium text-muted lg:grid"
         aria-hidden="true"
       >
         <span>Peer</span>
         <span>Status</span>
         <span>Last handshake</span>
-        <span>Speed now</span>
         <span>Transferred</span>
         <span class="text-end">Actions</span>
       </div>
@@ -486,7 +449,7 @@ usePolling(loadStats, 3000)
         <li
           v-for="client in visible"
           :key="client.id"
-          class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-4 py-3 transition-colors hover:bg-elevated/40 sm:px-5 lg:grid-cols-[minmax(0,1.6fr)_7rem_7.5rem_minmax(0,1.1fr)_minmax(0,1fr)_9rem] lg:py-2.5"
+          class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-4 py-3 transition-colors hover:bg-elevated/40 sm:px-5 lg:grid-cols-[minmax(0,1.6fr)_7rem_7.5rem_minmax(0,1.1fr)_9rem] lg:py-2.5"
         >
           <div
             class="min-w-0"
@@ -527,15 +490,6 @@ usePolling(loadStats, 3000)
             <StateMark :state="peerState(client)" />
           </div>
           <span class="hidden text-sm text-toned lg:block">{{ handshake(client) }}</span>
-          <span class="tabular hidden font-mono text-xs lg:block">
-            <template v-if="peerState(client) === 'up'">
-              ↓ {{ formatRate(rates[client.id]?.down) }} &nbsp;↑ {{ formatRate(rates[client.id]?.up) }}
-            </template>
-            <span
-              v-else
-              class="text-dimmed"
-            >—</span>
-          </span>
           <span class="tabular hidden font-mono text-xs text-toned lg:block">
             ↓ {{ formatBytes(stats[client.id]?.transmittedBytes ?? 0) }} &nbsp;↑ {{ formatBytes(stats[client.id]?.receivedBytes ?? 0) }}
           </span>
@@ -731,7 +685,6 @@ usePolling(loadStats, 3000)
       v-model:open="statsOpen"
       :client="statsClient"
       :stats="statsClient ? stats[statsClient.id] : null"
-      :rate="statsClient ? rates[statsClient.id] : null"
       :node="statsNode"
       @reset="applyStats"
     />
