@@ -18,6 +18,13 @@
 
     <ItemGroup>
         <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.7" />
+        <!--
+            Microsoft.Data.Sqlite 10.0.7 still pulls the 2.1.11 native bundle, which carries
+            GHSA-2m69-gcr7-jv3q. Pinned forward here, and CI fails on any advisory left in the
+            graph. Drop this line once Microsoft.Data.Sqlite moves on by itself, rather than
+            leaving two places that name a SQLite version.
+        -->
+        <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.13" />
     </ItemGroup>
 
     <ItemGroup>

@@ -11,8 +11,9 @@
         <PublishAot>true</PublishAot>
         <!-- The AOT invariant is load-bearing, so a regression has to break the
              build rather than reach a node. Listed codes instead of
-             TreatWarningsAsErrors: the solution carries known NU1903 advisories,
-             and a gate that fails on those is a gate someone switches off. -->
+             TreatWarningsAsErrors, which would also fail on a transitive package
+             advisory - a gate that fires for reasons unrelated to AOT is a gate
+             someone switches off. CI keeps its own check for those. -->
         <TrimmerSingleWarn>false</TrimmerSingleWarn>
         <WarningsAsErrors>$(WarningsAsErrors);IL2026;IL2055;IL2057;IL2060;IL2067;IL2070;IL2072;IL2075;IL2087;IL2091;IL2104;IL3000;IL3002;IL3050</WarningsAsErrors>
         <!-- Overridden per build. The panel reads this to tell which nodes it has

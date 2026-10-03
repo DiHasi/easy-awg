@@ -279,7 +279,6 @@ never assert on a specific allocated address — assert on what the API returned
 
 - The pair has only been exercised in containers on one host, never across real servers.
 - The frontend has no automated tests.
-- `SQLitePCLRaw.lib.e_sqlite3` 2.1.11 arrives transitively with a known advisory (NU1903).
 - The probe's check - handshake, then a request through the tunnel - has not been run against a
   real node yet; it is covered only through the parser and the panel side of the protocol.
 - A probe's assignment is protected by TLS only, not signed like a bundle. It carries no fleet
