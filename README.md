@@ -87,9 +87,9 @@ for this reason: build once somewhere with room, push, and pull on the servers.
 # machine with a buildx builder that can push manifest lists:
 #   docker buildx create --name awg --driver docker-container --use
 docker buildx build --platform linux/amd64,linux/arm64 -f docker/control.Dockerfile \
-    -t dihasi/awg-control:1.4.0 -t dihasi/awg-control:latest --push .
+    -t dihasi/awg-control:1.4.1 -t dihasi/awg-control:latest --push .
 docker buildx build --platform linux/amd64,linux/arm64 -f docker/node.Dockerfile \
-    --build-arg AGENT_VERSION=1.4.0 -t dihasi/awg-node:1.4.0 -t dihasi/awg-node:latest --push .
+    --build-arg AGENT_VERSION=1.4.1 -t dihasi/awg-node:1.4.1 -t dihasi/awg-node:latest --push .
 ```
 
 ```bash
@@ -523,9 +523,9 @@ docker compose -f compose.node.yaml build
 # machine with a buildx builder that can push manifest lists:
 #   docker buildx create --name awg --driver docker-container --use
 docker buildx build --platform linux/amd64,linux/arm64 -f docker/control.Dockerfile \
-    -t dihasi/awg-control:1.4.0 -t dihasi/awg-control:latest --push .
+    -t dihasi/awg-control:1.4.1 -t dihasi/awg-control:latest --push .
 docker buildx build --platform linux/amd64,linux/arm64 -f docker/node.Dockerfile \
-    --build-arg AGENT_VERSION=1.4.0 -t dihasi/awg-node:1.4.0 -t dihasi/awg-node:latest --push .
+    --build-arg AGENT_VERSION=1.4.1 -t dihasi/awg-node:1.4.1 -t dihasi/awg-node:latest --push .
 ```
 
 ```bash
