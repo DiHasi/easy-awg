@@ -293,10 +293,12 @@ async function copyRecord() {
       <!-- nodes -->
       <!-- The grid item here is this column, not the card, so the card's own min-w-0 cannot help. -->
       <div class="flex min-w-0 flex-col gap-3">
+        <!-- The ref callback's parameter is annotated because the template does not reliably
+             infer it: left bare, a strict typecheck calls it an implicit any. -->
         <div
           v-for="node in nodes"
           :key="node.id"
-          :ref="(el) => setNodeEl(node.id, el)"
+          :ref="(el: unknown) => setNodeEl(node.id, el)"
         >
           <NodeCard
             :node="node"
