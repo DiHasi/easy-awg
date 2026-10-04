@@ -65,6 +65,21 @@ export type Client = {
   createdAt: string
   updatedAt: string
   obfuscation?: ClientObfuscationOverrides | null
+  /** The person this config was filed under; null or absent for the ungrouped list. */
+  groupId?: string | null
+}
+
+/**
+ * One person, holding however many devices. Purely the panel's own filing - no node is told
+ * about it - and it lives on the server rather than in this browser so every device the operator
+ * signs in from reads the same arrangement. The array order *is* the arrangement, for the groups
+ * themselves and for the peers inside one.
+ */
+export type ClientGroup = {
+  id: string
+  name: string
+  createdAt: string
+  updatedAt: string
 }
 
 export type ClientStats = {

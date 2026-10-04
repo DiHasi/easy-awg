@@ -16,7 +16,7 @@ const props = defineProps<{
   nodes: Node[]
   dns: DnsStatus | null
   fleet: Fleet | null
-  clients: { total: number, online: number, idle: number, off: number }
+  clients: { total: number, online: number, idle: number, off: number, unknown: number }
   busyId?: string | null
 }>()
 
@@ -179,11 +179,18 @@ async function copyRecord() {
           />
           Clients
         </p>
+        <!-- How many are online is the nodes' to report. Until they have, the count leads with what
+             the panel does know - how many configs exist - rather than claiming none are up. -->
         <p class="tabular mt-2 text-3xl font-semibold text-highlighted">
-          {{ clients.online }}<span class="text-base font-normal text-muted"> / {{ clients.total }} online</span>
+          <template v-if="clients.unknown">
+            {{ clients.total }}<span class="text-base font-normal text-muted"> issued</span>
+          </template>
+          <template v-else>
+            {{ clients.online }}<span class="text-base font-normal text-muted"> / {{ clients.total }} online</span>
+          </template>
         </p>
         <p class="mt-1 text-xs text-muted">
-          {{ clients.idle }} idle · {{ clients.off }} disabled
+          {{ clients.unknown ? 'traffic not read yet' : `${clients.idle} idle · ${clients.off} disabled` }}
         </p>
         <div class="mt-3 flex flex-wrap gap-2">
           <UButton

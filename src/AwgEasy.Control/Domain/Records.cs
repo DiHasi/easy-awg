@@ -20,6 +20,8 @@ public sealed record FleetRecord(
     ServerObfuscationProfile? Obfuscation,
     long Revision);
 
+/// <param name="GroupId">The person this config belongs to, or null while it is filed nowhere.
+/// The panel's own bookkeeping: no node is told about it and no config changes with it.</param>
 public sealed record ClientRecord(
     string Id,
     string Name,
@@ -30,7 +32,22 @@ public sealed record ClientRecord(
     bool Enabled,
     ClientObfuscationOverrides? Obfuscation,
     DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt,
+    string? GroupId = null);
+
+/// <summary>One person, holding however many devices. Nothing a node ever sees.</summary>
+public sealed record ClientGroupRecord(
+    string Id,
+    string Name,
+    int SortOrder,
+    DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
+
+/// <summary>
+/// One bucket of the peer list as the operator arranged it: the group it belongs to - null for
+/// the peers filed nowhere - and its peers in the order they should be read in.
+/// </summary>
+public sealed record ClientPlacement(string? GroupId, IReadOnlyList<string> ClientIds);
 
 public sealed record NodeRecord(
     string Id,

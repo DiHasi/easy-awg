@@ -29,8 +29,10 @@ services:
       AWG_CONTROL_URL: "${AWG_CONTROL_URL:-}"
       AWG_ENROLLMENT_TOKEN: "${AWG_ENROLLMENT_TOKEN:-}"
       AWG_NODE_STATE_PATH: "/etc/awg-node"
-      AWG_INTERFACE: "awg0"
-      AWG_INTERFACE_CONFIG_PATH: "/etc/amnezia/amneziawg/awg0.conf"
+      # awg-quick takes the interface name from the config file's basename while `awg syncconf`
+      # is given AWG_INTERFACE, so the path is derived from the name rather than set beside it.
+      AWG_INTERFACE: "${AWG_INTERFACE:-awg0}"
+      AWG_INTERFACE_CONFIG_PATH: "/etc/amnezia/amneziawg/${AWG_INTERFACE:-awg0}.conf"
       # Leave unset to detect the default-route interface. With host networking that detection
       # sees the real one, so this is only needed for unusual routing setups.
       AWG_EGRESS_INTERFACE: "${AWG_EGRESS_INTERFACE:-}"
@@ -41,6 +43,11 @@ services:
       # the failover record at. Set this only if it cannot - a static NAT in front of the server,
       # say, or a host with no route to the echo services.
       AWG_PUBLIC_IP: "${AWG_PUBLIC_IP:-}"
+      # Which echo services to ask. Unset uses the defaults and an explicitly empty value switches
+      # discovery off, which compose cannot express with a default - hence the pass-through form:
+      # with nothing in .env the variable does not reach the container at all.
+      AWG_PUBLIC_IP_URLS:
+      AWG_PUBLIC_IP_REFRESH_MINUTES: "${AWG_PUBLIC_IP_REFRESH_MINUTES:-}"
     volumes:
       - awg-node-state:/etc/awg-node
       - awg-node-config:/etc/amnezia/amneziawg

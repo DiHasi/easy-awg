@@ -51,6 +51,7 @@ builder.Services.AddAuthorization();
 builder.Services.AddSingleton<Database>();
 builder.Services.AddSingleton<FleetRepository>();
 builder.Services.AddSingleton<ClientRepository>();
+builder.Services.AddSingleton<ClientGroupRepository>();
 builder.Services.AddSingleton<NodeRepository>();
 builder.Services.AddSingleton<EventLog>();
 builder.Services.AddSingleton<ShareRepository>();

@@ -16,6 +16,7 @@ public class AdminAuthTests(ControlPlaneFixture fixture) : IClassFixture<Control
     [Theory]
     [InlineData("/api/clients")]
     [InlineData("/api/clients/stats")]
+    [InlineData("/api/groups")]
     [InlineData("/api/fleet")]
     [InlineData("/api/nodes")]
     [InlineData("/api/dns")]

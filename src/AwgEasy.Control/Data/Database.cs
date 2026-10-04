@@ -70,6 +70,28 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
         EnsureColumn(connection, "enrollment_tokens", "kind", "TEXT NOT NULL DEFAULT 'node'");
         EnsureColumn(connection, "probe_results", "handshake", "INTEGER NULL");
 
+        // Grouping peers by the person who holds them. Filed nowhere until an operator says so,
+        // so NULL is the honest start here too.
+        EnsureColumn(connection, "clients", "group_id", "TEXT NULL");
+
+        // The arrangement a panel that predates grouping never had. Defaulting every row to 0
+        // would order the list by created_at alone and silently reshuffle what an operator is
+        // used to seeing, so the existing order - by tunnel address, which is what the peer list
+        // has always shown - is written out once.
+        if (EnsureColumn(connection, "clients", "sort_order", "INTEGER NOT NULL DEFAULT 0"))
+        {
+            SeedSortOrderFromAddresses(connection);
+        }
+
+        // Indexed here rather than in the schema above: a clients table written before grouping
+        // has no group_id while that runs, and an index on a column that does not exist yet is
+        // an error that stops the panel from opening an older database at all.
+        using (var index = connection.CreateCommand())
+        {
+            index.CommandText = "CREATE INDEX IF NOT EXISTS ix_clients_group ON clients (group_id)";
+            index.ExecuteNonQuery();
+        }
+
         if (!OperatingSystem.IsWindows() && File.Exists(options.DatabasePath))
         {
             // The database holds the fleet private key: never group- or world-readable.
@@ -79,19 +101,60 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
         logger.LogInformation("Control plane database ready at {Path}.", options.DatabasePath);
     }
 
-    private static void EnsureColumn(SqliteConnection connection, string table, string column, string definition)
+    /// <returns>True when the column was missing and has just been added.</returns>
+    private static bool EnsureColumn(SqliteConnection connection, string table, string column, string definition)
     {
         using var columns = connection.CreateCommand();
         columns.CommandText = $"SELECT 1 FROM pragma_table_info('{table}') WHERE name = '{column}'";
         if (columns.ExecuteScalar() is not null)
         {
-            return;
+            return false;
         }
 
         using var alter = connection.CreateCommand();
         alter.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {definition}";
         alter.ExecuteNonQuery();
+        return true;
     }
+
+    /// <summary>
+    /// Numbers the existing peers by tunnel address, once, so an upgraded panel opens on the list
+    /// the operator already knows. SQLite cannot sort dotted quads numerically, so the ordering is
+    /// worked out here and only the resulting positions are written.
+    /// </summary>
+    private static void SeedSortOrderFromAddresses(SqliteConnection connection)
+    {
+        var ids = new List<(string Id, long Order)>();
+        using (var read = connection.Sql("SELECT id, address FROM clients"))
+        using (var reader = read.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                ids.Add((reader.GetString("id"), AddressOrder(reader.GetString("address"))));
+            }
+        }
+
+        using var transaction = connection.BeginTransaction();
+        var position = 0;
+        foreach (var (id, _) in ids.OrderBy(entry => entry.Order))
+        {
+            using var update = connection.Sql(
+                "UPDATE clients SET sort_order = $order WHERE id = $id",
+                ("$order", position++),
+                ("$id", id));
+
+            update.Transaction = transaction;
+            update.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
+    /// <summary>Sort key for "10.8.0.12/32", so .12 lands after .9 rather than after .1.</summary>
+    private static long AddressOrder(string address)
+        => address.Split('/')[0]
+            .Split('.')
+            .Aggregate(0L, (total, octet) => (total * 256) + (long.TryParse(octet, out var value) ? value : 0));
 
     private const string Schema = """
         CREATE TABLE IF NOT EXISTS fleet (
@@ -126,12 +189,30 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             enabled        INTEGER NOT NULL DEFAULT 1,
             obfuscation_json TEXT  NULL,
             kind           TEXT    NOT NULL DEFAULT 'user',
+            group_id       TEXT    NULL,
+            sort_order     INTEGER NOT NULL DEFAULT 0,
             created_at     TEXT    NOT NULL,
             updated_at     TEXT    NOT NULL
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_clients_name ON clients (name COLLATE NOCASE);
         CREATE UNIQUE INDEX IF NOT EXISTS ux_clients_address ON clients (address);
         CREATE UNIQUE INDEX IF NOT EXISTS ux_clients_public_key ON clients (public_key);
+
+        -- How the operator files peers: one group per person, the peers in it their devices.
+        -- Purely the panel's own bookkeeping - no node is ever told about it, and no client
+        -- config changes when a peer is filed somewhere else. It lives here rather than in a
+        -- browser so every device the operator signs in from reads the same arrangement.
+        -- No foreign key on clients.group_id, like everywhere else here: deleting a group clears
+        -- the column in the same transaction, which keeps the "a group never deletes a peer"
+        -- rule in code that can be read.
+        CREATE TABLE IF NOT EXISTS client_groups (
+            id         TEXT PRIMARY KEY,
+            name       TEXT    NOT NULL COLLATE NOCASE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT    NOT NULL,
+            updated_at TEXT    NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_client_groups_name ON client_groups (name COLLATE NOCASE);
 
         CREATE TABLE IF NOT EXISTS nodes (
             id                TEXT PRIMARY KEY,

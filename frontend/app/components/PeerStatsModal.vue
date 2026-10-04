@@ -25,12 +25,23 @@ const confirm = useConfirm()
 
 const resetting = ref(false)
 
-const state = computed<'up' | 'idle' | 'off'>(() => {
+const state = computed<'up' | 'idle' | 'off' | 'unknown'>(() => {
   if (!props.client?.enabled) {
     return 'off'
   }
-  return props.stats?.online ? 'up' : 'idle'
+  // No stats row yet means the nodes have not reported this peer to us, not that it is idle.
+  if (!props.stats) {
+    return 'unknown'
+  }
+  return props.stats.online ? 'up' : 'idle'
 })
+
+const known = computed(() => Boolean(props.stats))
+
+/** Reported numbers only; an em dash where there is nothing to report. */
+function bytes(value: number) {
+  return known.value ? formatBytes(value) : '—'
+}
 
 // The server's "received" is what the client sent, so the arrows are flipped for the person
 // reading them: they think in what their own device downloaded.
@@ -91,7 +102,7 @@ async function reset() {
               />
               Downloaded
             </span>
-            <span class="tabular font-mono text-lg font-semibold text-highlighted">{{ formatBytes(down) }}</span>
+            <span class="tabular font-mono text-lg font-semibold text-highlighted">{{ bytes(down) }}</span>
           </div>
           <div class="flex min-w-0 flex-col gap-0.5">
             <span class="flex items-center gap-1 text-xs text-muted">
@@ -101,7 +112,7 @@ async function reset() {
               />
               Uploaded
             </span>
-            <span class="tabular font-mono text-lg font-semibold text-highlighted">{{ formatBytes(up) }}</span>
+            <span class="tabular font-mono text-lg font-semibold text-highlighted">{{ bytes(up) }}</span>
           </div>
         </div>
 
@@ -110,7 +121,7 @@ async function reset() {
             <StateMark :state="state" />
           </SpecItem>
           <SpecItem label="Last handshake">
-            {{ relativeTime(stats?.latestHandshakeAt) }}
+            {{ relativeTime(stats?.latestHandshakeAt, known ? 'never' : '—') }}
           </SpecItem>
           <SpecItem
             label="Connected through"
@@ -122,7 +133,7 @@ async function reset() {
             label="Total"
             mono
           >
-            {{ formatBytes(down + up) }}
+            {{ bytes(down + up) }}
           </SpecItem>
           <SpecItem
             label="Public key"

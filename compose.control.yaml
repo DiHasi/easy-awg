@@ -34,6 +34,34 @@ services:
       # Defaults to AWG_ENDPOINT_HOST. The TTL is what limits how fast clients follow a switch.
       AWG_DNS_RECORD_NAME: "${AWG_DNS_RECORD_NAME:-}"
       AWG_DNS_TTL: "${AWG_DNS_TTL:-60}"
+      # Probes and automatic failover. Everything below is optional: left unset, each falls back
+      # to the default the README documents, so the panel behaves the same as before these lines
+      # existed. The defaults live in the code rather than here so the two cannot drift.
+      #
+      # Automatic failover is armed in the panel (Nodes -> Automatic failover) and refuses to arm
+      # without the Cloudflare settings above. These decide how reluctant it is once armed.
+      AWG_FAILOVER_CHECK_SECONDS: "${AWG_FAILOVER_CHECK_SECONDS:-}"
+      AWG_FAILOVER_GRACE_SECONDS: "${AWG_FAILOVER_GRACE_SECONDS:-}"
+      AWG_FAILOVER_COOLDOWN_MINUTES: "${AWG_FAILOVER_COOLDOWN_MINUTES:-}"
+      # A node that has not reported for this long counts as silent.
+      AWG_NODE_STALE_SECONDS: "${AWG_NODE_STALE_SECONDS:-}"
+      # Probes are what tell a blocked node from a healthy one, since a blocked node reports
+      # itself perfectly healthy. Add them under Nodes -> Probes; these tune their checks.
+      AWG_PROBE_INTERVAL_SECONDS: "${AWG_PROBE_INTERVAL_SECONDS:-}"
+      AWG_PROBE_STALE_SECONDS: "${AWG_PROBE_STALE_SECONDS:-}"
+      AWG_PROBE_HANDSHAKE_TIMEOUT_SECONDS: "${AWG_PROBE_HANDSHAKE_TIMEOUT_SECONDS:-}"
+      # What a probe fetches through the tunnel; any answer counts. "none" leaves the handshake
+      # as the whole check, which reads the common block - first handshake through, everything
+      # after it dropped - as a healthy node.
+      AWG_PROBE_CHECK_URLS: "${AWG_PROBE_CHECK_URLS:-}"
+      AWG_PROBE_TRAFFIC_TIMEOUT_SECONDS: "${AWG_PROBE_TRAFFIC_TIMEOUT_SECONDS:-}"
+      # Where the panel says a node got blocked, went down or recovered, and that traffic moved.
+      AWG_NOTIFY_WEBHOOK_URL: "${AWG_NOTIFY_WEBHOOK_URL:-}"
+      AWG_NOTIFY_TELEGRAM_BOT_TOKEN: "${AWG_NOTIFY_TELEGRAM_BOT_TOKEN:-}"
+      AWG_NOTIFY_TELEGRAM_CHAT_ID: "${AWG_NOTIFY_TELEGRAM_CHAT_ID:-}"
+      # Replay protection for a bundle in flight. Deliberately not an expiry on the copy a node
+      # cached: that one is re-applied for as long as the panel is unreachable.
+      AWG_BUNDLE_LIFETIME_MINUTES: "${AWG_BUNDLE_LIFETIME_MINUTES:-}"
     volumes:
       - awg-control-state:/etc/awg-control
 
