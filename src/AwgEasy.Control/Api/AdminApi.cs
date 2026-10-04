@@ -24,6 +24,7 @@ public static class AdminApi
 
         admin.MapFleet();
         admin.MapClients();
+        admin.MapClientGroups();
         admin.MapNodes();
         admin.MapDnsFailover();
         admin.MapFailover();

@@ -6,18 +6,35 @@ namespace AwgEasy.Control;
 
 public sealed class ClientRepository(Database database)
 {
-    private const string Columns = "id, name, address, private_key, public_key, preshared_key, enabled, obfuscation_json, created_at, updated_at";
+    private const string Columns = "id, name, address, private_key, public_key, preshared_key, enabled, obfuscation_json, group_id, created_at, updated_at";
 
-    /// <summary>The people the fleet serves. Probe clients are left out: they are managed as probes.</summary>
+    /// <summary>The same columns for the one query that has to join the groups to sort by them.</summary>
+    private const string QualifiedColumns = "c.id, c.name, c.address, c.private_key, c.public_key, c.preshared_key, "
+        + "c.enabled, c.obfuscation_json, c.group_id, c.created_at, c.updated_at";
+
+    /// <summary>
+    /// The people the fleet serves, in exactly the order the panel draws them: the groups in the
+    /// operator's order, the peers inside each in theirs, and the peers filed under nobody last.
+    /// Probe clients are left out: they are managed as probes. created_at breaks every tie, so a
+    /// fleet nobody has dragged anything in still reads in a stable order.
+    /// </summary>
     public IReadOnlyList<ClientRecord> List()
     {
         using var connection = database.Open();
-        return Read(connection, $"SELECT {Columns} FROM clients WHERE kind = 'user' ORDER BY created_at");
+        return Read(
+            connection,
+            $"SELECT {QualifiedColumns} FROM clients c LEFT JOIN client_groups g ON g.id = c.group_id "
+            + "WHERE c.kind = 'user' "
+            + "ORDER BY c.group_id IS NULL, g.sort_order, g.created_at, c.sort_order, c.created_at");
     }
 
     /// <summary>
     /// Only enabled clients become peers; a disabled client simply vanishes from the bundle. Every
     /// kind is a peer: a probe has to handshake with a node exactly as a person's client does.
+    ///
+    /// Ordered by address rather than by the operator's arrangement on purpose: this list is what
+    /// a bundle is built from, and dragging a peer in the panel must not change the bytes a node
+    /// is handed.
     /// </summary>
     public IReadOnlyList<ClientRecord> ListEnabled()
     {
@@ -69,10 +86,12 @@ public sealed class ClientRepository(Database database)
         using var connection = database.Open();
         using var command = connection.Sql(
             """
-            INSERT INTO clients (id, name, address, private_key, public_key, preshared_key, enabled, obfuscation_json, created_at, updated_at, kind)
-            VALUES ($id, $name, $address, $privateKey, $publicKey, $presharedKey, $enabled, $obfuscation, $createdAt, $updatedAt, $kind)
+            INSERT INTO clients (id, name, address, private_key, public_key, preshared_key, enabled, obfuscation_json, created_at, updated_at, kind, group_id, sort_order)
+            VALUES ($id, $name, $address, $privateKey, $publicKey, $presharedKey, $enabled, $obfuscation, $createdAt, $updatedAt, $kind, $groupId,
+                    (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM clients WHERE group_id IS $groupId))
             """,
             ("$kind", kind),
+            ("$groupId", client.GroupId),
             ("$id", client.Id),
             ("$name", client.Name),
             ("$address", client.Address),
@@ -89,6 +108,46 @@ public sealed class ClientRepository(Database database)
 
     public bool Rename(string id, string name, DateTimeOffset now)
         => Execute("UPDATE clients SET name = $name, updated_at = $now WHERE id = $id AND kind = 'user'", ("$id", id), ("$name", name), ("$now", now.ToStorage()));
+
+    /// <summary>
+    /// Rewrites the listed buckets: each peer lands in that bucket's group, in the order given.
+    /// Peers the caller did not list are left alone, so an arrangement sent from one browser
+    /// cannot move a peer another one created in the meantime.
+    ///
+    /// Deliberately no revision bump at the call site: filing a peer under a person changes no
+    /// peer material, so no node has anything to re-apply - the same reason a rename does not.
+    /// </summary>
+    /// <returns>False when a listed peer is not a person's client, having changed nothing.</returns>
+    public bool Arrange(IReadOnlyList<ClientPlacement> buckets, DateTimeOffset now)
+    {
+        using var connection = database.Open();
+        using var transaction = connection.BeginTransaction();
+
+        foreach (var bucket in buckets)
+        {
+            for (var position = 0; position < bucket.ClientIds.Count; position++)
+            {
+                using var command = connection.Sql(
+                    "UPDATE clients SET group_id = $groupId, sort_order = $order, updated_at = $now WHERE id = $id AND kind = 'user'",
+                    ("$groupId", bucket.GroupId),
+                    ("$order", position),
+                    ("$now", now.ToStorage()),
+                    ("$id", bucket.ClientIds[position]));
+
+                command.Transaction = transaction;
+                if (command.ExecuteNonQuery() != 1)
+                {
+                    // The caller is working from a list that no longer exists. Applying the rest
+                    // of it would scatter the peers it does still name.
+                    transaction.Rollback();
+                    return false;
+                }
+            }
+        }
+
+        transaction.Commit();
+        return true;
+    }
 
     public bool SetEnabled(string id, bool enabled, DateTimeOffset now)
         => Execute("UPDATE clients SET enabled = $enabled, updated_at = $now WHERE id = $id", ("$id", id), ("$enabled", enabled ? 1 : 0), ("$now", now.ToStorage()));
@@ -128,7 +187,8 @@ public sealed class ClientRepository(Database database)
                 reader.GetBoolean("enabled"),
                 Deserialize(reader.GetStringOrNull("obfuscation_json")),
                 reader.GetTimestamp("created_at"),
-                reader.GetTimestamp("updated_at")));
+                reader.GetTimestamp("updated_at"),
+                reader.GetStringOrNull("group_id")));
         }
 
         return clients;

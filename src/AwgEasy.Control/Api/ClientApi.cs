@@ -47,6 +47,7 @@ public static class ClientApi
         admin.MapPost("/clients", (
             CreateClientRequest request,
             ClientRepository clients,
+            ClientGroupRepository groups,
             FleetService fleet,
             IAwgKeyGenerator keys,
             EventLog events,
@@ -55,6 +56,11 @@ public static class ClientApi
             if (string.IsNullOrWhiteSpace(request.Name))
             {
                 return Results.BadRequest(new ApiError("client_name_required", "Client name is required."));
+            }
+
+            if (request.GroupId is { } groupId && groups.Find(groupId) is null)
+            {
+                return Results.BadRequest(new ApiError("group_not_found", "Group was not found."));
             }
 
             if (!AwgObfuscationValidator.TryValidateClientOverrides(request.Obfuscation, out var error))
@@ -86,7 +92,8 @@ public static class ClientApi
                 Enabled: true,
                 request.Obfuscation?.Normalize(),
                 now,
-                now);
+                now,
+                request.GroupId);
 
             clients.Insert(client);
             fleet.BumpRevision($"client {name} created");

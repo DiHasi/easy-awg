@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { DropdownMenuItem } from '@nuxt/ui'
 import type { Client, ClientObfuscationOverrides, ClientStats } from '~/types/api'
+import { UNGROUPED } from '~/composables/usePeerArrangement'
 
 definePageMeta({ middleware: 'auth' })
 
@@ -42,8 +43,25 @@ type PeerState = 'up' | 'idle' | 'off' | 'unknown'
 const filter = ref<'all' | PeerState>('all')
 const search = ref('')
 
+/**
+ * Who holds what, and in what order the list reads. Server-side, so the arrangement made on a
+ * desk is the arrangement a phone opens on; the flat client list stays the source of truth and
+ * the sections are views over it.
+ */
+const arrangement = usePeerArrangement(clients)
+const { groups, buckets, saving: arranging } = arrangement
+
+const drag = useDragSort((dragged, target) => {
+  if (dragged.kind === 'peer') {
+    arrangement.movePeer(dragged.id, target.bucket, target.beforeId)
+  } else {
+    arrangement.moveGroup(dragged.id, target.beforeId)
+  }
+})
+
 const form = reactive({
   name: '',
+  groupId: '',
   jc: undefined as number | undefined,
   jmin: undefined as number | undefined,
   jmax: undefined as number | undefined,
@@ -77,6 +95,11 @@ const clientTuningFields = [
   { key: 'persistentKeepalive', label: 'PersistentKeepalive' }
 ] as const
 
+const groupChoices = computed(() => [
+  { label: 'No group', value: '' },
+  ...groups.value.map(group => ({ label: group.name, value: group.id }))
+])
+
 /**
  * Whether a peer is disabled is the panel's own record and known immediately; whether an enabled
  * one is carrying traffic is the nodes' and arrives with the stats. Until it does the answer is
@@ -107,15 +130,35 @@ const filters = computed(() => [
   { value: 'off' as const, label: 'Disabled', count: counts.value.off }
 ])
 
-const visible = computed(() => {
+const narrowed = computed(() => filter.value !== 'all' || search.value.trim().length > 0)
+
+/**
+ * Dragging is off while a search or a filter is showing part of the list: a position among the
+ * rows that happen to match is not a position in the list, and dropping one there would move a
+ * peer somewhere the operator cannot see.
+ */
+const arrangeable = computed(() => !narrowed.value && !loading.value)
+
+/** The sections as drawn: every bucket while the whole list is shown, only the hits while it is not. */
+const sections = computed(() => {
   const needle = search.value.trim().toLowerCase()
-  return [...clients.value]
-    .sort((a, b) => addressOrder(a.address) - addressOrder(b.address))
-    .filter(client =>
-      (filter.value === 'all' || peerState(client) === filter.value)
-      && (!needle || client.name.toLowerCase().includes(needle) || client.address.includes(needle))
-    )
+  const matches = (client: Client) =>
+    (filter.value === 'all' || peerState(client) === filter.value)
+    && (!needle || client.name.toLowerCase().includes(needle) || client.address.includes(needle))
+
+  return buckets.value
+    .map(bucket => ({
+      ...bucket,
+      visible: bucket.clients.filter(matches),
+      online: bucket.clients.filter(client => peerState(client) === 'up').length
+    }))
+    .filter(section => !narrowed.value || section.visible.length > 0)
 })
+
+const matchCount = computed(() => sections.value.reduce((total, section) => total + section.visible.length, 0))
+
+/** With no groups the list is drawn bare, so grouping costs nothing to anyone not using it. */
+const bare = computed(() => groups.value.length === 0)
 
 async function loadClients() {
   try {
@@ -140,8 +183,21 @@ async function loadStats() {
   }
 }
 
+/**
+ * Reads the peers and the arrangement back, so a panel left open on one device catches up with a
+ * group made or a peer dragged on another. Never mid-drag: the answer already in flight is the
+ * newer truth, and a list replaced under a finger would land the drop in the wrong place.
+ */
+async function refresh() {
+  await loadStats()
+  if (!arranging.value && !drag.dragging.value) {
+    await Promise.all([loadClients(), arrangement.load()])
+  }
+}
+
 function resetForm() {
   form.name = ''
+  form.groupId = ''
   form.jc = undefined
   form.jmin = undefined
   form.jmax = undefined
@@ -193,6 +249,13 @@ function succeed(title: string) {
   toast.add({ title, color: 'success', icon: 'i-lucide-check' })
 }
 
+/** Opened from a person's own section, the new device is already filed under them. */
+function openCreate(groupId: string | null = null) {
+  resetForm()
+  form.groupId = groupId ?? ''
+  createOpen.value = true
+}
+
 async function createClient() {
   if (!form.name.trim()) {
     toast.add({ title: 'Name is required', color: 'error', icon: 'i-lucide-circle-alert' })
@@ -204,6 +267,7 @@ async function createClient() {
   try {
     const client = await api.post<Client>('/clients', {
       name: form.name.trim(),
+      groupId: form.groupId || null,
       obfuscation: buildObfuscation()
     })
 
@@ -217,6 +281,13 @@ async function createClient() {
     fail('Could not create the peer', error)
   } finally {
     saving.value = false
+  }
+}
+
+async function createGroupFor() {
+  const group = await arrangement.createGroup()
+  if (group) {
+    succeed(`${group.name} added`)
   }
 }
 
@@ -304,7 +375,53 @@ async function deleteClient(client: Client) {
   }
 }
 
+/** Where a peer sits in its own section, so the menu can refuse a step it cannot take. */
+function positionOf(client: Client) {
+  const bucket = buckets.value.find(item => item.key === (client.groupId ?? UNGROUPED))
+  return {
+    index: bucket ? bucket.clients.findIndex(item => item.id === client.id) : -1,
+    size: bucket?.clients.length ?? 0
+  }
+}
+
 function menuFor(client: Client): DropdownMenuItem[][] {
+  const { index, size } = positionOf(client)
+
+  // The same moves as a drag, for a phone, a keyboard, or a list narrowed by a search. Filing a
+  // peer this way puts it at the end of that person's devices.
+  const moves: DropdownMenuItem[] = [
+    {
+      label: 'Move to',
+      icon: 'i-lucide-folder-input',
+      children: [
+        ...groups.value.map(group => ({
+          label: group.name,
+          icon: 'i-lucide-user',
+          disabled: client.groupId === group.id,
+          onSelect: () => arrangement.movePeer(client.id, group.id, null)
+        })),
+        {
+          label: 'Ungrouped',
+          icon: 'i-lucide-inbox',
+          disabled: !client.groupId,
+          onSelect: () => arrangement.movePeer(client.id, UNGROUPED, null)
+        }
+      ]
+    },
+    {
+      label: 'Move up',
+      icon: 'i-lucide-arrow-up',
+      disabled: index <= 0,
+      onSelect: () => arrangement.nudgePeer(client, -1)
+    },
+    {
+      label: 'Move down',
+      icon: 'i-lucide-arrow-down',
+      disabled: index < 0 || index >= size - 1,
+      onSelect: () => arrangement.nudgePeer(client, 1)
+    }
+  ]
+
   return [
     [
       { label: 'Traffic', icon: 'i-lucide-activity', onSelect: () => openStats(client) },
@@ -315,6 +432,7 @@ function menuFor(client: Client): DropdownMenuItem[][] {
         onSelect: () => toggleClient(client)
       }
     ],
+    moves,
     [{ label: 'Delete', icon: 'i-lucide-trash-2', color: 'error', onSelect: () => deleteClient(client) }]
   ]
 }
@@ -333,8 +451,12 @@ function traffic(client: Client, direction: 'down' | 'up') {
   return formatBytes((direction === 'down' ? peer?.transmittedBytes : peer?.receivedBytes) ?? 0)
 }
 
-onMounted(loadClients)
-usePolling(loadStats, 10000)
+onMounted(() => {
+  void loadClients()
+  void arrangement.load()
+})
+
+usePolling(refresh, 10000)
 </script>
 
 <template>
@@ -358,7 +480,7 @@ usePolling(loadStats, 10000)
         @revoke="nodeActions.revoke"
         @remove="nodeActions.remove"
         @failover="nodeActions.editFailover"
-        @new-peer="createOpen = true"
+        @new-peer="openCreate()"
         @enroll="enrollOpen = true"
       />
     </AppCard>
@@ -375,8 +497,16 @@ usePolling(loadStats, 10000)
     >
       <template #actions>
         <UButton
+          icon="i-lucide-user-plus"
+          color="neutral"
+          variant="outline"
+          @click="createGroupFor"
+        >
+          New group
+        </UButton>
+        <UButton
           icon="i-lucide-plus"
-          @click="createOpen = true"
+          @click="openCreate()"
         >
           New peer
         </UButton>
@@ -410,6 +540,24 @@ usePolling(loadStats, 10000)
             </UButton>
           </UFieldGroup>
         </div>
+
+        <!-- Said once, where the handles went: a narrowed list has no positions to drag between. -->
+        <p
+          v-if="narrowed && !bare"
+          class="text-xs text-dimmed"
+        >
+          Clear the search to rearrange
+        </p>
+        <p
+          v-else-if="arranging"
+          class="flex items-center gap-1.5 text-xs text-muted"
+        >
+          <UIcon
+            name="i-lucide-loader-circle"
+            class="size-3.5 animate-spin"
+          />
+          Saving the arrangement
+        </p>
       </div>
 
       <UAlert
@@ -465,102 +613,60 @@ usePolling(loadStats, 10000)
         </div>
         <UButton
           icon="i-lucide-plus"
-          @click="createOpen = true"
+          @click="openCreate()"
         >
           New peer
         </UButton>
       </div>
 
       <p
-        v-else-if="visible.length === 0"
+        v-else-if="matchCount === 0"
         class="px-4 py-12 text-center text-sm text-muted"
       >
         No peer matches this search.
       </p>
 
-      <ul
+      <div
         v-else
         class="divide-y divide-default"
       >
-        <li
-          v-for="client in visible"
-          :key="client.id"
-          class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-4 py-3 transition-colors hover:bg-elevated/40 sm:px-5 lg:grid-cols-[minmax(0,1.6fr)_7rem_7.5rem_minmax(0,1.1fr)_9rem] lg:py-2.5"
+        <PeerGroup
+          v-for="section in sections"
+          :key="section.key"
+          :bucket="section"
+          :count="section.clients.length"
+          :online="section.online"
+          :bare="bare"
+          :arrangeable="arrangeable"
+          :carried="section.group ? drag.isDragged('group', section.group.id) : false"
+          :drop-before="section.group
+            ? drag.isDropBefore('group', section.group.id)
+            : drag.isDropBefore('group', null)"
+          :drop-at-end="drag.isDropBefore('peer', null, section.key)"
+          @grab="(event: PointerEvent) => section.group && drag.begin(event, 'group', section.group.id, section.key)"
+          @rename="section.group && arrangement.renameGroup(section.group)"
+          @remove="section.group && arrangement.deleteGroup(section.group)"
+          @new-peer="openCreate(section.group?.id ?? null)"
         >
-          <div
-            class="min-w-0"
-            :class="peerState(client) === 'off' ? 'opacity-60' : ''"
-          >
-            <p class="flex min-w-0 items-center gap-2">
-              <span class="truncate font-medium text-highlighted">{{ client.name }}</span>
-              <UBadge
-                v-if="client.obfuscation"
-                size="sm"
-                color="neutral"
-                variant="subtle"
-              >
-                custom timings
-              </UBadge>
-            </p>
-            <p class="font-mono text-xs text-muted">
-              {{ client.address }}<span class="lg:hidden"> · {{ handshake(client) }}</span>
-            </p>
-            <!-- The traffic columns do not fit on a phone, so the numbers move here and open the
-                 full picture on a tap. -->
-            <button
-              type="button"
-              class="tabular mt-1 flex items-center gap-2.5 font-mono text-xs text-toned lg:hidden"
-              :aria-label="`Traffic for ${client.name}`"
-              @click="openStats(client)"
-            >
-              <span>↓ {{ traffic(client, 'down') }}</span>
-              <span>↑ {{ traffic(client, 'up') }}</span>
-              <UIcon
-                name="i-lucide-activity"
-                class="size-3.5 text-muted"
-              />
-            </button>
-          </div>
-
-          <div class="hidden lg:block">
-            <StateMark :state="peerState(client)" />
-          </div>
-          <span class="hidden text-sm text-toned lg:block">{{ handshake(client) }}</span>
-          <span class="tabular hidden font-mono text-xs text-toned lg:block">
-            ↓ {{ traffic(client, 'down') }} &nbsp;↑ {{ traffic(client, 'up') }}
-          </span>
-
-          <div class="flex items-center justify-end gap-1.5">
-            <StateMark
-              class="lg:hidden"
-              :state="peerState(client)"
-            />
-            <UButton
-              size="sm"
-              color="neutral"
-              variant="outline"
-              icon="i-lucide-qr-code"
-              :aria-label="`Config for ${client.name}`"
-              @click="openConfig(client)"
-            >
-              <span class="hidden sm:inline">Config</span>
-            </UButton>
-            <UDropdownMenu
-              :items="menuFor(client)"
-              :content="{ align: 'end' }"
-            >
-              <UButton
-                size="sm"
-                color="neutral"
-                variant="ghost"
-                icon="i-lucide-ellipsis-vertical"
-                :loading="busyId === client.id"
-                :aria-label="`More actions for ${client.name}`"
-              />
-            </UDropdownMenu>
-          </div>
-        </li>
-      </ul>
+          <PeerRow
+            v-for="client in section.visible"
+            :key="client.id"
+            :client="client"
+            :state="peerState(client)"
+            :handshake="handshake(client)"
+            :down="traffic(client, 'down')"
+            :up="traffic(client, 'up')"
+            :menu="menuFor(client)"
+            :busy="busyId === client.id"
+            :arrangeable="arrangeable"
+            :carried="drag.isDragged('peer', client.id)"
+            :drop-before="drag.isDropBefore('peer', client.id, section.key)"
+            @grab="(event: PointerEvent) => drag.begin(event, 'peer', client.id, section.key)"
+            @config="openConfig(client)"
+            @stats="openStats(client)"
+          />
+        </PeerGroup>
+      </div>
     </AppCard>
 
     <UModal
@@ -577,6 +683,18 @@ usePolling(loadStats, 10000)
               class="w-full"
               autofocus
               @keyup.enter="createClient"
+            />
+          </UFormField>
+
+          <UFormField
+            v-if="groups.length > 0"
+            label="Group"
+            description="Whose device this is. A group is the panel's own filing: nothing in the config depends on it."
+          >
+            <USelect
+              v-model="form.groupId"
+              :items="groupChoices"
+              class="w-full"
             />
           </UFormField>
 

@@ -371,6 +371,13 @@ bundled `amneziawg-go` need nothing beyond the new image.
   where the counter stood and reports the difference.
   A share link shows only the QR code, the config and a link to the AmneziaWG build for whatever
   device opened it - never the name the client is filed under here.
+- **Groups** — one person usually holds several configs, so peers can be filed into groups: a
+  group is a person, the peers in it are their devices. Drag a peer by its handle to move it
+  between groups or to reorder it, drag a group header to reorder the groups, or use *Move to* in
+  the row's menu where a pointer is awkward. The arrangement is stored in the panel's database,
+  not in the browser, so the same list comes up on every device you sign in from. It is pure
+  bookkeeping: no node is told about a group, no config is reissued, and deleting a group only
+  removes the label - the peers in it move to the ungrouped list and keep working.
 - **Nodes** — status of each agent, its public address, whether it has picked up the current
   revision, which one clients are currently sent to, enrollment commands, and revocation. Revoking
   a node cuts off its configuration on its very next request.
@@ -820,6 +827,13 @@ userspace, если проверка не прошла. Нодам на встр
   текущее значение и дальше показывает разницу.
   Share-страница показывает только QR-код, конфиг и ссылку на сборку AmneziaWG под то устройство,
   с которого её открыли, — но не имя, под которым клиент записан в панели.
+- **Groups** — у одного человека обычно несколько конфигов, поэтому пиры можно складывать в
+  группы: группа — это человек, пиры внутри — его устройства. Пир перетаскивается за ручку слева
+  внутри группы и между группами, группа — за ручку в её заголовке; там, где мышью неудобно, есть
+  *Move to* в меню строки. Расстановка хранится в базе панели, а не в браузере, поэтому на любом
+  устройстве, где вы вошли, список выглядит одинаково. Это только бухгалтерия панели: ноды о
+  группах ничего не знают, конфиги не перевыпускаются, а удаление группы убирает только ярлык —
+  пиры из неё переезжают в Ungrouped и продолжают работать.
 - **Nodes** — состояние агентов, их внешние адреса, забрали ли они текущую ревизию, куда сейчас
   ходят клиенты, команды подключения и отзыв доступа. Отзыв обрывает выдачу конфигурации со
   следующего же запроса ноды.

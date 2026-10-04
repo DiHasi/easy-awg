@@ -35,7 +35,7 @@ scripts/install.sh       Node enrollment one-liner, served by Control at /instal
 
 ```bash
 dotnet build Awg-easy.sln          # whole solution
-dotnet test Awg-easy.sln           # 213 tests, all must pass
+dotnet test Awg-easy.sln           # 228 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
 cd frontend && pnpm run generate   # static build into .output/public
@@ -178,6 +178,16 @@ the invariants of the manual switch - no revision bump, active only once the pro
 hold for it unchanged. The clock that decides staleness is the panel's: status reports and probe
 results are stamped on arrival, so a node with a clock running ahead cannot look fresh.
 
+**Grouping peers is the panel's own bookkeeping.** A group is one person; the peers in it are the
+devices that person holds. `client_groups`, `clients.group_id` and `clients.sort_order` never
+reach a node, never enter a bundle and never bump the revision - the same reason a rename does
+not. Deleting a group ungroups its peers and deletes no config, because losing a label must not
+disconnect anybody. It is stored server-side rather than in a browser on purpose: the operator
+checks the same fleet from a phone and from a desk, and two panels disagreeing about who holds
+what is worse than no grouping at all. `ClientRepository.ListEnabled` stays ordered by address
+while `List` follows the arrangement, so dragging a peer in the panel cannot change the bytes a
+node is handed.
+
 **Status-report fields are not bundle fields.** `NodeStatusReport` is not signed content shared
 byte for byte, so adding an optional field there needs no synchronized fleet upgrade: an older
 agent omits it and reads as null. The bundle rules above still apply to anything inside
@@ -269,6 +279,11 @@ signed; it covers a hash of the body. Node revocation is a flag checked per requ
   their exact spelling in mono through `paramField`.
 - Everything under `/api` requires an authenticated admin except `/health`, `/auth/*` and
   `/shares/*`. Do not add an endpoint to the anonymous set without a reason worth stating.
+- A drag starts on a handle, never on the row itself: a row is also a link to a config and a
+  menu, and a list that moves when a finger brushes it is worse than one that cannot be
+  rearranged. Dragging is off while a search or a filter narrows the list - a position among the
+  rows that happen to match is not a position in the list - and every move is also reachable from
+  the row's menu, which is what makes it work with a keyboard.
 - A share link belongs to the person receiving the config, not to the operator. It carries no
   client name - not in the lookup response, not in the config filename - because that label is
   the operator's own bookkeeping about a person, and it is the one thing the link would leak

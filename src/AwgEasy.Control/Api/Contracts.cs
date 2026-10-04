@@ -5,6 +5,7 @@ namespace AwgEasy.Control;
 // What crosses the wire. Deliberately separate from the domain records above: an API type is a
 // promise to a caller, and the compiler should complain if a secret-bearing record is ever
 // returned where one of these is expected.
+/// <param name="GroupId">The person this config was filed under, or null for the ungrouped list.</param>
 public sealed record ClientResponse(
     string Id,
     string Name,
@@ -13,15 +14,43 @@ public sealed record ClientResponse(
     bool Enabled,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
-    ClientObfuscationOverrides? Obfuscation)
+    ClientObfuscationOverrides? Obfuscation,
+    string? GroupId)
 {
     public static ClientResponse From(ClientRecord client)
-        => new(client.Id, client.Name, client.Address, client.PublicKey, client.Enabled, client.CreatedAt, client.UpdatedAt, client.Obfuscation);
+        => new(client.Id, client.Name, client.Address, client.PublicKey, client.Enabled, client.CreatedAt, client.UpdatedAt, client.Obfuscation, client.GroupId);
 }
 
-public sealed record CreateClientRequest(string Name, ClientObfuscationOverrides? Obfuscation);
+/// <param name="GroupId">Files the new config under a person right away, so a device added from
+/// that person's own section does not have to be dragged there afterwards.</param>
+public sealed record CreateClientRequest(string Name, ClientObfuscationOverrides? Obfuscation, string? GroupId = null);
 
 public sealed record UpdateClientRequest(string Name);
+
+/// <summary>
+/// A person, holding however many devices. The list order is the arrangement itself: both the
+/// group list and the peers inside a group are returned in the order they should be read in.
+/// </summary>
+public sealed record ClientGroupResponse(string Id, string Name, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt)
+{
+    public static ClientGroupResponse From(ClientGroupRecord group)
+        => new(group.Id, group.Name, group.CreatedAt, group.UpdatedAt);
+}
+
+public sealed record CreateClientGroupRequest(string Name);
+
+public sealed record UpdateClientGroupRequest(string Name);
+
+public sealed record ReorderClientGroupsRequest(string[] Ids);
+
+/// <param name="GroupId">Null for the bucket of peers filed nowhere.</param>
+public sealed record ClientGroupPlacement(string? GroupId, string[] ClientIds);
+
+/// <summary>
+/// Where the peers should sit after a drag. Only the buckets listed are rewritten, so a panel
+/// open in another browser cannot have a peer it has never heard of swept into the first group.
+/// </summary>
+public sealed record ArrangeClientsRequest(ClientGroupPlacement[] Groups);
 
 public sealed record FleetResponse(
     int Generation,
