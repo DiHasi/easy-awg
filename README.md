@@ -88,10 +88,13 @@ for this reason: build once somewhere with room, push, and pull on the servers.
 # src/AwgEasy.Contracts or docker/node.Dockerfile does, not when only the panel moved.
 # Both images are multi-arch (amd64 and arm64 - a probe on a Raspberry Pi), built on an amd64
 # machine with a buildx builder that can push manifest lists:
-#   docker buildx create --name awg --driver docker-container --use
-docker buildx build --platform linux/amd64,linux/arm64 -f docker/control.Dockerfile \
+#   docker buildx create --name awg --driver docker-container
+# The builder is named on every line below rather than selected once: Docker Desktop's
+# default builder uses the "docker" driver, which refuses a two-architecture build
+# outright, and a shell where the default has reset back to it is the normal case.
+docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/control.Dockerfile \
     -t dihasi/awg-control:1.5.0 -t dihasi/awg-control:latest --push .
-docker buildx build --platform linux/amd64,linux/arm64 -f docker/node.Dockerfile \
+docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/node.Dockerfile \
     --build-arg AGENT_VERSION=1.4.1 -t dihasi/awg-node:1.4.1 -t dihasi/awg-node:latest --push .
 ```
 
@@ -544,12 +547,15 @@ docker compose -f compose.node.yaml build
 # Панель на 1.5.0, образ ноды остаётся на 1.4.1: агент в этой версии не менялся.
 # Пересобирайте образ ноды, когда меняется что-то в src/AwgEasy.Node,
 # src/AwgEasy.Contracts или docker/node.Dockerfile, а не когда уехала только панель.
-# Both images are multi-arch (amd64 and arm64 - a probe on a Raspberry Pi), built on an amd64
-# machine with a buildx builder that can push manifest lists:
-#   docker buildx create --name awg --driver docker-container --use
-docker buildx build --platform linux/amd64,linux/arm64 -f docker/control.Dockerfile \
+# Оба образа мультиарховые (amd64 и arm64 - проба на Raspberry Pi) и собираются на
+# amd64-машине билдером buildx, умеющим пушить manifest list:
+#   docker buildx create --name awg --driver docker-container
+# Билдер указан в каждой команде, а не выбран один раз: дефолтный билдер Docker
+# Desktop работает на драйвере "docker", который двухархитектурную сборку не
+# выполняет вовсе, а оболочка с дефолтом, сброшенным назад на него, - обычное дело.
+docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/control.Dockerfile \
     -t dihasi/awg-control:1.5.0 -t dihasi/awg-control:latest --push .
-docker buildx build --platform linux/amd64,linux/arm64 -f docker/node.Dockerfile \
+docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/node.Dockerfile \
     --build-arg AGENT_VERSION=1.4.1 -t dihasi/awg-node:1.4.1 -t dihasi/awg-node:latest --push .
 ```
 
