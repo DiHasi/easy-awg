@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import QRCode from 'qrcode'
 import type { Client, ClientShare } from '~/types/api'
 
 /**
@@ -12,7 +11,7 @@ const open = defineModel<boolean>('open', { default: false })
 const api = useControlApi()
 const toast = useToast()
 
-const qrDataUrl = ref<string | null>(null)
+const configText = ref<string | null>(null)
 const downloading = ref(false)
 const sharing = ref(false)
 const share = ref<ClientShare | null>(null)
@@ -34,14 +33,13 @@ watch(open, async (isOpen) => {
     return
   }
 
-  qrDataUrl.value = null
+  configText.value = null
   share.value = null
 
   try {
-    const response = await fetchConfig(props.client)
-    qrDataUrl.value = await QRCode.toDataURL(await response.text(), { width: 320, margin: 1 })
+    configText.value = await (await fetchConfig(props.client)).text()
   } catch (error) {
-    fail('Could not build the QR code', error)
+    fail('Could not load the config', error)
   }
 })
 
@@ -100,24 +98,8 @@ async function copyShare() {
   >
     <template #body>
       <div class="grid gap-5 sm:grid-cols-[auto_minmax(0,1fr)]">
-        <div class="flex flex-col items-center gap-2">
-          <!-- Always dark on white: a scanner reads contrast, not the page theme. -->
-          <img
-            v-if="qrDataUrl"
-            :src="qrDataUrl"
-            alt="Configuration QR code"
-            class="size-60 rounded-lg bg-white p-2 ring-1 ring-default"
-          >
-          <div
-            v-else
-            class="flex size-60 items-center justify-center rounded-lg bg-elevated text-sm text-muted"
-          >
-            <UIcon
-              name="i-lucide-loader-circle"
-              class="size-5 animate-spin"
-            />
-          </div>
-          <span class="text-xs text-muted">Scan in the AmneziaWG app</span>
+        <div class="w-full sm:w-80">
+          <ConfigQrCode :config="configText" />
         </div>
 
         <div class="flex flex-col gap-4">

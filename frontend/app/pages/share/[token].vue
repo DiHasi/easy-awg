@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import QRCode from 'qrcode'
-
 // Deliberately no auth middleware: a share link must work for someone with no account.
 definePageMeta({ layout: false })
 
@@ -27,7 +25,7 @@ const token = computed(() => String(route.params.token ?? ''))
 const share = ref<PublicShare | null>(null)
 const loading = ref(true)
 const errorMessage = ref<string | null>(null)
-const qrDataUrl = ref<string | null>(null)
+const configText = ref<string | null>(null)
 
 const configUrl = computed(() => api.url(`/shares/${token.value}/config`))
 
@@ -63,7 +61,7 @@ async function load() {
 
     const response = await fetch(configUrl.value)
     if (response.ok) {
-      qrDataUrl.value = await QRCode.toDataURL(await response.text(), { width: 300, margin: 1 })
+      configText.value = await response.text()
     }
   } catch (error) {
     errorMessage.value = describeError(error, 'This link is not valid or has expired.')
@@ -129,13 +127,10 @@ useHead({ title: 'Your VPN configuration' })
         class="mt-6 flex flex-col gap-5"
       >
         <div class="flex justify-center">
-          <!-- Always dark on white: a scanner reads contrast, not the page theme. -->
-          <img
-            v-if="qrDataUrl"
-            :src="qrDataUrl"
-            alt="Configuration QR code"
-            class="size-64 rounded-lg bg-white p-2 ring-1 ring-default"
-          >
+          <ConfigQrCode
+            v-if="configText"
+            :config="configText"
+          />
         </div>
 
         <div class="grid gap-2">
