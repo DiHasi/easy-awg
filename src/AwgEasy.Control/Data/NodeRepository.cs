@@ -222,13 +222,13 @@ public sealed class NodeRepository(Database database)
 
             if (stats.TryGetValue(key, out var existing))
             {
-                var newest = existing.Handshake >= handshake;
+                var newest = AtLeastAsNew(existing.Handshake, handshake);
                 stats[key] = new PeerTotals(
                     newest ? existing.Handshake : handshake,
                     existing.Rx + rx,
                     existing.Tx + tx,
                     newest ? existing.NodeId : nodeId,
-                    existing.ResetAt >= resetAt ? existing.ResetAt : resetAt);
+                    AtLeastAsNew(existing.ResetAt, resetAt) ? existing.ResetAt : resetAt);
             }
             else
             {
@@ -238,6 +238,18 @@ public sealed class NodeRepository(Database database)
 
         return stats;
     }
+
+    /// <summary>
+    /// Null is no reading at all, which is older than any reading - never newer. Comparing two
+    /// nullable timestamps with <c>&gt;=</c> answers false in both directions when either is null,
+    /// so a node that reports a peer with no handshake would erase the handshake another node
+    /// reported, depending only on the order the scan happened to return the rows in. Every node
+    /// carries every peer, so in a fleet most nodes report most peers as never seen, and
+    /// <see cref="ReplacePeerStats"/> re-inserts a node's rows at the end of the table on every
+    /// report - which is what made the whole list flip to "never" and back between two refreshes.
+    /// </summary>
+    private static bool AtLeastAsNew(DateTimeOffset? held, DateTimeOffset? candidate)
+        => candidate is null || (held is { } seen && seen >= candidate.Value);
 
     /// <summary>
     /// A counter below its own baseline means the device started counting again - the node
