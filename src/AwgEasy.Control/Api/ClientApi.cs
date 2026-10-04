@@ -180,7 +180,7 @@ public static class ClientApi
 
             var current = fleet.Current;
             var config = ClientConfigRenderer.Render(current, client, current.EndpointHost);
-            return Results.File(Encoding.UTF8.GetBytes(config), "text/plain; charset=utf-8", ClientConfigRenderer.FileName(client.Name));
+            return Results.File(Encoding.UTF8.GetBytes(config), ClientConfigRenderer.ContentType, ClientConfigRenderer.FileName(client.Name));
         });
     }
 

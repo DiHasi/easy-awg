@@ -33,7 +33,7 @@ public static class ShareApi
             var config = ClientConfigRenderer.Render(current, client, current.EndpointHost);
             // Not the client name: the file lands in someone else's downloads folder, and the label
             // an operator filed them under is not theirs to read.
-            return Results.File(Encoding.UTF8.GetBytes(config), "text/plain; charset=utf-8", "amneziawg.conf");
+            return Results.File(Encoding.UTF8.GetBytes(config), ClientConfigRenderer.ContentType, "amneziawg.conf");
         }).AllowAnonymous();
     }
 }

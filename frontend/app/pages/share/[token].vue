@@ -139,8 +139,11 @@ useHead({ title: 'Your VPN configuration' })
         </div>
 
         <div class="grid gap-2">
+          <!-- Named here as well as in Content-Disposition: a plain navigation lets the browser
+               pick, and some of them pick an extension of their own. Not the client name. -->
           <UButton
             :href="configUrl"
+            download="amneziawg.conf"
             icon="i-lucide-download"
             size="lg"
             block

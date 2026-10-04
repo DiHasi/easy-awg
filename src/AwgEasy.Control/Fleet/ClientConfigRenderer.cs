@@ -87,6 +87,11 @@ public static class ClientConfigRenderer
         return address.Contains(':', StringComparison.Ordinal) ? $"[{address}]:{portText}" : $"{address}:{portText}";
     }
 
+    /// <summary>A config downloads as an opaque stream, never <c>text/plain</c>: Safari and
+    /// Samsung Internet rewrite a download's extension to match the type they were handed, so a
+    /// text/plain config lands as <c>.conf.txt</c> and the AmneziaWG app will not import it.</summary>
+    public const string ContentType = "application/octet-stream";
+
     public static string FileName(string clientName)
     {
         var safe = new string(clientName.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '-').ToArray()).Trim('-');

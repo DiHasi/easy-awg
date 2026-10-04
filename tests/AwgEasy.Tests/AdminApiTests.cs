@@ -206,6 +206,29 @@ public class ClientShareTests(ControlPlaneFixture fixture) : IClassFixture<Contr
     }
 
     [Fact]
+    public async Task A_config_download_is_not_served_as_text()
+    {
+        var (admin, client) = await ClientAsync("macbook");
+
+        var shareResponse = await admin.PostAsync($"/api/clients/{client.Id}/share", null);
+        var share = (await shareResponse.Content.ReadFromJsonAsync<ClientShareResponse>())!;
+
+        // Safari and Samsung Internet append an extension matching the declared type, which turns
+        // a text/plain config into amneziawg.conf.txt that the AmneziaWG app refuses to import.
+        foreach (var response in new[]
+                 {
+                     await fixture.CreateClient().GetAsync($"/api/shares/{share.Token}/config"),
+                     await admin.GetAsync($"/api/clients/{client.Id}/config")
+                 })
+        {
+            response.EnsureSuccessStatusCode();
+            Assert.Equal("application/octet-stream", response.Content.Headers.ContentType?.MediaType);
+            Assert.Equal("attachment", response.Content.Headers.ContentDisposition?.DispositionType);
+            Assert.EndsWith(".conf", response.Content.Headers.ContentDisposition?.FileNameStar ?? response.Content.Headers.ContentDisposition?.FileName ?? string.Empty, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public async Task A_share_link_reveals_nothing_beyond_its_expiry()
     {
         var (admin, client) = await ClientAsync("private-details");
