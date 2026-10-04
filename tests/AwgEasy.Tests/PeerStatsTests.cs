@@ -20,9 +20,10 @@ public sealed class PeerStatsTests : IDisposable
     public PeerStatsTests()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-        var database = new Database(Options(), NullLogger<Database>.Instance);
+        var options = Options();
+        var database = new Database(options, NullLogger<Database>.Instance);
         database.Migrate();
-        _nodes = new NodeRepository(database);
+        _nodes = new NodeRepository(database, options);
     }
 
     private static PeerStatus Seen(DateTimeOffset? handshake, long rx, long tx)
@@ -103,7 +104,8 @@ public sealed class PeerStatsTests : IDisposable
             ProbeHandshakeTimeout: TimeSpan.FromSeconds(15),
             ProbeCheckUrls: FailoverOptions.DefaultProbeCheckUrls,
             ProbeTrafficTimeout: TimeSpan.FromSeconds(8)),
-        Notifications: new NotificationOptions(null, null, null));
+        Notifications: new NotificationOptions(null, null, null),
+        Usage: new UsageOptions(UsageOptions.DefaultRetentionDays));
 
     public void Dispose()
     {

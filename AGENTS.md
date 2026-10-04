@@ -35,7 +35,7 @@ scripts/install.sh       Node enrollment one-liner, served by Control at /instal
 
 ```bash
 dotnet build Awg-easy.sln          # whole solution
-dotnet test Awg-easy.sln           # 228 tests, all must pass
+dotnet test Awg-easy.sln           # 244 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
 cd frontend && pnpm run generate   # static build into .output/public
@@ -187,6 +187,26 @@ checks the same fleet from a phone and from a desk, and two panels disagreeing a
 what is worse than no grouping at all. `ClientRepository.ListEnabled` stays ordered by address
 while `List` follows the arrangement, so dragging a peer in the panel cannot change the bytes a
 node is handed.
+
+**Traffic history is a difference, and the reading it is a difference from is the row being
+overwritten.** A node reports totals, so what a peer moved is the gap between two status reports.
+`UsageAccounting.Accrue` therefore runs inside `NodeRepository.ReplacePeerStats`' transaction,
+before the delete: splitting them would lose an interval or count it twice whenever the panel
+restarted in between. A reading below the one before it means the device started counting again -
+a reboot, an interface brought down - so all of it is traffic since that restart, the same rule
+`SinceReset` applies to the lifetime totals. A peer with no previous reading is credited nothing
+rather than its whole counter, which may have been climbing since before this panel existed.
+Manual counter resets are deliberately not applied here: a reset changes what the lifetime number
+shows, not what happened last Tuesday.
+
+**The traffic history is the panel's own bookkeeping, like grouping.** `client_usage` never
+reaches a node, never enters a bundle and never bumps the revision. It is keyed by the client
+rather than by the public key because it is a record about a person: deleting a peer deletes its
+history in the same request, and `UsageRepository.Prune` sweeps rows whose client is gone for the
+paths that delete wholesale. `AWG_USAGE_RETENTION_DAYS` is one knob on purpose - an hourly record
+of what each person moved is considerably more than the lifetime counter beside it, and `0` has to
+mean "record none and drop what was recorded", not "hide the page". The live counters come from
+the nodes, so they keep working either way.
 
 **Status-report fields are not bundle fields.** `NodeStatusReport` is not signed content shared
 byte for byte, so adding an optional field there needs no synchronized fleet upgrade: an older

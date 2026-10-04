@@ -170,7 +170,8 @@ public class CloudflareDnsUpdaterTests
             LegacyStateImportPath: null,
             Dns: new DnsFailoverOptions(null, 60, "token", Zone),
             Failover: FailoverOptions.FromEnvironment(_ => null, (_, fallback) => fallback),
-            Notifications: new NotificationOptions(null, null, null));
+            Notifications: new NotificationOptions(null, null, null),
+            Usage: new UsageOptions(UsageOptions.DefaultRetentionDays));
 
         return new CloudflareDnsUpdater(http, options, NullLogger<CloudflareDnsUpdater>.Instance);
     }

@@ -58,3 +58,33 @@ export function addressOrder(address: string) {
 export function itemNumber(index: number) {
   return String(index + 1).padStart(2, '0')
 }
+
+/**
+ * A bucket's own label: the hour it starts, or the day. Both in UTC, like every other time on a
+ * sheet, so a series read in one timezone is the series somebody else is reading in another.
+ */
+export function formatBucket(value: string, bucket: 'hour' | 'day') {
+  const date = new Date(value)
+  if (bucket === 'day') {
+    return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+  }
+
+  return `${String(date.getUTCHours()).padStart(2, '0')}:00`
+}
+
+/** The same instant, dated as well as timed: what a hovered bucket needs to be unambiguous. */
+export function formatBucketLong(value: string, bucket: 'hour' | 'day') {
+  const date = new Date(value)
+  const day = date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+  return bucket === 'day' ? `${day} UTC` : `${day} ${formatBucket(value, 'hour')} UTC`
+}
+
+/** A share of a total, as a percentage string. Zero of zero is zero, not NaN. */
+export function formatShare(value: number, total: number) {
+  if (!total) {
+    return '0%'
+  }
+
+  const share = (value / total) * 100
+  return share > 0 && share < 1 ? '<1%' : `${Math.round(share)}%`
+}

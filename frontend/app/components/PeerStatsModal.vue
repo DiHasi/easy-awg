@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Client, ClientStats, Node } from '~/types/api'
+import type { Client, ClientStats, ClientUsageSeries, Node, UsageWindowKey } from '~/types/api'
 
 /**
  * What one peer is actually doing: how much it has moved, when it last handshook and which node
@@ -24,6 +24,48 @@ const toast = useToast()
 const confirm = useConfirm()
 
 const resetting = ref(false)
+
+/**
+ * The counters above are a lifetime total; this is when that total was moved. Fetched when the
+ * dialog opens rather than with the peer list: a fleet of fifty peers would be fifty series
+ * nobody has asked to see.
+ */
+const spans: { value: UsageWindowKey, label: string }[] = [
+  { value: '24h', label: '24h' },
+  { value: '7d', label: '7d' },
+  { value: '30d', label: '30d' }
+]
+
+const span = ref<UsageWindowKey>('7d')
+const history = ref<ClientUsageSeries | null>(null)
+const historyLoading = ref(false)
+
+async function loadHistory() {
+  const client = props.client
+  if (!client || !open.value) {
+    return
+  }
+
+  historyLoading.value = true
+
+  try {
+    history.value = await api.get<ClientUsageSeries>(`/clients/${client.id}/usage?window=${span.value}`)
+  } catch {
+    // The lifetime counters above are the point of this dialog; a history that will not load is
+    // worth an empty chart, not an error over the top of them.
+    history.value = null
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+watch([open, () => props.client?.id, span], () => {
+  history.value = null
+  void loadHistory()
+})
+
+/** Zero retention means the panel keeps no history at all, which is not the same as a quiet week. */
+const recording = computed(() => history.value === null || history.value.retentionDays > 0)
 
 const state = computed<'up' | 'idle' | 'off' | 'unknown'>(() => {
   if (!props.client?.enabled) {
@@ -142,6 +184,49 @@ async function reset() {
             {{ shortKey(client?.publicKey) }}
           </SpecItem>
         </dl>
+
+        <div class="flex flex-col gap-2 rounded-lg border border-default p-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <h3 class="caps text-muted">
+              When it moved
+            </h3>
+            <UFieldGroup class="ms-auto">
+              <UButton
+                v-for="option in spans"
+                :key="option.value"
+                size="xs"
+                color="neutral"
+                :variant="span === option.value ? 'solid' : 'outline'"
+                :aria-pressed="span === option.value"
+                @click="span = option.value"
+              >
+                {{ option.label }}
+              </UButton>
+            </UFieldGroup>
+          </div>
+
+          <UsageChart
+            :points="history?.series ?? []"
+            :bucket="history?.bucket ?? 'hour'"
+            :loading="historyLoading"
+            compact
+          />
+
+          <p
+            v-if="!recording"
+            class="text-xs text-muted"
+          >
+            The panel is not recording a history (AWG_USAGE_RETENTION_DAYS is 0), so this window
+            is empty by design.
+          </p>
+          <p
+            v-else-if="history"
+            class="text-xs text-muted"
+          >
+            {{ formatBytes(history.receivedBytes + history.transmittedBytes) }} over
+            {{ history.activeDays }} {{ history.activeDays === 1 ? 'day' : 'days' }} with traffic.
+          </p>
+        </div>
 
         <p class="text-xs text-muted">
           Counted {{ since }}. The nodes count, not the panel, so a node that reboots starts its

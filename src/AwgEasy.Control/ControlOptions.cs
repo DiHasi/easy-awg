@@ -15,7 +15,8 @@ public sealed record ControlOptions(
     string? LegacyStateImportPath,
     DnsFailoverOptions Dns,
     FailoverOptions Failover,
-    NotificationOptions Notifications)
+    NotificationOptions Notifications,
+    UsageOptions Usage)
 {
     public static ControlOptions FromEnvironment()
         => new(
@@ -32,7 +33,8 @@ public sealed record ControlOptions(
             Value("AWG_IMPORT_LEGACY_STATE"),
             DnsFailoverOptions.FromEnvironment(Value, ReadInt),
             FailoverOptions.FromEnvironment(Value, ReadInt),
-            NotificationOptions.FromEnvironment(Value));
+            NotificationOptions.FromEnvironment(Value),
+            UsageOptions.FromEnvironment());
 
     /// <summary>
     /// Settings that have no safe default. AWG_ENDPOINT_HOST in particular is written into every
@@ -168,4 +170,37 @@ public sealed record NotificationOptions(
             value("AWG_NOTIFY_WEBHOOK_URL"),
             value("AWG_NOTIFY_TELEGRAM_BOT_TOKEN"),
             value("AWG_NOTIFY_TELEGRAM_CHAT_ID"));
+}
+
+/// <summary>
+/// How long the panel keeps a per-peer traffic history.
+///
+/// One knob, because it is one decision: an hourly record of what each person moved is far more
+/// than the lifetime counter beside it, and an operator who does not want to hold it should be
+/// able to say so in one place. Zero means the panel never writes a row - the live counters keep
+/// working, because they come from the nodes and not from here.
+/// </summary>
+/// <param name="RetentionDays">Days of history kept. Zero switches recording off entirely.</param>
+public sealed record UsageOptions(int RetentionDays)
+{
+    /// <summary>Long enough to answer "what did this month cost", short enough to stay a log and not an archive.</summary>
+    public const int DefaultRetentionDays = 90;
+
+    /// <summary>A ceiling, not a target: past a year this stops being a log and becomes an archive.</summary>
+    public const int MaxRetentionDays = 365;
+
+    public bool Records => RetentionDays > 0;
+
+    /// <summary>
+    /// Read here rather than through <c>ControlOptions.ReadInt</c>: that helper rejects zero as a
+    /// mistyped value, and zero is the one setting here that has to mean something.
+    /// </summary>
+    public static UsageOptions FromEnvironment()
+    {
+        var raw = Environment.GetEnvironmentVariable("AWG_USAGE_RETENTION_DAYS");
+        return new(
+            int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var days) && days >= 0
+                ? Math.Min(days, MaxRetentionDays)
+                : DefaultRetentionDays);
+    }
 }

@@ -97,7 +97,8 @@ public sealed class DatabaseMigrationTests : IDisposable
             ProbeHandshakeTimeout: TimeSpan.FromSeconds(15),
             ProbeCheckUrls: FailoverOptions.DefaultProbeCheckUrls,
             ProbeTrafficTimeout: TimeSpan.FromSeconds(8)),
-        Notifications: new NotificationOptions(null, null, null));
+        Notifications: new NotificationOptions(null, null, null),
+        Usage: new UsageOptions(UsageOptions.DefaultRetentionDays));
 
     public void Dispose()
     {

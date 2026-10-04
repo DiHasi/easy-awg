@@ -62,6 +62,9 @@ services:
       # Replay protection for a bundle in flight. Deliberately not an expiry on the copy a node
       # cached: that one is re-applied for as long as the panel is unreachable.
       AWG_BUNDLE_LIFETIME_MINUTES: "${AWG_BUNDLE_LIFETIME_MINUTES:-}"
+      # How many days of per-peer traffic history the panel keeps for the Traffic page. 0 records
+      # none at all; the live counters come from the nodes and keep working either way.
+      AWG_USAGE_RETENTION_DAYS: "${AWG_USAGE_RETENTION_DAYS:-}"
     volumes:
       - awg-control-state:/etc/awg-control
 

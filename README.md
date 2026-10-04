@@ -83,7 +83,7 @@ for this reason: build once somewhere with room, push, and pull on the servers.
 ```bash
 # On a build machine or in CI. AGENT_VERSION is what each node reports back to
 # the panel; leave it out and the agent identifies itself as 0.0.0-dev.
-# The panel is at 1.5.3 while the node image stays at 1.4.1: the agent did not change
+# The panel is at 1.6.0 while the node image stays at 1.4.1: the agent did not change
 # in it. Rebuild the node image when something under src/AwgEasy.Node,
 # src/AwgEasy.Contracts or docker/node.Dockerfile does, not when only the panel moved.
 # Both images are multi-arch (amd64 and arm64 - a probe on a Raspberry Pi), built on an amd64
@@ -93,7 +93,7 @@ for this reason: build once somewhere with room, push, and pull on the servers.
 # default builder uses the "docker" driver, which refuses a two-architecture build
 # outright, and a shell where the default has reset back to it is the normal case.
 docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/control.Dockerfile \
-    -t dihasi/awg-control:1.5.3 -t dihasi/awg-control:latest --push .
+    -t dihasi/awg-control:1.6.0 -t dihasi/awg-control:latest --push .
 docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/node.Dockerfile \
     --build-arg AGENT_VERSION=1.4.1 -t dihasi/awg-node:1.4.1 -t dihasi/awg-node:latest --push .
 ```
@@ -277,6 +277,7 @@ For a fresh panel you can instead point `AWG_IMPORT_LEGACY_STATE` at a mounted `
 | `AWG_ADMIN_USER`, `AWG_ADMIN_PASSWORD` | Creates the first admin on an empty database. |
 | `AWG_CONTROL_DB` | SQLite file. Default `/etc/awg-control/control.db`. |
 | `AWG_BUNDLE_LIFETIME_MINUTES` | How long a signed bundle stays valid. Default 15. |
+| `AWG_USAGE_RETENTION_DAYS` | Days of per-peer traffic history kept for the Traffic page. `0` records none. Default 90. |
 | `AWG_IMPORT_LEGACY_STATE` | One-shot adoption of an old `state.json`. |
 | `AWG_CLOUDFLARE_API_TOKEN` | Lets the panel move the record itself. Needs `Zone:Read` and `Zone:DNS:Edit`. |
 | `AWG_CLOUDFLARE_ZONE_ID` | The zone the record lives in. Both are required, or switching stays manual. |
@@ -384,6 +385,16 @@ bundled `amneziawg-go` need nothing beyond the new image.
   not in the browser, so the same list comes up on every device you sign in from. It is pure
   bookkeeping: no node is told about a group, no config is reissued, and deleting a group only
   removes the label - the peers in it move to the ungrouped list and keep working.
+- **Traffic** — what the fleet moved over the last day, week or month, and who moved it. The
+  counters on the peer list are lifetime totals; this is when that traffic happened, which is the
+  only form in which a question about a person has an answer: who is costing the most this month,
+  who has stopped using the config they were given, which evening the active node was saturated.
+  Because a group is a person, the ranking is people first and their devices inside them - open a
+  line to see the devices, open a device to see its own history. The numbers are differences
+  between two status reports, credited to the hour the later one arrived in, so a peer's traffic
+  appears once its node has reported twice. Hourly rows are kept for `AWG_USAGE_RETENTION_DAYS`
+  and deleted with the peer; set it to `0` and the panel records nothing at all, while the live
+  counters - which come from the nodes, not from here - keep working.
 - **Nodes** — status of each agent, its public address, whether it has picked up the current
   revision, which one clients are currently sent to, enrollment commands, and revocation. Revoking
   a node cuts off its configuration on its very next request.
@@ -544,7 +555,7 @@ docker compose -f compose.node.yaml build
 ```bash
 # На машине сборки или в CI. AGENT_VERSION — это версия, которую нода сообщает
 # панели; без неё агент представляется как 0.0.0-dev.
-# Панель на 1.5.3, образ ноды остаётся на 1.4.1: агент в этой версии не менялся.
+# Панель на 1.6.0, образ ноды остаётся на 1.4.1: агент в этой версии не менялся.
 # Пересобирайте образ ноды, когда меняется что-то в src/AwgEasy.Node,
 # src/AwgEasy.Contracts или docker/node.Dockerfile, а не когда уехала только панель.
 # Оба образа мультиарховые (amd64 и arm64 - проба на Raspberry Pi) и собираются на
@@ -554,7 +565,7 @@ docker compose -f compose.node.yaml build
 # Desktop работает на драйвере "docker", который двухархитектурную сборку не
 # выполняет вовсе, а оболочка с дефолтом, сброшенным назад на него, - обычное дело.
 docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/control.Dockerfile \
-    -t dihasi/awg-control:1.5.3 -t dihasi/awg-control:latest --push .
+    -t dihasi/awg-control:1.6.0 -t dihasi/awg-control:latest --push .
 docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/node.Dockerfile \
     --build-arg AGENT_VERSION=1.4.1 -t dihasi/awg-node:1.4.1 -t dihasi/awg-node:latest --push .
 ```
@@ -737,6 +748,7 @@ docker rm -f awg-node && rm -rf /etc/awg-node/*
 | `AWG_ADMIN_USER`, `AWG_ADMIN_PASSWORD` | Создание первого администратора на пустой базе. |
 | `AWG_CONTROL_DB` | Файл SQLite. По умолчанию `/etc/awg-control/control.db`. |
 | `AWG_BUNDLE_LIFETIME_MINUTES` | Срок жизни подписанного бандла. По умолчанию 15. |
+| `AWG_USAGE_RETENTION_DAYS` | Сколько дней хранится почасовая история трафика по пирам для страницы Traffic. `0` — не вести её вовсе. По умолчанию 90. |
 | `AWG_IMPORT_LEGACY_STATE` | Разовое усыновление старого `state.json`. |
 | `AWG_CLOUDFLARE_API_TOKEN` | Позволяет панели менять запись сама. Нужны права `Zone:Read` и `Zone:DNS:Edit`. |
 | `AWG_CLOUDFLARE_ZONE_ID` | Зона, в которой живёт запись. Без обоих значений переключение остаётся ручным. |
@@ -846,6 +858,16 @@ userspace, если проверка не прошла. Нодам на встр
   устройстве, где вы вошли, список выглядит одинаково. Это только бухгалтерия панели: ноды о
   группах ничего не знают, конфиги не перевыпускаются, а удаление группы убирает только ярлык —
   пиры из неё переезжают в Ungrouped и продолжают работать.
+- **Traffic** — сколько флот прокачал за сутки, неделю или месяц и кто именно. Счётчики в списке
+  пиров — это итог за всё время; здесь — когда этот трафик был, а только в таком виде вопрос про
+  человека вообще имеет ответ: кто обходится дороже всех в этом месяце, кто перестал пользоваться
+  выданным конфигом, в какой вечер активная нода была загружена. Группа — это человек, поэтому
+  рейтинг строится по людям, а устройства лежат внутри: раскройте строку, чтобы увидеть
+  устройства, и устройство — чтобы увидеть его собственную историю. Цифры считаются как разница
+  между двумя отчётами агента и зачисляются в тот час, в котором пришёл второй, так что трафик
+  пира появляется после второго отчёта его ноды. Почасовые строки живут
+  `AWG_USAGE_RETENTION_DAYS` дней и удаляются вместе с пиром; `0` — не записывать ничего, при этом
+  живые счётчики (они приходят с нод, а не отсюда) продолжают работать.
 - **Nodes** — состояние агентов, их внешние адреса, забрали ли они текущую ревизию, куда сейчас
   ходят клиенты, команды подключения и отзыв доступа. Отзыв обрывает выдачу конфигурации со
   следующего же запроса ноды.

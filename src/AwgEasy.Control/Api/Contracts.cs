@@ -202,6 +202,58 @@ public sealed record ClientStatsResponse(
     string? NodeId,
     DateTimeOffset? StatsResetAt);
 
+/// <summary>One bucket of a traffic series. <paramref name="At"/> is where the bucket starts, UTC.</summary>
+public sealed record UsagePoint(DateTimeOffset At, long ReceivedBytes, long TransmittedBytes);
+
+/// <param name="ActiveDays">Days in the window on which this peer moved anything at all.</param>
+/// <param name="LastActiveAt">When traffic was last credited to this peer inside the window.</param>
+public sealed record ClientUsageResponse(
+    string Id,
+    string Name,
+    string? GroupId,
+    bool Enabled,
+    long ReceivedBytes,
+    long TransmittedBytes,
+    int ActiveDays,
+    DateTimeOffset? LastActiveAt);
+
+/// <summary>
+/// What the fleet moved over a window, as a series and as a number per peer. The series is dense -
+/// a bucket nothing happened in is a zero rather than a gap - so a chart drawn from it shows the
+/// quiet hours instead of closing over them.
+/// </summary>
+/// <param name="Bucket">"hour" or "day": how wide one point of <paramref name="Series"/> is.</param>
+/// <param name="RecordingSince">
+/// The oldest hour still kept. A window that reaches back further than this is mostly a statement
+/// about retention, and the panel says so rather than drawing an empty month.
+/// </param>
+/// <param name="RetentionDays">How long history is kept. Zero means nothing is being recorded.</param>
+public sealed record UsageSummaryResponse(
+    string Window,
+    string Bucket,
+    DateTimeOffset From,
+    DateTimeOffset To,
+    long ReceivedBytes,
+    long TransmittedBytes,
+    UsagePoint[] Series,
+    ClientUsageResponse[] Clients,
+    int RetentionDays,
+    DateTimeOffset? RecordingSince);
+
+/// <summary>One peer's own history over the same windows.</summary>
+public sealed record ClientUsageSeriesResponse(
+    string ClientId,
+    string Window,
+    string Bucket,
+    DateTimeOffset From,
+    DateTimeOffset To,
+    long ReceivedBytes,
+    long TransmittedBytes,
+    int ActiveDays,
+    UsagePoint[] Series,
+    int RetentionDays,
+    DateTimeOffset? RecordingSince);
+
 public sealed record ImportResultResponse(int ClientsImported, long Revision, string[] Warnings);
 
 public sealed record ClientShareResponse(string Token, string ClientName, DateTimeOffset ExpiresAt, string Url);

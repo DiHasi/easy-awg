@@ -3,7 +3,7 @@ using Microsoft.Data.Sqlite;
 
 namespace AwgEasy.Control;
 
-public sealed class NodeRepository(Database database)
+public sealed class NodeRepository(Database database, ControlOptions options)
 {
     public IReadOnlyList<NodeRecord> List()
     {
@@ -118,10 +118,26 @@ public sealed class NodeRepository(Database database)
         return command.ExecuteNonQuery() > 0;
     }
 
+    /// <summary>
+    /// Takes one status report's counters: credits what moved since the last report to the hour
+    /// it arrived in, then replaces the snapshot with the new reading.
+    ///
+    /// Both halves share one transaction because the reading being overwritten is exactly what the
+    /// difference is measured against - splitting them would lose an interval, or count it twice,
+    /// whenever the panel restarted in between.
+    /// </summary>
     public void ReplacePeerStats(string nodeId, PeerStatus[] peers, DateTimeOffset reportedAt)
     {
         using var connection = database.Open();
-        using var transaction = connection.BeginTransaction();
+        // BEGIN IMMEDIATE, because this transaction reads the previous counters before it writes.
+        // A deferred one would start as a reader and ask to upgrade, and under WAL a second node
+        // reporting at the same moment turns that into an error busy_timeout does not retry.
+        using var transaction = connection.BeginTransaction(deferred: false);
+
+        if (options.Usage.Records)
+        {
+            UsageAccounting.Accrue(connection, transaction, nodeId, peers, reportedAt);
+        }
 
         using (var delete = connection.Sql("DELETE FROM peer_stats WHERE node_id = $nodeId", ("$nodeId", nodeId)))
         {

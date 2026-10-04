@@ -53,6 +53,7 @@ builder.Services.AddSingleton<FleetRepository>();
 builder.Services.AddSingleton<ClientRepository>();
 builder.Services.AddSingleton<ClientGroupRepository>();
 builder.Services.AddSingleton<NodeRepository>();
+builder.Services.AddSingleton<UsageRepository>();
 builder.Services.AddSingleton<EventLog>();
 builder.Services.AddSingleton<ShareRepository>();
 builder.Services.AddSingleton<IAwgKeyGenerator, AwgToolKeyGenerator>();
@@ -66,6 +67,9 @@ builder.Services.AddNotifications(options.Notifications);
 // background loop actually ran rather than a second, idle monitor of its own.
 builder.Services.AddSingleton<FailoverMonitor>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<FailoverMonitor>());
+// Trims the traffic history on its own clock, so the status reports that write it never
+// carry a delete of their own.
+builder.Services.AddHostedService<UsageRetentionService>();
 builder.Services.AddSingleton<AgentAuthenticator>();
 builder.Services.AddSingleton<LegacyStateImporter>();
 // Scoped, not a singleton: the Cloudflare updater is a typed HttpClient, and holding one for the

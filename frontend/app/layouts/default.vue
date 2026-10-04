@@ -13,6 +13,7 @@ usePolling(refresh, 10000)
 const links = [
   { to: '/', label: 'Overview', icon: 'i-lucide-network' },
   { to: '/nodes', label: 'Nodes', icon: 'i-lucide-server' },
+  { to: '/usage', label: 'Traffic', icon: 'i-lucide-chart-column' },
   { to: '/admin', label: 'Settings', icon: 'i-lucide-sliders-horizontal' },
   { to: '/events', label: 'Log', icon: 'i-lucide-scroll-text' }
 ]
@@ -110,7 +111,7 @@ useHead({ title: computed(() => `${current.value.label} · AWG Easy`) })
     </main>
 
     <nav
-      class="fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t border-default bg-default md:hidden"
+      class="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-default bg-default md:hidden"
       aria-label="Main"
     >
       <NuxtLink

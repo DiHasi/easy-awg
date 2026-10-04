@@ -136,7 +136,14 @@ public static class ClientApi
         admin.MapPost("/clients/{id}/disable", (string id, ClientRepository clients, FleetService fleet, EventLog events, HttpContext context)
             => SetEnabled(id, false, clients, fleet, events, context));
 
-        admin.MapDelete("/clients/{id}", (string id, ClientRepository clients, NodeRepository nodes, FleetService fleet, EventLog events, HttpContext context) =>
+        admin.MapDelete("/clients/{id}", (
+            string id,
+            ClientRepository clients,
+            NodeRepository nodes,
+            UsageRepository usage,
+            FleetService fleet,
+            EventLog events,
+            HttpContext context) =>
         {
             var client = clients.Find(id);
             if (client is null || !clients.Delete(id))
@@ -145,6 +152,9 @@ public static class ClientApi
             }
 
             nodes.ForgetPeer(client.PublicKey);
+            // The traffic history goes with the person, not with retention. An hourly record of
+            // somebody who no longer has a config answers nothing and is only a liability.
+            usage.Forget(client.Id);
             fleet.BumpRevision($"client {client.Name} deleted");
             events.Record("client.deleted", $"Client {client.Name} deleted.", actor: context.User.Identity?.Name);
             return Results.NoContent();

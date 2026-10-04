@@ -93,6 +93,64 @@ export type ClientStats = {
   statsResetAt?: string | null
 }
 
+/** One bucket of a traffic series. `at` is where the bucket starts, in UTC. */
+export type UsagePoint = {
+  at: string
+  receivedBytes: number
+  transmittedBytes: number
+}
+
+/** What one peer moved over a window. Present with zeroes for a peer that moved nothing. */
+export type ClientUsage = {
+  id: string
+  name: string
+  groupId?: string | null
+  enabled: boolean
+  receivedBytes: number
+  transmittedBytes: number
+  /** Days in the window on which this peer moved anything at all. */
+  activeDays: number
+  lastActiveAt?: string | null
+}
+
+export type UsageWindowKey = '24h' | '7d' | '30d' | '90d'
+
+/** How wide one point of a series is. It follows from the window, never from the caller. */
+export type UsageBucket = 'hour' | 'day'
+
+/**
+ * Traffic over time. The series is dense - a quiet hour is a zero, not a gap - so a chart drawn
+ * from it shows the quiet hours instead of closing over them.
+ */
+export type UsageSummary = {
+  window: UsageWindowKey
+  bucket: UsageBucket
+  from: string
+  to: string
+  receivedBytes: number
+  transmittedBytes: number
+  series: UsagePoint[]
+  clients: ClientUsage[]
+  /** How long history is kept. Zero means the panel is not recording any. */
+  retentionDays: number
+  /** The oldest hour still kept, or null when nothing has been recorded yet. */
+  recordingSince?: string | null
+}
+
+export type ClientUsageSeries = {
+  clientId: string
+  window: UsageWindowKey
+  bucket: UsageBucket
+  from: string
+  to: string
+  receivedBytes: number
+  transmittedBytes: number
+  activeDays: number
+  series: UsagePoint[]
+  retentionDays: number
+  recordingSince?: string | null
+}
+
 export type Fleet = {
   generation: number
   serverPublicKey: string

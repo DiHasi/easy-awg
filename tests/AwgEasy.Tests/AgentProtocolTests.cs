@@ -276,6 +276,83 @@ public class AgentProtocolTests(ControlPlaneFixture fixture) : IClassFixture<Con
         Assert.Equal(60, afterReboot.TransmittedBytes);
     }
 
+    // Per-person statistics are a difference between two status reports, so the whole chain -
+    // agent signs, panel credits the interval, admin reads it back as a series - has to hold.
+    [Fact]
+    public async Task Reported_counters_become_a_traffic_history_for_the_peer()
+    {
+        var (admin, agentClient, agent) = await EnrolledAgentAsync("node-usage");
+
+        var created = await admin.PostAsJsonAsync("/api/clients", new CreateClientRequest("tracked", null));
+        var client = (await created.Content.ReadFromJsonAsync<ClientResponse>())!;
+
+        async Task ReportAsync(long received, long transmitted)
+        {
+            var report = new NodeStatusReport(
+                AppliedRevision: 1,
+                InterfaceUp: true,
+                Backend: "Kernel module",
+                AgentVersion: "test-agent/1.0",
+                ReportedAt: DateTimeOffset.UtcNow,
+                Peers: [new PeerStatus(client.PublicKey, DateTimeOffset.UtcNow, received, transmitted)],
+                Metrics: null,
+                LastError: null,
+                BundleSchemaVersion: DesiredStateBundle.CurrentSchemaVersion);
+
+            var response = await agentClient.SendAsync(agent.SignedRequest(
+                HttpMethod.Post,
+                $"/api/v1/agents/{agent.NodeId}/status",
+                JsonContent.Create(report)));
+
+            response.EnsureSuccessStatusCode();
+        }
+
+        // The first report only establishes where the counter stands; the second is the first
+        // interval anyone can attribute to a point in time.
+        await ReportAsync(10_000, 1_000);
+        await ReportAsync(10_900, 1_250);
+
+        var usage = (await admin.GetFromJsonAsync<UsageSummaryResponse>("/api/usage?window=24h"))!;
+
+        Assert.Equal("24h", usage.Window);
+        Assert.Equal("hour", usage.Bucket);
+        Assert.Equal(24, usage.Series.Length);
+
+        var peer = usage.Clients.Single(entry => entry.Id == client.Id);
+        Assert.Equal(900, peer.ReceivedBytes);
+        Assert.Equal(250, peer.TransmittedBytes);
+        Assert.Equal(1, peer.ActiveDays);
+        Assert.NotNull(peer.LastActiveAt);
+
+        // The same traffic, read as one peer's own series rather than the fleet's.
+        var own = (await admin.GetFromJsonAsync<ClientUsageSeriesResponse>($"/api/clients/{client.Id}/usage?window=24h"))!;
+        Assert.Equal(900, own.ReceivedBytes);
+        Assert.Equal(900, own.Series.Sum(point => point.ReceivedBytes));
+        // The hour in progress is the last bucket - a page that drew only whole hours would never
+        // show what is happening now. Two, because a report a moment before the hour turns is
+        // credited to the hour it arrived in and the window has already moved on.
+        Assert.Contains(own.Series.TakeLast(2), point => point.ReceivedBytes == 900);
+
+        // Deleting the peer deletes what was recorded about them, not just their config.
+        (await admin.DeleteAsync($"/api/clients/{client.Id}")).EnsureSuccessStatusCode();
+
+        var after = (await admin.GetFromJsonAsync<UsageSummaryResponse>("/api/usage?window=24h"))!;
+        Assert.DoesNotContain(after.Clients, entry => entry.Id == client.Id);
+        Assert.Equal(HttpStatusCode.NotFound, (await admin.GetAsync($"/api/clients/{client.Id}/usage")).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_window_the_panel_does_not_chart_is_refused_by_name()
+    {
+        var admin = await fixture.CreateAdminClientAsync();
+
+        var response = await admin.GetAsync("/api/usage?window=10y");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = (await response.Content.ReadFromJsonAsync<AwgEasy.Contracts.ApiError>())!;
+        Assert.Equal("usage_window_invalid", error.Code);
+    }
+
     // An operator who revokes a node, then deletes it, must not be left with a server that can
     // never rejoin. A fresh token is the authorization to adopt it again.
     [Fact]

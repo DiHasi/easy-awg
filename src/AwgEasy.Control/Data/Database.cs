@@ -288,6 +288,25 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             PRIMARY KEY (node_id, public_key)
         );
 
+        -- What each peer moved, hour by hour: the difference between two status reports, credited
+        -- to the hour the later one arrived in. peer_stats answers how much a peer has ever moved;
+        -- this answers when, which is the only way to say anything about a person's week.
+        --
+        -- Keyed by the client, not by public key: this is the panel's bookkeeping about a person,
+        -- and it is deleted with them. The node is deliberately not part of the key - a peer that
+        -- moves between nodes mid-hour is still one person's hour, and splitting by node would
+        -- multiply every row by the size of the fleet to answer a question nobody asks here.
+        CREATE TABLE IF NOT EXISTS client_usage (
+            client_id         TEXT    NOT NULL,
+            bucket_start      TEXT    NOT NULL,
+            received_bytes    INTEGER NOT NULL,
+            transmitted_bytes INTEGER NOT NULL,
+            updated_at        TEXT    NOT NULL,
+            PRIMARY KEY (client_id, bucket_start)
+        );
+        -- Retention prunes by bucket, and every read is a range over it.
+        CREATE INDEX IF NOT EXISTS ix_client_usage_bucket ON client_usage (bucket_start);
+
         CREATE TABLE IF NOT EXISTS events (
             id       INTEGER PRIMARY KEY AUTOINCREMENT,
             at       TEXT NOT NULL,
