@@ -12,8 +12,17 @@ const nodeActions = useNodeActions()
 
 const clients = ref<Client[]>([])
 const stats = ref<Record<string, ClientStats>>({})
-const loading = ref(true)
+const clientsLoaded = ref(false)
+const statsLoaded = ref(false)
 const errorMessage = ref<string | null>(null)
+
+/**
+ * The list waits for the traffic poll as well as for the peers themselves. The two requests used
+ * to race and the table rendered from whichever answered first, so every peer sat there as idle,
+ * never handshook and carrying nothing - a definite claim about every tunnel, made before the
+ * panel had been told a thing about any of them.
+ */
+const loading = computed(() => !clientsLoaded.value || !statsLoaded.value)
 const busyId = ref<string | null>(null)
 
 const createOpen = ref(false)
@@ -29,7 +38,7 @@ const configClient = ref<Client | null>(null)
 const statsOpen = ref(false)
 const statsClient = ref<Client | null>(null)
 
-type PeerState = 'up' | 'idle' | 'off'
+type PeerState = 'up' | 'idle' | 'off' | 'unknown'
 const filter = ref<'all' | PeerState>('all')
 const search = ref('')
 
@@ -68,15 +77,23 @@ const clientTuningFields = [
   { key: 'persistentKeepalive', label: 'PersistentKeepalive' }
 ] as const
 
+/**
+ * Whether a peer is disabled is the panel's own record and known immediately; whether an enabled
+ * one is carrying traffic is the nodes' and arrives with the stats. Until it does the answer is
+ * that there is no answer - `idle` is what the tunnel does, not what the panel has yet to hear.
+ */
 function peerState(client: Client): PeerState {
   if (!client.enabled) {
     return 'off'
+  }
+  if (!statsLoaded.value) {
+    return 'unknown'
   }
   return stats.value[client.id]?.online ? 'up' : 'idle'
 }
 
 const counts = computed(() => {
-  const result = { total: clients.value.length, up: 0, idle: 0, off: 0 }
+  const result = { total: clients.value.length, up: 0, idle: 0, off: 0, unknown: 0 }
   for (const client of clients.value) {
     result[peerState(client)]++
   }
@@ -107,7 +124,7 @@ async function loadClients() {
   } catch (error) {
     errorMessage.value = describeError(error, 'Failed to load clients.')
   } finally {
-    loading.value = false
+    clientsLoaded.value = true
   }
 }
 
@@ -117,6 +134,9 @@ async function loadStats() {
     stats.value = Object.fromEntries(items.map(item => [item.id, item]))
   } catch {
     // A dropped stats poll is not worth an error banner; the next tick usually recovers.
+  } finally {
+    // Settled either way, or a stats endpoint that keeps failing would hide the peers for good.
+    statsLoaded.value = true
   }
 }
 
@@ -300,7 +320,17 @@ function menuFor(client: Client): DropdownMenuItem[][] {
 }
 
 function handshake(client: Client) {
-  return relativeTime(stats.value[client.id]?.latestHandshakeAt)
+  return relativeTime(stats.value[client.id]?.latestHandshakeAt, statsLoaded.value ? 'never' : '—')
+}
+
+/** An em dash for a number nobody has reported yet, rather than a zero that reads as measured. */
+function traffic(client: Client, direction: 'down' | 'up') {
+  if (!statsLoaded.value) {
+    return '—'
+  }
+
+  const peer = stats.value[client.id]
+  return formatBytes((direction === 'down' ? peer?.transmittedBytes : peer?.receivedBytes) ?? 0)
 }
 
 onMounted(loadClients)
@@ -322,7 +352,7 @@ usePolling(loadStats, 10000)
         :nodes="serving"
         :dns="dns"
         :fleet="fleet"
-        :clients="{ total: counts.total, online: counts.up, idle: counts.idle, off: counts.off }"
+        :clients="{ total: counts.total, online: counts.up, idle: counts.idle, off: counts.off, unknown: counts.unknown }"
         :busy-id="nodeActions.busyId.value"
         @activate="nodeActions.activate"
         @revoke="nodeActions.revoke"
@@ -337,7 +367,9 @@ usePolling(loadStats, 10000)
       id="peers"
       title="Peers"
       icon="i-lucide-users"
-      :description="`${counts.total} configs issued · ${counts.up} online now`"
+      :description="loading
+        ? 'Reading the peers and what they have moved'
+        : `${counts.total} configs issued · ${counts.up} online now`"
       flush
       class="scroll-mt-20"
     >
@@ -370,7 +402,11 @@ usePolling(loadStats, 10000)
               @click="filter = option.value"
             >
               {{ option.label }}
-              <span class="tabular opacity-70">{{ option.count }}</span>
+              <!-- Counting them means knowing which is online, which the stats poll has not said yet. -->
+              <span
+                v-if="!loading"
+                class="tabular opacity-70"
+              >{{ option.count }}</span>
             </UButton>
           </UFieldGroup>
         </div>
@@ -477,8 +513,8 @@ usePolling(loadStats, 10000)
               :aria-label="`Traffic for ${client.name}`"
               @click="openStats(client)"
             >
-              <span>↓ {{ formatBytes(stats[client.id]?.transmittedBytes ?? 0) }}</span>
-              <span>↑ {{ formatBytes(stats[client.id]?.receivedBytes ?? 0) }}</span>
+              <span>↓ {{ traffic(client, 'down') }}</span>
+              <span>↑ {{ traffic(client, 'up') }}</span>
               <UIcon
                 name="i-lucide-activity"
                 class="size-3.5 text-muted"
@@ -491,7 +527,7 @@ usePolling(loadStats, 10000)
           </div>
           <span class="hidden text-sm text-toned lg:block">{{ handshake(client) }}</span>
           <span class="tabular hidden font-mono text-xs text-toned lg:block">
-            ↓ {{ formatBytes(stats[client.id]?.transmittedBytes ?? 0) }} &nbsp;↑ {{ formatBytes(stats[client.id]?.receivedBytes ?? 0) }}
+            ↓ {{ traffic(client, 'down') }} &nbsp;↑ {{ traffic(client, 'up') }}
           </span>
 
           <div class="flex items-center justify-end gap-1.5">
