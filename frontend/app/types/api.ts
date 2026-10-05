@@ -93,7 +93,11 @@ export type ClientStats = {
   statsResetAt?: string | null
 }
 
-/** One bucket of a traffic series. `at` is where the bucket starts, in UTC. */
+/**
+ * One bucket of a traffic series. `at` is the instant the bucket starts. An hourly bucket sits on
+ * a UTC hour; a daily one starts at midnight in the timezone the request named, so a day is the
+ * reader's own day rather than UTC's.
+ */
 export type UsagePoint = {
   at: string
   receivedBytes: number

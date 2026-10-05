@@ -24,7 +24,7 @@ const windows: { value: UsageWindowKey, label: string }[] = [
   { value: '90d', label: '90 days' }
 ]
 
-const span = ref<UsageWindowKey>('7d')
+const span = ref<UsageWindowKey>('24h')
 const usage = ref<UsageSummary | null>(null)
 const groups = ref<ClientGroup[]>([])
 const loading = ref(true)
@@ -38,7 +38,7 @@ const fetching = ref<Set<string>>(new Set())
 async function load() {
   try {
     const [summary, people] = await Promise.all([
-      api.get<UsageSummary>(`/usage?window=${span.value}`),
+      api.get<UsageSummary>(`/usage?window=${span.value}&offset=${utcOffsetMinutes()}`),
       api.get<ClientGroup[]>('/groups')
     ])
 
@@ -160,7 +160,9 @@ async function loadSeries(clientId: string) {
   try {
     series.value = {
       ...series.value,
-      [clientId]: await api.get<ClientUsageSeries>(`/clients/${clientId}/usage?window=${span.value}`)
+      [clientId]: await api.get<ClientUsageSeries>(
+        `/clients/${clientId}/usage?window=${span.value}&offset=${utcOffsetMinutes()}`
+      )
     }
   } catch {
     // A row that will not open its chart is not worth a banner over the whole page.
@@ -218,7 +220,7 @@ function exportCsv() {
   const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' }))
   const link = document.createElement('a')
   link.href = url
-  link.download = `awg-traffic-${span.value}-${new Date().toISOString().slice(0, 10)}.csv`
+  link.download = `awg-traffic-${span.value}-${localDate()}.csv`
   link.click()
   URL.revokeObjectURL(url)
 }
@@ -307,10 +309,15 @@ usePolling(load, 60000)
 
         <p class="text-xs text-muted">
           <template v-if="recording">
-            Counted from what the nodes report, every bucket in UTC. Kept for
+            Counted from what the nodes report, every bucket on your own clock
+            ({{ localZone() }}).
+            <template v-if="usage?.bucket === 'day'">
+              A day is midnight to midnight here, at the offset in force now.
+            </template>
+            Kept for
             {{ usage?.retentionDays }} days;
             <template v-if="usage?.recordingSince">
-              the oldest hour on record is {{ formatUtc(usage.recordingSince) }}.
+              the oldest hour on record is {{ formatLocal(usage.recordingSince) }}.
             </template>
             <template v-else>
               nothing has been recorded yet - a peer's traffic appears once its node has reported

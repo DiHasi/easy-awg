@@ -36,7 +36,7 @@ const spans: { value: UsageWindowKey, label: string }[] = [
   { value: '30d', label: '30d' }
 ]
 
-const span = ref<UsageWindowKey>('7d')
+const span = ref<UsageWindowKey>('24h')
 const history = ref<ClientUsageSeries | null>(null)
 const historyLoading = ref(false)
 
@@ -49,7 +49,9 @@ async function loadHistory() {
   historyLoading.value = true
 
   try {
-    history.value = await api.get<ClientUsageSeries>(`/clients/${client.id}/usage?window=${span.value}`)
+    history.value = await api.get<ClientUsageSeries>(
+      `/clients/${client.id}/usage?window=${span.value}&offset=${utcOffsetMinutes()}`
+    )
   } catch {
     // The lifetime counters above are the point of this dialog; a history that will not load is
     // worth an empty chart, not an error over the top of them.
@@ -91,7 +93,7 @@ const down = computed(() => props.stats?.transmittedBytes ?? 0)
 const up = computed(() => props.stats?.receivedBytes ?? 0)
 
 const since = computed(() => props.stats?.statsResetAt
-  ? `since the counter was reset on ${formatUtc(props.stats.statsResetAt)}`
+  ? `since the counter was reset on ${formatLocal(props.stats.statsResetAt)}`
   : 'since the peer was created')
 
 async function reset() {

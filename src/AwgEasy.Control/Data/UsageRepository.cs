@@ -10,7 +10,11 @@ public enum UsageGrain
     Day
 }
 
-/// <summary>One point of a traffic series. <paramref name="At"/> is the start of the bucket, UTC.</summary>
+/// <summary>
+/// One point of a traffic series. <paramref name="At"/> is the instant the bucket starts, as UTC.
+/// For an hour that is a UTC hour; for a day it is the midnight that day began in the timezone the
+/// series was asked for, which is not UTC midnight unless that is where the reader is.
+/// </summary>
 public readonly record struct UsageBucket(DateTimeOffset At, long Rx, long Tx);
 
 /// <param name="ActiveDays">Days inside the window on which this peer moved anything at all.</param>
@@ -37,16 +41,30 @@ public sealed class UsageRepository(Database database)
     /// simply absent; filling the gaps is the caller's business, because only it knows the window
     /// it asked about.
     /// </summary>
-    public IReadOnlyList<UsageBucket> Series(DateTimeOffset from, DateTimeOffset to, UsageGrain grain, string? clientId = null)
+    /// <param name="offsetMinutes">
+    /// The reader's offset east of UTC, which decides where one day ends and the next begins. It
+    /// does nothing to an hourly series: the rows are written on UTC hour boundaries, so a zone
+    /// offset by :30 or :45 has no local hour boundary that could be rebuilt out of them. The
+    /// instant is right either way - only its label is local, and that is the caller's business.
+    /// </param>
+    public IReadOnlyList<UsageBucket> Series(
+        DateTimeOffset from,
+        DateTimeOffset to,
+        UsageGrain grain,
+        string? clientId = null,
+        int offsetMinutes = 0)
     {
         // substr over an ISO-8601 string is the cheapest possible date_trunc: every bucket is
-        // written in UTC with the same format, so 13 characters is an hour and 10 is a day.
-        var width = grain == UsageGrain.Day ? 10 : 13;
+        // written in UTC with the same format, so 13 characters is an hour. A day has to be
+        // truncated in the reader's own frame instead, which is a shift before the same cut.
+        var bucket = grain == UsageGrain.Day
+            ? "strftime('%Y-%m-%d', bucket_start, $shift)"
+            : "substr(bucket_start, 1, 13)";
 
         using var connection = database.Open();
         using var command = connection.Sql(
             $"""
-            SELECT substr(bucket_start, 1, {width}) AS bucket,
+            SELECT {bucket} AS bucket,
                    SUM(received_bytes)    AS rx,
                    SUM(transmitted_bytes) AS tx
               FROM client_usage
@@ -58,7 +76,8 @@ public sealed class UsageRepository(Database database)
             """,
             ("$from", Key(from)),
             ("$to", Key(to)),
-            ("$clientId", clientId));
+            ("$clientId", clientId),
+            ("$shift", Shift(offsetMinutes)));
 
         using var reader = command.ExecuteReader();
 
@@ -66,7 +85,7 @@ public sealed class UsageRepository(Database database)
         while (reader.Read())
         {
             series.Add(new UsageBucket(
-                ParseBucket(reader.GetString("bucket"), grain),
+                ParseBucket(reader.GetString("bucket"), grain, offsetMinutes),
                 reader.GetInt64("rx"),
                 reader.GetInt64("tx")));
         }
@@ -74,8 +93,11 @@ public sealed class UsageRepository(Database database)
         return series;
     }
 
-    /// <summary>What each peer moved over the window. Peers with nothing in it are absent.</summary>
-    public IReadOnlyDictionary<string, ClientUsageTotals> ByClient(DateTimeOffset from, DateTimeOffset to)
+    /// <summary>
+    /// What each peer moved over the window. Peers with nothing in it are absent. Active days are
+    /// counted in the reader's own days, for the same reason a daily series is bucketed in them.
+    /// </summary>
+    public IReadOnlyDictionary<string, ClientUsageTotals> ByClient(DateTimeOffset from, DateTimeOffset to, int offsetMinutes = 0)
     {
         using var connection = database.Open();
         using var command = connection.Sql(
@@ -83,7 +105,7 @@ public sealed class UsageRepository(Database database)
             SELECT client_id,
                    SUM(received_bytes)                      AS rx,
                    SUM(transmitted_bytes)                   AS tx,
-                   COUNT(DISTINCT substr(bucket_start, 1, 10)) AS active_days,
+                   COUNT(DISTINCT strftime('%Y-%m-%d', bucket_start, $shift)) AS active_days,
                    MAX(updated_at)                          AS last_at
               FROM client_usage
              WHERE bucket_start >= $from
@@ -91,7 +113,8 @@ public sealed class UsageRepository(Database database)
              GROUP BY client_id
             """,
             ("$from", Key(from)),
-            ("$to", Key(to)));
+            ("$to", Key(to)),
+            ("$shift", Shift(offsetMinutes)));
 
         using var reader = command.ExecuteReader();
 
@@ -162,9 +185,25 @@ public sealed class UsageRepository(Database database)
     /// <summary>Everything is compared as the string it is stored as, so both ends must be UTC.</summary>
     private static string Key(DateTimeOffset at) => at.ToUniversalTime().ToStorage();
 
-    private static DateTimeOffset ParseBucket(string key, UsageGrain grain)
-        => DateTimeOffset.Parse(
-            grain == UsageGrain.Day ? $"{key}T00:00:00Z" : $"{key}:00:00Z",
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.RoundtripKind);
+    /// <summary>
+    /// The offset as a SQLite modifier. Stored timestamps carry their own <c>+00:00</c>, so SQLite
+    /// reads them as UTC and this shifts from there into the reader's frame.
+    /// </summary>
+    private static string Shift(int offsetMinutes)
+        => string.Create(CultureInfo.InvariantCulture, $"{offsetMinutes:+0;-0;+0} minutes");
+
+    /// <summary>
+    /// A grouping key back into the instant its bucket starts. An hour key is already UTC; a day
+    /// key is a date in the reader's frame, so the instant is the midnight that date began there.
+    /// </summary>
+    private static DateTimeOffset ParseBucket(string key, UsageGrain grain, int offsetMinutes)
+    {
+        if (grain != UsageGrain.Day)
+        {
+            return DateTimeOffset.Parse($"{key}:00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+        }
+
+        var date = DateOnly.ParseExact(key, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+        return new DateTimeOffset(date.ToDateTime(TimeOnly.MinValue), TimeSpan.FromMinutes(offsetMinutes)).ToUniversalTime();
+    }
 }

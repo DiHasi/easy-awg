@@ -27,24 +27,32 @@ public static class UsageApi
         new("90d", TimeSpan.FromDays(90), UsageGrain.Day)
     ];
 
-    private static readonly Window Default = Windows[1];
+    /// <summary>
+    /// The day in front of the operator, which is what they came to the page to read. A request
+    /// without a window answers the same thing the panel opens on, so the two cannot disagree.
+    /// </summary>
+    private static readonly Window Default = Windows[0];
+
+    /// <summary>±14h, the span of real civil offsets. Beyond it the caller is not naming a place.</summary>
+    private const int OffsetLimit = 14 * 60;
 
     public static void MapUsage(this RouteGroupBuilder admin)
     {
         admin.MapGet("/usage", (
             string? window,
+            int? offset,
             UsageRepository usage,
             ClientRepository clients,
             ControlOptions options) =>
         {
-            if (!TryRead(window, out var selected, out var error))
+            if (!TryRead(window, out var selected, out var error) || !TryReadOffset(offset, out var minutes, out error))
             {
                 return Results.BadRequest(error);
             }
 
-            var (from, to) = Range(selected, DateTimeOffset.UtcNow);
-            var totals = usage.ByClient(from, to);
-            var series = Densify(usage.Series(from, to, selected.Grain), from, to, selected.Grain);
+            var (from, to) = Range(selected, DateTimeOffset.UtcNow, minutes);
+            var totals = usage.ByClient(from, to, minutes);
+            var series = Densify(usage.Series(from, to, selected.Grain, offsetMinutes: minutes), from, to, selected.Grain);
 
             // Every peer the panel knows, in the arrangement the operator reads the list in, so a
             // person with nothing this week is visible as a zero rather than missing from the page.
@@ -70,6 +78,7 @@ public static class UsageApi
         admin.MapGet("/clients/{id}/usage", (
             string id,
             string? window,
+            int? offset,
             ClientRepository clients,
             UsageRepository usage,
             ControlOptions options) =>
@@ -79,14 +88,14 @@ public static class UsageApi
                 return Results.NotFound(new ApiError("client_not_found", "Client was not found."));
             }
 
-            if (!TryRead(window, out var selected, out var error))
+            if (!TryRead(window, out var selected, out var error) || !TryReadOffset(offset, out var minutes, out error))
             {
                 return Results.BadRequest(error);
             }
 
-            var (from, to) = Range(selected, DateTimeOffset.UtcNow);
-            var series = Densify(usage.Series(from, to, selected.Grain, id), from, to, selected.Grain);
-            var totals = usage.ByClient(from, to).GetValueOrDefault(id);
+            var (from, to) = Range(selected, DateTimeOffset.UtcNow, minutes);
+            var series = Densify(usage.Series(from, to, selected.Grain, id, minutes), from, to, selected.Grain);
+            var totals = usage.ByClient(from, to, minutes).GetValueOrDefault(id);
 
             return Results.Ok(new ClientUsageSeriesResponse(
                 id,
@@ -138,16 +147,49 @@ public static class UsageApi
     }
 
     /// <summary>
+    /// The reader's offset east of UTC, in minutes - the ISO reading of a zone, so +03:00 is 180.
+    /// Omitted means UTC, which is what a caller that is not a browser gets and what the panel
+    /// answered before it began asking. Whole minutes only, because :45 zones are real.
+    /// </summary>
+    private static bool TryReadOffset(int? offset, out int minutes, out ApiError error)
+    {
+        minutes = offset ?? 0;
+        error = default!;
+
+        if (minutes is < -OffsetLimit or > OffsetLimit)
+        {
+            error = new ApiError("usage_offset_invalid", $"Offset must be between -{OffsetLimit} and {OffsetLimit} minutes.");
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// The window, aligned to its own bucket width. The hour - or the day - in progress is the last
     /// bucket and is deliberately included: it is partial, and leaving it out would mean the page
     /// never shows what is happening right now.
+    ///
+    /// A day is aligned in the reader's frame, not in UTC, so "yesterday" on the page is the day
+    /// they actually lived through. An hour is not: the stored rows sit on UTC hour boundaries, so
+    /// there is nothing finer to align to and the instant is already correct - only the label it is
+    /// drawn with is local.
     /// </summary>
-    private static (DateTimeOffset From, DateTimeOffset To) Range(Window window, DateTimeOffset now)
+    private static (DateTimeOffset From, DateTimeOffset To) Range(Window window, DateTimeOffset now, int offsetMinutes)
     {
         var utc = now.ToUniversalTime();
-        var current = window.Grain == UsageGrain.Day
-            ? new DateTimeOffset(utc.Year, utc.Month, utc.Day, 0, 0, 0, TimeSpan.Zero)
-            : new DateTimeOffset(utc.Year, utc.Month, utc.Day, utc.Hour, 0, 0, TimeSpan.Zero);
+        DateTimeOffset current;
+
+        if (window.Grain == UsageGrain.Day)
+        {
+            var shift = TimeSpan.FromMinutes(offsetMinutes);
+            var local = utc + shift;
+            current = new DateTimeOffset(local.Year, local.Month, local.Day, 0, 0, 0, TimeSpan.Zero) - shift;
+        }
+        else
+        {
+            current = new DateTimeOffset(utc.Year, utc.Month, utc.Day, utc.Hour, 0, 0, TimeSpan.Zero);
+        }
 
         var to = current + Step(window.Grain);
         return (to - window.Span, to);

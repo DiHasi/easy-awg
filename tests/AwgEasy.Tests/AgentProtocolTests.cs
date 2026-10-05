@@ -353,6 +353,114 @@ public class AgentProtocolTests(ControlPlaneFixture fixture) : IClassFixture<Con
         Assert.Equal("usage_window_invalid", error.Code);
     }
 
+    // The panel opens the traffic page on the day in front of the operator, so a request that
+    // names no window has to answer the same thing rather than something wider.
+    [Fact]
+    public async Task A_request_that_names_no_window_is_answered_with_the_day()
+    {
+        var admin = await fixture.CreateAdminClientAsync();
+
+        var usage = (await admin.GetFromJsonAsync<UsageSummaryResponse>("/api/usage"))!;
+
+        Assert.Equal("24h", usage.Window);
+        Assert.Equal("hour", usage.Bucket);
+        Assert.Equal(24, usage.Series.Length);
+    }
+
+    // A daily window is cut on the reader's midnight, which is the whole point of sending an
+    // offset: the window itself has to move with it, not just the labels drawn on it.
+    [Theory]
+    [InlineData(180)]
+    [InlineData(-300)]
+    [InlineData(345)]
+    public async Task A_daily_window_is_aligned_to_the_readers_midnight(int offsetMinutes)
+    {
+        var admin = await fixture.CreateAdminClientAsync();
+
+        var usage = (await admin.GetFromJsonAsync<UsageSummaryResponse>($"/api/usage?window=30d&offset={offsetMinutes}"))!;
+
+        Assert.Equal("day", usage.Bucket);
+        Assert.Equal(30, usage.Series.Length);
+        Assert.Equal(TimeSpan.FromDays(30), usage.To - usage.From);
+
+        // Shifted into the reader's frame, both ends land on midnight - even off the hour.
+        var shift = TimeSpan.FromMinutes(offsetMinutes);
+        Assert.Equal(TimeSpan.Zero, (usage.From + shift).UtcDateTime.TimeOfDay);
+        Assert.Equal(TimeSpan.Zero, (usage.To + shift).UtcDateTime.TimeOfDay);
+
+        // And every bucket starts one of those midnights.
+        Assert.All(usage.Series, point => Assert.Equal(TimeSpan.Zero, (point.At + shift).UtcDateTime.TimeOfDay));
+    }
+
+    // The panel gap-fills a series by matching the instant each bucket starts, so a daily bucket
+    // the database keys one way and the panel generates another would not fail - it would draw an
+    // empty month. The two totals come from the two separate paths, so they only agree if the
+    // keys do.
+    [Fact]
+    public async Task Traffic_survives_into_a_day_bucket_cut_on_the_readers_midnight()
+    {
+        var (admin, agentClient, agent) = await EnrolledAgentAsync("node-usage-tz");
+
+        var created = await admin.PostAsJsonAsync("/api/clients", new CreateClientRequest("tracked-tz", null));
+        var client = (await created.Content.ReadFromJsonAsync<ClientResponse>())!;
+
+        async Task ReportAsync(long received, long transmitted)
+        {
+            var report = new NodeStatusReport(
+                AppliedRevision: 1,
+                InterfaceUp: true,
+                Backend: "Kernel module",
+                AgentVersion: "test-agent/1.0",
+                ReportedAt: DateTimeOffset.UtcNow,
+                Peers: [new PeerStatus(client.PublicKey, DateTimeOffset.UtcNow, received, transmitted)],
+                Metrics: null,
+                LastError: null,
+                BundleSchemaVersion: DesiredStateBundle.CurrentSchemaVersion);
+
+            var response = await agentClient.SendAsync(agent.SignedRequest(
+                HttpMethod.Post,
+                $"/api/v1/agents/{agent.NodeId}/status",
+                JsonContent.Create(report)));
+
+            response.EnsureSuccessStatusCode();
+        }
+
+        await ReportAsync(10_000, 1_000);
+        await ReportAsync(10_900, 1_250);
+
+        // This peer's own series, not the fleet's: the fixture is shared, so what other peers
+        // moved is none of this test's business.
+        foreach (var offset in new[] { 0, 180, -300, 345 })
+        {
+            var own = (await admin.GetFromJsonAsync<ClientUsageSeriesResponse>(
+                $"/api/clients/{client.Id}/usage?window=30d&offset={offset}"))!;
+
+            Assert.Equal("day", own.Bucket);
+            Assert.Equal(30, own.Series.Length);
+
+            // Summed from the gap-filled series, so a key the panel could not match would read 0.
+            Assert.Equal(900, own.ReceivedBytes);
+            Assert.Equal(900, own.Series.Sum(point => point.ReceivedBytes));
+            Assert.Single(own.Series, point => point.ReceivedBytes > 0);
+
+            // And the fleet summary's row for the same peer, which is counted without gap-filling.
+            var usage = (await admin.GetFromJsonAsync<UsageSummaryResponse>($"/api/usage?window=30d&offset={offset}"))!;
+            Assert.Equal(900, usage.Clients.Single(entry => entry.Id == client.Id).ReceivedBytes);
+        }
+    }
+
+    [Fact]
+    public async Task An_offset_no_place_on_earth_has_is_refused_by_name()
+    {
+        var admin = await fixture.CreateAdminClientAsync();
+
+        var response = await admin.GetAsync("/api/usage?window=30d&offset=900");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = (await response.Content.ReadFromJsonAsync<AwgEasy.Contracts.ApiError>())!;
+        Assert.Equal("usage_offset_invalid", error.Code);
+    }
+
     // An operator who revokes a node, then deletes it, must not be left with a server that can
     // never rejoin. A fresh token is the authorization to adopt it again.
     [Fact]

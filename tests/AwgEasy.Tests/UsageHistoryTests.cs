@@ -180,6 +180,99 @@ public sealed class UsageHistoryTests : IDisposable
         Assert.Equal(2, totals.ActiveDays);
     }
 
+    /// <summary>
+    /// A day is the reader's day, not UTC's. Three hours of one UTC day straddle two days for a
+    /// reader three hours east of it, and the page they read is about their own evenings.
+    /// </summary>
+    [Fact]
+    public void Days_are_folded_in_the_readers_timezone()
+    {
+        var client = Client();
+        var day = new DateTimeOffset(2026, 3, 4, 18, 0, 0, TimeSpan.Zero);
+
+        Report("node-a", day, rx: 0, tx: 0);
+        Report("node-a", day.AddMinutes(1), rx: 100, tx: 10);
+        Report("node-a", day.AddHours(3).AddMinutes(1), rx: 300, tx: 30);
+        Report("node-a", day.AddHours(5).AddMinutes(1), rx: 600, tx: 60);
+
+        // In UTC all three hours are the fourth, so the whole 600 is one day.
+        var utcDays = _usage.Series(
+            new DateTimeOffset(2026, 3, 4, 0, 0, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 3, 5, 0, 0, 0, TimeSpan.Zero),
+            UsageGrain.Day,
+            client.Id);
+
+        Assert.Equal(new DateTimeOffset(2026, 3, 4, 0, 0, 0, TimeSpan.Zero), Assert.Single(utcDays).At);
+        Assert.Equal(600, utcDays[0].Rx);
+
+        // Three hours east, 21:00 and 23:00 have already become the fifth: 100 on one day, 500 on
+        // the next. The window is two of that reader's days, so it starts at 21:00 the day before.
+        var from = new DateTimeOffset(2026, 3, 3, 21, 0, 0, TimeSpan.Zero);
+        var localDays = _usage.Series(from, from.AddDays(2), UsageGrain.Day, client.Id, offsetMinutes: 180);
+
+        Assert.Equal(2, localDays.Count);
+        Assert.Equal(from, localDays[0].At);
+        Assert.Equal(100, localDays[0].Rx);
+        Assert.Equal(from.AddDays(1), localDays[1].At);
+        Assert.Equal(500, localDays[1].Rx);
+
+        // And the days a peer was active are counted in the same frame, or the table beside the
+        // chart would disagree with it.
+        Assert.Equal(1, _usage.ByClient(from, from.AddDays(2))[client.Id].ActiveDays);
+        Assert.Equal(2, _usage.ByClient(from, from.AddDays(2), offsetMinutes: 180)[client.Id].ActiveDays);
+    }
+
+    /// <summary>
+    /// The boundary moves both ways, and not only by whole hours: Kathmandu and the Chathams are
+    /// offset by three quarters of one, and a bucket read back has to land on their midnight.
+    /// </summary>
+    [Theory]
+    [InlineData(-300, 2026, 3, 3, 5, 0)]
+    [InlineData(345, 2026, 3, 3, 18, 15)]
+    public void A_day_starts_at_the_readers_own_midnight(int offsetMinutes, int year, int month, int day, int hour, int minute)
+    {
+        var client = Client();
+        var at = new DateTimeOffset(2026, 3, 4, 2, 0, 0, TimeSpan.Zero);
+
+        Report("node-a", at, rx: 0, tx: 0);
+        Report("node-a", at.AddMinutes(1), rx: 100, tx: 10);
+
+        var shift = TimeSpan.FromMinutes(offsetMinutes);
+        var days = _usage.Series(
+            new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero) - shift,
+            new DateTimeOffset(2026, 3, 10, 0, 0, 0, TimeSpan.Zero) - shift,
+            UsageGrain.Day,
+            client.Id,
+            offsetMinutes);
+
+        var bucket = Assert.Single(days);
+        Assert.Equal(new DateTimeOffset(year, month, day, hour, minute, 0, TimeSpan.Zero), bucket.At);
+        Assert.Equal(100, bucket.Rx);
+    }
+
+    /// <summary>
+    /// An hourly series is offered no opinion about timezones. The rows sit on UTC hours, so there
+    /// is no finer boundary to re-cut them on and the instant is already right - a reader offset by
+    /// :45 is shown an hour that genuinely begins at quarter to, which is the honest answer.
+    /// </summary>
+    [Fact]
+    public void An_hourly_series_ignores_the_offset()
+    {
+        var client = Client();
+        var day = new DateTimeOffset(2026, 3, 4, 18, 0, 0, TimeSpan.Zero);
+
+        Report("node-a", day, rx: 0, tx: 0);
+        Report("node-a", day.AddMinutes(1), rx: 100, tx: 10);
+        Report("node-a", day.AddHours(3).AddMinutes(1), rx: 300, tx: 30);
+
+        var from = new DateTimeOffset(2026, 3, 4, 0, 0, 0, TimeSpan.Zero);
+        var hours = _usage.Series(from, from.AddDays(1), UsageGrain.Hour, client.Id, offsetMinutes: 345);
+
+        Assert.Equal(
+            [day, day.AddHours(3)],
+            hours.Select(bucket => bucket.At));
+    }
+
     [Fact]
     public void Retention_drops_what_is_older_than_the_window_and_keeps_the_rest()
     {
