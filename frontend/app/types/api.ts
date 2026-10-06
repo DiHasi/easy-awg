@@ -162,6 +162,7 @@ export type Fleet = {
   listenPort: number
   clientAllowedIps: string
   clientDns?: string | null
+  tunnelMtu: number
   endpointHost: string
   obfuscation?: ServerObfuscationProfile | null
   revision: number

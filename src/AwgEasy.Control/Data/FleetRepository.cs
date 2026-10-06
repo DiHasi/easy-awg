@@ -26,6 +26,7 @@ public sealed class FleetRepository(Database database)
             reader.GetInt32("listen_port"),
             reader.GetString("client_allowed_ips"),
             reader.GetStringOrNull("client_dns"),
+            reader.GetInt32("tunnel_mtu"),
             reader.GetString("endpoint_host"),
             Deserialize(reader.GetStringOrNull("obfuscation_json")),
             reader.GetInt64("revision"));
@@ -38,12 +39,12 @@ public sealed class FleetRepository(Database database)
             """
             INSERT INTO fleet (id, generation, server_private_key, server_public_key,
                                signing_private_key, signing_public_key, signing_key_id,
-                               subnet, listen_port, client_allowed_ips, client_dns, endpoint_host,
-                               obfuscation_json, revision, created_at, updated_at)
+                               subnet, listen_port, client_allowed_ips, client_dns, tunnel_mtu,
+                               endpoint_host, obfuscation_json, revision, created_at, updated_at)
             VALUES (1, $generation, $serverPrivate, $serverPublic,
                     $signingPrivate, $signingPublic, $signingKeyId,
-                    $subnet, $listenPort, $allowedIps, $dns, $endpointHost,
-                    $obfuscation, $revision, $now, $now)
+                    $subnet, $listenPort, $allowedIps, $dns, $tunnelMtu,
+                    $endpointHost, $obfuscation, $revision, $now, $now)
             """,
             ("$generation", fleet.Generation),
             ("$serverPrivate", fleet.ServerPrivateKey),
@@ -55,6 +56,7 @@ public sealed class FleetRepository(Database database)
             ("$listenPort", fleet.ListenPort),
             ("$allowedIps", fleet.ClientAllowedIps),
             ("$dns", fleet.ClientDns),
+            ("$tunnelMtu", fleet.TunnelMtu),
             ("$endpointHost", fleet.EndpointHost),
             ("$obfuscation", Serialize(fleet.Obfuscation)),
             ("$revision", fleet.Revision),
@@ -124,6 +126,17 @@ public sealed class FleetRepository(Database database)
         using var command = connection.Sql(
             "UPDATE fleet SET obfuscation_json = $obfuscation, updated_at = $now WHERE id = 1",
             ("$obfuscation", Serialize(obfuscation)),
+            ("$now", now.ToStorage()));
+
+        command.ExecuteNonQuery();
+    }
+
+    public void UpdateTunnelMtu(int mtu, DateTimeOffset now)
+    {
+        using var connection = database.Open();
+        using var command = connection.Sql(
+            "UPDATE fleet SET tunnel_mtu = $mtu, updated_at = $now WHERE id = 1",
+            ("$mtu", mtu),
             ("$now", now.ToStorage()));
 
         command.ExecuteNonQuery();

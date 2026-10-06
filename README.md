@@ -355,6 +355,31 @@ Changing `HeaderProtectionKey`, `RandomTrailers`, `S1`-`S4` or `H1`-`H4` changes
 **every client config has to be handed out again** - existing ones stop handshaking. The per-client
 half can be changed freely; only that client's config needs reissuing.
 
+### Tunnel MTU
+
+**Fleet → Tunnel MTU**, default **1280**. It is written into every client config and applied by
+every node, and the default is the one AmneziaWG's own 3.1 upgrade guide recommends.
+
+Left alone, `awg-quick` works out route-MTU minus 80, which is 1420 on a 1500 underlay, and client
+apps size their own default the same way. Those 80 bytes cover vanilla WireGuard - 20 IPv4 (40
+IPv6) + 8 UDP + 16 data header + 16 Poly1305 - and not what 3.x adds to every transport packet on
+top: `S4`, `ContentPaddingAddition`, and `RandomTrailers`, which 3.1 turns on by default. The outer
+datagram then crosses 1500 and fragments, and mobile CGNAT and plenty of home routers drop IP
+fragments. The result is a tunnel that works for most people and loses, for whoever sits behind a
+constrained path, exactly the traffic that sustains full-size packets at high bitrate - video,
+YouTube first, over QUIC, while everything smaller keeps working and hides the cause.
+
+Two things to know before changing it:
+
+- **It bumps the fleet revision, and each node restarts its interface once** as it picks the change
+  up. `awg syncconf` cannot change an interface's MTU, so the agent brings the interface down and
+  back up. Nodes poll independently, so the restarts stagger.
+- **Configs already handed out keep their old MTU** until they are downloaded again. The renderer
+  runs at download time, so re-sending a peer's share link is enough - no new peer, no new keys.
+
+A node whose own egress is below 1500 can run less than the fleet value; that override lives on the
+node row and the fleet value does not raise it.
+
 ### Upgrading a fleet to 3.x
 
 Upgrade the panel first, then walk the nodes. Until a node is upgraded it keeps reporting the older
@@ -828,6 +853,34 @@ WireGuard.
 Изменение `HeaderProtectionKey`, `RandomTrailers`, `S1`-`S4` или `H1`-`H4` меняет формат на проводе,
 поэтому **все клиентские конфиги придётся выдать заново** — старые перестанут хендшейкиться.
 Вторую группу можно менять свободно: переоформить нужно только конфиг этого клиента.
+
+### MTU туннеля
+
+**Флот → Tunnel MTU**, по умолчанию **1280**. Значение пишется в каждый клиентский конфиг и
+применяется каждой нодой, а дефолт — тот, который рекомендует собственное руководство AmneziaWG по
+переходу на 3.1.
+
+Если не вмешиваться, `awg-quick` берёт MTU маршрута минус 80 — то есть 1420 на подложке 1500, — и
+клиентские приложения считают свой дефолт так же. Эти 80 байт покрывают обычный WireGuard: 20 IPv4
+(40 IPv6) + 8 UDP + 16 на заголовок data + 16 на тег Poly1305, — и не покрывают того, что 3.x
+добавляет сверху к каждому транспортному пакету: `S4`, `ContentPaddingAddition` и `RandomTrailers`,
+который 3.1 включает по умолчанию. Внешняя датаграмма перелезает 1500 и фрагментируется, а
+мобильный CGNAT и немалая часть домашних роутеров IP-фрагменты выбрасывают. Получается туннель,
+который у большинства работает, а у того, кто сидит за узким путём, теряет ровно тот трафик, который
+идёт пакетами максимального размера на высоком битрейте, — видео, в первую очередь ютуб, по QUIC.
+Всё, что мелкое, при этом работает и прячет причину.
+
+Два следствия, о которых стоит знать заранее:
+
+- **Ревизия флота бутится, и каждая нода один раз перезапускает интерфейс**, когда подхватывает
+  изменение. `awg syncconf` не умеет менять MTU интерфейса, поэтому агент кладёт интерфейс и
+  поднимает заново. Ноды опрашивают панель независимо, так что перезапуски размазываются.
+- **Уже выданные конфиги остаются со своим MTU**, пока их не скачают снова. Рендеринг происходит в
+  момент скачивания, поэтому достаточно повторно отправить share-ссылку — ни нового пира, ни новых
+  ключей не нужно.
+
+Нода, у которой собственный egress ниже 1500, может работать на меньшем значении: этот override
+лежит в её строке, и значение флота его не повышает.
 
 ### Перевод флота на 3.x
 

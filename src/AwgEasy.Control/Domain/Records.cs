@@ -5,6 +5,10 @@ namespace AwgEasy.Control;
 // What the control plane stores. These mirror the database rows and carry secrets - client
 // private keys, the fleet identity - so they must never be returned from an endpoint directly.
 
+/// <param name="TunnelMtu">The interface MTU every client, every probe and every node without an
+/// override runs. One value for all three because each must be sized against the same worst-case
+/// client path; see <see cref="FleetService.DefaultTunnelMtu"/> for why the default is what it
+/// is.</param>
 public sealed record FleetRecord(
     int Generation,
     string ServerPrivateKey,
@@ -16,6 +20,7 @@ public sealed record FleetRecord(
     int ListenPort,
     string ClientAllowedIps,
     string? ClientDns,
+    int TunnelMtu,
     string EndpointHost,
     ServerObfuscationProfile? Obfuscation,
     long Revision);

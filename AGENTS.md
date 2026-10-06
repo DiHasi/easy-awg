@@ -35,7 +35,7 @@ scripts/install.sh       Node enrollment one-liner, served by Control at /instal
 
 ```bash
 dotnet build Awg-easy.sln          # whole solution
-dotnet test Awg-easy.sln           # 244 tests, all must pass
+dotnet test Awg-easy.sln           # 264 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
 cd frontend && pnpm run generate   # static build into .output/public
@@ -128,6 +128,19 @@ WireGuard reserves, S1-S4 must be at least 12 when `HeaderProtectionKey` is set 
 nonce rides in that padding), and `RejectAfterTime` must stay above `RekeyAfterTime`. The legacy
 import path validates too, and drops an unusable profile with a warning rather than poisoning the
 fleet with it.
+
+**The tunnel MTU is one value for both halves, and it is sized against 3.x, not WireGuard.**
+`FleetRecord.TunnelMtu` is written into every client config, every probe config, and - unless the
+node row overrides it - into the bundle as `NodeSettings.Mtu`. One value because each half must be
+sized against the same worst-case client path: two knobs that must agree with nothing enforcing it
+is how a fleet half-works. It defaults to 1280 because `awg-quick`'s own route-MTU-minus-80 (1420 on
+a 1500 underlay) covers vanilla WireGuard and not the bytes 3.x adds to every transport packet -
+`S4`, `ContentPaddingAddition` and `RandomTrailers`, the last on by default under 3.1 - so the outer
+datagram crosses 1500, fragments, and dies at any CGNAT that drops fragments. Because the node half
+travels in the bundle, changing it **does** bump the revision, unlike the panel's own bookkeeping,
+and each node takes its interface down once: `awg syncconf` cannot apply an interface-level setting.
+The probe gets the same value deliberately - a probe on a wider MTU could pass a path that fragments
+every real client's traffic, and the panel would call that node healthy.
 
 **Switching the active node is not a fleet change.** Failover repoints one DNS record; every
 client config already names that host and pins the fleet public key, so the same key, subnet and
@@ -326,6 +339,10 @@ never assert on a specific allocated address — assert on what the API returned
   real node yet; it is covered only through the parser and the panel side of the protocol.
 - A probe's assignment is protected by TLS only, not signed like a bundle. It carries no fleet
   secret, and results about an address other than the node's current one are ignored.
+- `CreateNodeRequest` carries `EndpointHost`, `EgressInterface` and `Mtu`, and `POST /nodes/tokens`
+  drops all three: `EnrollmentService.CreateToken` takes only the name, and the node row is written
+  with them null. So the per-node MTU override is real in `FleetService.BuildBundle` and in the
+  schema, but has no way in from outside yet.
 - Only Cloudflare is implemented behind `IDnsRecordUpdater`. Without a token the panel records the
   active node and leaves the record to the operator; a floating-IP provider would be a third
   implementation of the same interface.

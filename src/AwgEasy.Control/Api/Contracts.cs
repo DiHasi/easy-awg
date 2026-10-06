@@ -59,11 +59,19 @@ public sealed record FleetResponse(
     int ListenPort,
     string ClientAllowedIps,
     string? ClientDns,
+    int TunnelMtu,
     string EndpointHost,
     ServerObfuscationProfile? Obfuscation,
     long Revision,
     int ClientsCount,
     int NodesCount);
+
+/// <summary>
+/// The interface MTU every client, probe and node without an override runs. One value for all
+/// three: each is sized against the same worst-case client path, and two knobs that must agree
+/// with nothing enforcing it is how a fleet ends up half working.
+/// </summary>
+public sealed record UpdateTunnelMtuRequest(int Mtu);
 
 /// <param name="PublicIp">Where this node says it is reachable, as discovered by the agent itself.</param>
 /// <param name="IsActive">True for the one node the failover DNS record currently points at.</param>

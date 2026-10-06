@@ -11,6 +11,9 @@ const loading = ref(true)
 const saving = ref(false)
 const errorMessage = ref<string | null>(null)
 
+const savingMtu = ref(false)
+const mtuForm = ref<number>(1280)
+
 const generatingKey = ref(false)
 const importing = ref(false)
 const importResult = ref<ImportResult | null>(null)
@@ -74,11 +77,37 @@ async function loadFleet() {
   try {
     fleet.value = await api.get<Fleet>('/fleet')
     intoForm(fleet.value.obfuscation)
+    mtuForm.value = fleet.value.tunnelMtu
     errorMessage.value = null
   } catch (error) {
     errorMessage.value = describeError(error, 'Failed to load fleet settings.')
   } finally {
     loading.value = false
+  }
+}
+
+async function saveMtu() {
+  savingMtu.value = true
+
+  try {
+    fleet.value = await api.put<Fleet>('/fleet/mtu', { mtu: mtuForm.value })
+    mtuForm.value = fleet.value.tunnelMtu
+    void refresh()
+    toast.add({
+      title: 'Tunnel MTU saved',
+      description: `Fleet is now at revision ${fleet.value.revision}. Each node restarts its interface once as it picks this up.`,
+      color: 'success',
+      icon: 'i-lucide-check'
+    })
+  } catch (error) {
+    toast.add({
+      title: 'Could not save the MTU',
+      description: describeError(error, ''),
+      color: 'error',
+      icon: 'i-lucide-circle-alert'
+    })
+  } finally {
+    savingMtu.value = false
   }
 }
 
@@ -265,6 +294,49 @@ onMounted(loadFleet)
           {{ fleet.clientsCount }} peers · {{ fleet.nodesCount }} nodes
         </SpecItem>
       </dl>
+    </AppCard>
+
+    <AppCard
+      title="Tunnel MTU"
+      icon="i-lucide-ruler"
+      description="Written into every client config and applied by every node. Saving bumps the fleet revision."
+    >
+      <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:gap-8">
+        <UFormField
+          label="MTU"
+          :ui="paramField"
+          help="1280 is AmneziaWG's recommendation for the 3.x line, and the IPv6 minimum."
+        >
+          <UInput
+            v-model.number="mtuForm"
+            type="number"
+            :min="1280"
+            :max="1420"
+            class="w-32"
+          />
+        </UFormField>
+        <p class="max-w-prose text-sm text-muted">
+          AmneziaWG 3.x adds bytes to every transport packet — S4, ContentPaddingAddition and
+          RandomTrailers, which 3.1 turns on by default. The 1420 awg-quick works out on its own
+          does not account for them, so the outer packet crosses 1500 and fragments, and plenty of
+          mobile carriers and home routers drop fragments. Configs already handed out keep their
+          current MTU until they are downloaded again.
+        </p>
+      </div>
+
+      <template #footer>
+        <div class="flex flex-wrap items-center justify-end gap-3">
+          <span class="text-sm text-muted">Each node restarts its interface once.</span>
+          <UButton
+            icon="i-lucide-save"
+            :loading="savingMtu"
+            :disabled="loading"
+            @click="saveMtu"
+          >
+            Save MTU
+          </UButton>
+        </div>
+      </template>
     </AppCard>
 
     <AppCard

@@ -19,6 +19,9 @@ public static class ClientConfigRenderer
         builder.AppendSetting("PrivateKey", client.PrivateKey);
         builder.AppendSetting("Address", $"{client.Address}/{network.PrefixLength.ToString(CultureInfo.InvariantCulture)}");
         builder.AppendSetting("DNS", fleet.ClientDns);
+        // Written explicitly rather than left to the client app: its own default is sized for
+        // vanilla WireGuard and does not account for what 3.x adds to every transport packet.
+        builder.AppendSetting("MTU", fleet.TunnelMtu);
 
         // A client config carries both halves: the wire-format values that must match the server,
         // and everything that may differ per client, with per-client overrides winning.
@@ -59,6 +62,9 @@ public static class ClientConfigRenderer
         // and no connected route for the fleet subnet appears on it.
         builder.AppendSetting("Address", $"{probeClient.Address}/32");
         builder.AppendSetting("Table", "off");
+        // The same MTU a person's config carries. A probe on a wider one could pass a path that
+        // fragments every real client's traffic, and the panel would call that node healthy.
+        builder.AppendSetting("MTU", fleet.TunnelMtu);
 
         var tunables = fleet.Obfuscation?.GetDefaults();
         builder.AppendInterfaceObfuscation(fleet.Obfuscation);

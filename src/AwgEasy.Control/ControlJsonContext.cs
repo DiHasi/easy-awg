@@ -16,6 +16,7 @@ namespace AwgEasy.Control;
 [JsonSerializable(typeof(ReorderClientGroupsRequest))]
 [JsonSerializable(typeof(ArrangeClientsRequest))]
 [JsonSerializable(typeof(FleetResponse))]
+[JsonSerializable(typeof(UpdateTunnelMtuRequest))]
 [JsonSerializable(typeof(NodeResponse))]
 [JsonSerializable(typeof(NodeResponse[]))]
 [JsonSerializable(typeof(CreateNodeRequest))]

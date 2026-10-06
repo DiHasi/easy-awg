@@ -70,6 +70,12 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
         EnsureColumn(connection, "enrollment_tokens", "kind", "TEXT NOT NULL DEFAULT 'node'");
         EnsureColumn(connection, "probe_results", "handshake", "INTEGER NULL");
 
+        // The tunnel MTU, which no panel used to set at all: awg-quick derived route-MTU minus 80
+        // on the node and clients got no MTU line, which does not cover the bytes AmneziaWG 3.x
+        // adds to every transport packet. Defaulting an existing fleet to 1280 is the point of the
+        // change, so the column default does the work and no backfill pass is needed.
+        EnsureColumn(connection, "fleet", "tunnel_mtu", "INTEGER NOT NULL DEFAULT 1280");
+
         // Grouping peers by the person who holds them. Filed nowhere until an operator says so,
         // so NULL is the honest start here too.
         EnsureColumn(connection, "clients", "group_id", "TEXT NULL");
@@ -175,6 +181,7 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             active_node_id       TEXT    NULL,
             active_node_set_at   TEXT    NULL,
             failover_mode        TEXT    NOT NULL DEFAULT 'manual',
+            tunnel_mtu           INTEGER NOT NULL DEFAULT 1280,
             created_at           TEXT    NOT NULL,
             updated_at           TEXT    NOT NULL
         );

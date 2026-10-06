@@ -15,6 +15,25 @@ public sealed class FleetService(
     EventLog events,
     ILogger<FleetService> logger)
 {
+    /// <summary>
+    /// The interface MTU a fleet runs until an operator changes it.
+    ///
+    /// awg-quick would derive route-MTU minus 80, which is 1420 on a 1500 underlay. Those 80 bytes
+    /// cover vanilla WireGuard - 20 IPv4 (40 IPv6) + 8 UDP + 16 data header + 16 Poly1305 - and
+    /// not the bytes AmneziaWG 3.x adds to every transport packet on top: S4,
+    /// ContentPaddingAddition, and RandomTrailers, which 3.1 turns on by default. The outer
+    /// datagram then crosses 1500 and fragments, and mobile CGNAT and plenty of home routers drop
+    /// IP fragments - so the tunnel works for most clients and loses, for one of them, exactly the
+    /// traffic that sustains full-size datagrams at high bitrate. 1280 is what AmneziaWG's own
+    /// 3.1 upgrade guide recommends, and it is the IPv6 minimum MTU, so nothing below it buys
+    /// anything.
+    /// </summary>
+    public const int DefaultTunnelMtu = 1280;
+
+    /// <summary>The widest MTU worth storing: above what awg-quick would derive on a 1500
+    /// underlay, so it only guarantees the fragmentation this setting exists to avoid.</summary>
+    public const int MaxTunnelMtu = 1420;
+
     public FleetRecord Current => fleet.Find() ?? throw new InvalidOperationException("Fleet has not been initialized.");
 
     /// <summary>
@@ -44,6 +63,7 @@ public sealed class FleetService(
             ListenPort: options.DefaultListenPort,
             ClientAllowedIps: options.DefaultClientAllowedIps,
             ClientDns: options.DefaultClientDns,
+            TunnelMtu: DefaultTunnelMtu,
             EndpointHost: options.DefaultEndpointHost,
             Obfuscation: null,
             Revision: 1);
@@ -73,6 +93,7 @@ public sealed class FleetService(
             current.ListenPort,
             current.ClientAllowedIps,
             current.ClientDns,
+            current.TunnelMtu,
             current.EndpointHost,
             current.Obfuscation,
             current.Revision,
@@ -128,7 +149,9 @@ public sealed class FleetService(
             new FleetIdentity(current.Generation, current.ServerPrivateKey, current.ServerPublicKey),
             new NetworkProfile(current.Subnet, current.ListenPort),
             obfuscation,
-            new NodeSettings("awg0", node.EgressInterface, node.Mtu),
+            // The fleet value unless this node overrides it - a node whose own egress is below
+            // 1500 needs less, and must not be raised to what the rest of the fleet runs.
+            new NodeSettings("awg0", node.EgressInterface, node.Mtu ?? current.TunnelMtu),
             peers);
 
         using var signingKey = BundleSigning.ImportPrivateKey(current.SigningPrivateKey);

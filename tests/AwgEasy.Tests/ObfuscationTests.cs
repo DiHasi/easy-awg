@@ -261,7 +261,7 @@ public class SchemaDowngradeTests
 
 public class ClientConfigRendererTests
 {
-    private static FleetRecord Fleet(ServerObfuscationProfile? obfuscation)
+    private static FleetRecord Fleet(ServerObfuscationProfile? obfuscation, int tunnelMtu = FleetService.DefaultTunnelMtu)
         => new(
             Generation: 1,
             ServerPrivateKey: "SERVER_PRIVATE",
@@ -273,6 +273,7 @@ public class ClientConfigRendererTests
             ListenPort: 51820,
             ClientAllowedIps: "0.0.0.0/0",
             ClientDns: "1.1.1.1",
+            TunnelMtu: tunnelMtu,
             EndpointHost: "vpn.example.com",
             Obfuscation: obfuscation,
             Revision: 3);
@@ -338,5 +339,27 @@ public class ClientConfigRendererTests
                 Fleet(new ServerObfuscationProfile { DefaultPersistentKeepalive = "20-30" }),
                 Client(),
                 "vpn.example.com"));
+    }
+
+    [Fact]
+    public void Carries_the_fleet_tunnel_mtu()
+    {
+        Assert.Contains("MTU = 1280", ClientConfigRenderer.Render(Fleet(null), Client(), "vpn.example.com"));
+
+        Assert.Contains(
+            "MTU = 1380",
+            ClientConfigRenderer.Render(Fleet(null, tunnelMtu: 1380), Client(), "vpn.example.com"));
+    }
+
+    /// <summary>
+    /// A probe has to speak exactly as a client does. On a wider MTU it could pass a path that
+    /// fragments every real client's traffic, and the panel would call that node healthy.
+    /// </summary>
+    [Fact]
+    public void A_probe_config_carries_the_same_mtu_a_client_gets()
+    {
+        var fleet = Fleet(null, tunnelMtu: 1340);
+
+        Assert.Contains("MTU = 1340", ClientConfigRenderer.RenderProbe(fleet, Client(), "203.0.113.10"));
     }
 }
