@@ -17,6 +17,7 @@ public sealed class ProbeService(
     ProbeRepository probes,
     ClientRepository clients,
     NodeRepository nodes,
+    AvailabilityRepository availability,
     FleetService fleet,
     IAwgKeyGenerator keys,
     ControlOptions options,
@@ -113,6 +114,8 @@ public sealed class ProbeService(
         {
             return false;
         }
+
+        availability.ForgetProbe(id);
 
         var client = clients.FindProbeClient(probe.ClientId);
         if (client is not null && clients.Delete(client.Id))

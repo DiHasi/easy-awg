@@ -105,7 +105,9 @@ public sealed class PeerStatsTests : IDisposable
             ProbeCheckUrls: FailoverOptions.DefaultProbeCheckUrls,
             ProbeTrafficTimeout: TimeSpan.FromSeconds(8)),
         Notifications: new NotificationOptions(null, null, null),
-        Usage: new UsageOptions(UsageOptions.DefaultRetentionDays));
+        Usage: new UsageOptions(UsageOptions.DefaultRetentionDays),
+        Availability: new AvailabilityOptions(AvailabilityOptions.DefaultRetentionDays),
+        Metrics: new MetricsOptions(null));
 
     public void Dispose()
     {

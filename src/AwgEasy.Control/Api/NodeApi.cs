@@ -17,6 +17,79 @@ public static class NodeApi
             return TypedResults.Ok(list.Select(node => NodeResponse.From(node, revision, activeNodeId, health[node.Id])).ToArray());
         });
 
+        // The per-node half of a node's configuration. Two kinds of field in one request, and the
+        // difference decides whether the fleet revision moves: the egress interface and the MTU
+        // are handed to that node in its bundle, so changing one changes what it runs; the name
+        // and the endpoint host are notes here, like a client rename.
+        //
+        // The revision is fleet-wide, so a per-node change makes every node re-fetch. They apply
+        // a bundle whose bytes have not changed for them, which costs one syncconf each - while
+        // not bumping it would mean the node this is about never hears: the bundle is served
+        // against an ETag of the revision, so an unchanged revision is answered with a 304.
+        admin.MapPut("/nodes/{id}", (
+            string id,
+            UpdateNodeRequest request,
+            NodeRepository nodes,
+            FleetService fleet,
+            DnsFailoverService failover,
+            FailoverMonitor monitor,
+            EventLog events,
+            HttpContext context) =>
+        {
+            if (string.IsNullOrWhiteSpace(request.Name))
+            {
+                return Results.BadRequest(new ApiError("node_name_required", "Node name is required."));
+            }
+
+            if (!NodeOverrides.TryRead(request.EndpointHost, request.EgressInterface, request.Mtu, out var overrides, out var error))
+            {
+                return Results.BadRequest(error);
+            }
+
+            if (nodes.Find(id) is not { } existing)
+            {
+                return Results.NotFound(new ApiError("node_not_found", "Node was not found."));
+            }
+
+            var name = request.Name.Trim();
+            var before = new NodeOverrides(existing.EndpointHost, existing.EgressInterface, existing.Mtu);
+            if (!nodes.UpdateSettings(id, name, overrides))
+            {
+                return Results.NotFound(new ApiError("node_not_found", "Node was not found."));
+            }
+
+            var actor = context.User.Identity?.Name;
+            if (overrides.ChangesBundle(before))
+            {
+                // The node takes its interface down once as it picks a new MTU up, exactly as a
+                // fleet-wide change would: syncconf cannot apply an interface-level setting.
+                fleet.BumpRevision($"node {name} settings changed");
+                events.Record(
+                    "node.settings_changed",
+                    $"Node settings changed: MTU {Describe(overrides.Mtu, "fleet value")}, egress {Describe(overrides.EgressInterface, "detected")}.",
+                    actor: actor,
+                    nodeId: id);
+            }
+            else if (!string.Equals(existing.Name, name, StringComparison.Ordinal))
+            {
+                events.Record("node.renamed", $"Node is now '{name}'.", actor: actor, nodeId: id);
+            }
+            else if (!string.Equals(before.EndpointHost, overrides.EndpointHost, StringComparison.Ordinal))
+            {
+                // Worth a line, unlike a save that changed nothing at all: the log is read to find
+                // out what an operator did, not how many times they pressed Save.
+                events.Record(
+                    "node.settings_changed",
+                    $"Endpoint host is now {Describe(overrides.EndpointHost, "unset")}.",
+                    actor: actor,
+                    nodeId: id);
+            }
+
+            var node = nodes.Find(id)!;
+            var health = monitor.Assess([node], DateTimeOffset.UtcNow);
+            return Results.Ok(NodeResponse.From(node, fleet.Current.Revision, failover.ActiveNodeId, health[node.Id]));
+        });
+
         // Not a fleet change either: which node automatic failover prefers decides nothing any
         // node runs, so the revision stays put.
         admin.MapPut("/nodes/{id}/failover", (
@@ -76,6 +149,9 @@ public static class NodeApi
             };
         });
 
+        // The per-node settings travel on the token, so a node that needs a narrower MTU or a
+        // named egress interface has them in the first bundle it fetches rather than being
+        // corrected after it has already brought an interface up.
         admin.MapPost("/nodes/tokens", (
             CreateNodeRequest request,
             EnrollmentService enrollment,
@@ -86,8 +162,13 @@ public static class NodeApi
                 return Results.BadRequest(new ApiError("node_name_required", "Node name is required."));
             }
 
+            if (!NodeOverrides.TryRead(request.EndpointHost, request.EgressInterface, request.Mtu, out var overrides, out var error))
+            {
+                return Results.BadRequest(error);
+            }
+
             var controlUrl = $"{context.Request.Scheme}://{context.Request.Host}";
-            return Results.Ok(enrollment.CreateToken(request.Name.Trim(), controlUrl));
+            return Results.Ok(enrollment.CreateToken(request.Name.Trim(), controlUrl, overrides: overrides));
         });
 
         admin.MapPost("/nodes/{id}/revoke", (string id, NodeRepository nodes, EventLog events, HttpContext context) =>
@@ -103,7 +184,14 @@ public static class NodeApi
             return Results.NoContent();
         });
 
-        admin.MapDelete("/nodes/{id}", (string id, NodeRepository nodes, ProbeRepository probes, DnsFailoverService failover, EventLog events, HttpContext context) =>
+        admin.MapDelete("/nodes/{id}", (
+            string id,
+            NodeRepository nodes,
+            ProbeRepository probes,
+            AvailabilityRepository availability,
+            DnsFailoverService failover,
+            EventLog events,
+            HttpContext context) =>
         {
             if (!nodes.Delete(id))
             {
@@ -111,6 +199,7 @@ public static class NodeApi
             }
 
             probes.ForgetNode(id);
+            availability.ForgetNode(id);
 
             // The DNS record may still point here - the panel cannot unpoint it on the operator's
             // behalf - but it must stop claiming a node it has forgotten is the active one.
@@ -122,4 +211,7 @@ public static class NodeApi
 
         admin.MapGet("/events", (EventLog events) => TypedResults.Ok(events.Recent().ToArray()));
     }
+
+    /// <summary>An override as an event line reads it, naming what applies when there is none.</summary>
+    private static string Describe(object? value, string fallback) => value?.ToString() ?? fallback;
 }

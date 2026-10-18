@@ -3,7 +3,7 @@ using Microsoft.Data.Sqlite;
 
 namespace AwgEasy.Control;
 
-public sealed class ProbeRepository(Database database)
+public sealed class ProbeRepository(Database database, ControlOptions options)
 {
     public IReadOnlyList<ProbeRecord> List()
     {
@@ -71,7 +71,8 @@ public sealed class ProbeRepository(Database database)
         return deleted > 0;
     }
 
-    /// <summary>A node that leaves the fleet takes what probes said about it along.</summary>
+    /// <summary>A node that leaves the fleet takes the latest results about it along. Its history
+    /// goes with it too, through <see cref="AvailabilityRepository.ForgetNode"/>.</summary>
     public void ForgetNode(string nodeId)
     {
         using var connection = database.Open();
@@ -100,6 +101,13 @@ public sealed class ProbeRepository(Database database)
 
         foreach (var result in results)
         {
+            if (options.Availability.Records)
+            {
+                // Inside this transaction, like the traffic history: a round is reported once, and
+                // the row below is about to overwrite the only other trace it leaves.
+                AvailabilityRepository.AccrueProbeRound(connection, transaction, probeId, result, seenAt);
+            }
+
             // Both timestamps carry over from the row being replaced. last_reachable_at moves only
             // when this round reached the node; failing_since is set by the first round that did
             // not, and cleared by the next one that did. An error round touches neither: it is

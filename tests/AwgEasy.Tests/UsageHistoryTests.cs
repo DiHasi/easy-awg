@@ -101,7 +101,7 @@ public sealed class UsageHistoryTests : IDisposable
         var series = _usage.Series(
             new DateTimeOffset(2026, 3, 4, 0, 0, 0, TimeSpan.Zero),
             new DateTimeOffset(2026, 3, 5, 0, 0, 0, TimeSpan.Zero),
-            UsageGrain.Hour,
+            HistoryGrain.Hour,
             client.Id);
 
         var bucket = Assert.Single(series);
@@ -168,7 +168,7 @@ public sealed class UsageHistoryTests : IDisposable
         var days = _usage.Series(
             new DateTimeOffset(2026, 3, 4, 0, 0, 0, TimeSpan.Zero),
             new DateTimeOffset(2026, 3, 6, 0, 0, 0, TimeSpan.Zero),
-            UsageGrain.Day,
+            HistoryGrain.Day,
             client.Id);
 
         Assert.Equal(2, days.Count);
@@ -199,7 +199,7 @@ public sealed class UsageHistoryTests : IDisposable
         var utcDays = _usage.Series(
             new DateTimeOffset(2026, 3, 4, 0, 0, 0, TimeSpan.Zero),
             new DateTimeOffset(2026, 3, 5, 0, 0, 0, TimeSpan.Zero),
-            UsageGrain.Day,
+            HistoryGrain.Day,
             client.Id);
 
         Assert.Equal(new DateTimeOffset(2026, 3, 4, 0, 0, 0, TimeSpan.Zero), Assert.Single(utcDays).At);
@@ -208,7 +208,7 @@ public sealed class UsageHistoryTests : IDisposable
         // Three hours east, 21:00 and 23:00 have already become the fifth: 100 on one day, 500 on
         // the next. The window is two of that reader's days, so it starts at 21:00 the day before.
         var from = new DateTimeOffset(2026, 3, 3, 21, 0, 0, TimeSpan.Zero);
-        var localDays = _usage.Series(from, from.AddDays(2), UsageGrain.Day, client.Id, offsetMinutes: 180);
+        var localDays = _usage.Series(from, from.AddDays(2), HistoryGrain.Day, client.Id, offsetMinutes: 180);
 
         Assert.Equal(2, localDays.Count);
         Assert.Equal(from, localDays[0].At);
@@ -241,7 +241,7 @@ public sealed class UsageHistoryTests : IDisposable
         var days = _usage.Series(
             new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero) - shift,
             new DateTimeOffset(2026, 3, 10, 0, 0, 0, TimeSpan.Zero) - shift,
-            UsageGrain.Day,
+            HistoryGrain.Day,
             client.Id,
             offsetMinutes);
 
@@ -266,7 +266,7 @@ public sealed class UsageHistoryTests : IDisposable
         Report("node-a", day.AddHours(3).AddMinutes(1), rx: 300, tx: 30);
 
         var from = new DateTimeOffset(2026, 3, 4, 0, 0, 0, TimeSpan.Zero);
-        var hours = _usage.Series(from, from.AddDays(1), UsageGrain.Hour, client.Id, offsetMinutes: 345);
+        var hours = _usage.Series(from, from.AddDays(1), HistoryGrain.Hour, client.Id, offsetMinutes: 345);
 
         Assert.Equal(
             [day, day.AddHours(3)],
@@ -351,7 +351,9 @@ public sealed class UsageHistoryTests : IDisposable
             ProbeCheckUrls: FailoverOptions.DefaultProbeCheckUrls,
             ProbeTrafficTimeout: TimeSpan.FromSeconds(8)),
         Notifications: new NotificationOptions(null, null, null),
-        Usage: new UsageOptions(retentionDays));
+        Usage: new UsageOptions(retentionDays),
+        Availability: new AvailabilityOptions(AvailabilityOptions.DefaultRetentionDays),
+        Metrics: new MetricsOptions(null));
 
     public void Dispose()
     {

@@ -87,6 +87,32 @@ public sealed class NodeRepository(Database database, ControlOptions options)
         command.ExecuteNonQuery();
     }
 
+    /// <summary>
+    /// Rewrites the per-node half of a node's configuration. Whether the fleet revision moves with
+    /// it is the caller's call, and it depends on which half changed: the MTU and the egress
+    /// interface are in the bundle, the name and the endpoint host are notes in the panel.
+    /// </summary>
+    public bool UpdateSettings(string id, string name, NodeOverrides overrides)
+    {
+        using var connection = database.Open();
+        using var command = connection.Sql(
+            """
+            UPDATE nodes
+               SET name             = $name,
+                   endpoint_host    = $endpointHost,
+                   egress_interface = $egress,
+                   mtu              = $mtu
+             WHERE id = $id
+            """,
+            ("$id", id),
+            ("$name", name),
+            ("$endpointHost", overrides.EndpointHost),
+            ("$egress", overrides.EgressInterface),
+            ("$mtu", overrides.Mtu));
+
+        return command.ExecuteNonQuery() > 0;
+    }
+
     public bool SetFailoverPreferences(string id, int priority, bool automatic)
     {
         using var connection = database.Open();
@@ -209,6 +235,41 @@ public sealed class NodeRepository(Database database, ControlOptions options)
     }
 
     /// <summary>
+    /// What each node's peers add up to, as the node itself last reported them.
+    ///
+    /// Deliberately raw, unlike <see cref="AggregatePeerStats"/>: a counter reset in the panel is
+    /// bookkeeping about a person, and this is a reading of a server. A scraper is also the one
+    /// consumer that handles a counter going backwards on its own, so subtracting a baseline here
+    /// would only hide a node reboot from the one reader equipped to see it.
+    /// </summary>
+    public IReadOnlyDictionary<string, NodeTrafficTotals> AggregateByNode()
+    {
+        using var connection = database.Open();
+        using var command = connection.Sql(
+            """
+            SELECT node_id,
+                   COUNT(*)                AS peers,
+                   SUM(received_bytes)     AS rx,
+                   SUM(transmitted_bytes)  AS tx
+              FROM peer_stats
+             GROUP BY node_id
+            """);
+
+        using var reader = command.ExecuteReader();
+
+        var totals = new Dictionary<string, NodeTrafficTotals>(StringComparer.Ordinal);
+        while (reader.Read())
+        {
+            totals[reader.GetString("node_id")] = new NodeTrafficTotals(
+                reader.GetInt32("peers"),
+                reader.GetInt64("rx"),
+                reader.GetInt64("tx"));
+        }
+
+        return totals;
+    }
+
+    /// <summary>
     /// Aggregates counters across the fleet: a client may be connected through any node, and with
     /// active-active it may even move between them, so the newest handshake wins and byte counters
     /// are summed.
@@ -310,6 +371,9 @@ public sealed class NodeRepository(Database database, ControlOptions options)
         return nodes;
     }
 }
+
+/// <summary>One node's own counters: how many peers it reported, and what they moved through it.</summary>
+public readonly record struct NodeTrafficTotals(int Peers, long Rx, long Tx);
 
 /// <summary>
 /// One client's counters as the whole fleet sees them, already net of any reset.

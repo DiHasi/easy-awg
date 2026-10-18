@@ -29,16 +29,21 @@ frontend/                Nuxt 4 + Nuxt UI, generated to static files, served by 
 tests/AwgEasy.Tests/     xUnit. Unit tests plus integration tests hosting the real Control.
 docker/                  node.Dockerfile, control.Dockerfile
 scripts/install.sh       Node enrollment one-liner, served by Control at /install.sh
+scripts/e2e.sh           The pair actually running: panel, two nodes, a probe, in containers
+compose.e2e.yaml         What that script brings up. Not a deployment; the other three are
 ```
 
 ## Commands
 
 ```bash
 dotnet build Awg-easy.sln          # whole solution
-dotnet test Awg-easy.sln           # 264 tests, all must pass
+dotnet test Awg-easy.sln           # 307 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
+cd frontend && pnpm run test       # vitest, in a Nuxt environment
 cd frontend && pnpm run generate   # static build into .output/public
+
+sh scripts/e2e.sh                  # the whole pair in containers: builds both images
 
 dotnet publish src/AwgEasy.Node -c Release -r linux-x64   # the only check of the AOT invariant
 ```
@@ -46,8 +51,12 @@ dotnet publish src/AwgEasy.Node -c Release -r linux-x64   # the only check of th
 Run `pnpm run typecheck` after touching anything the frontend consumes. It catches null/undefined
 drift between the API and the forms that plain linting does not.
 
-`.github/workflows/ci.yml` runs all of the above on every push and pull request, plus a
-`dotnet list package --vulnerable` gate. The publish line matters because the IL trim/AOT codes
+`.github/workflows/ci.yml` runs all of the above except `e2e.sh` on every push and pull request,
+plus a `dotnet list package --vulnerable` gate. `e2e.sh` has a workflow of its own
+(`.github/workflows/e2e.yml`): nightly, on request, and on a pull request that touches the images,
+the agent or the contract. It is kept out of the main run because it builds both images, which is
+minutes and gigabytes for the half of the system that changes least often - and because what it
+covers only breaks when that half changes. The publish line matters because the IL trim/AOT codes
 are promoted to errors but the analyzer behind them runs on publish and nowhere else - a green
 `dotnet build` says nothing about whether the agent still publishes. The images are not built in
 CI; that is minutes and gigabytes for something that changes far less often than the code.
@@ -221,6 +230,57 @@ of what each person moved is considerably more than the lifetime counter beside 
 mean "record none and drop what was recorded", not "hide the page". The live counters come from
 the nodes, so they keep working either way.
 
+**The availability history is the panel's own bookkeeping, like grouping and traffic.**
+`node_availability` and `probe_availability` never reach a node, never enter a bundle and never
+bump the revision. Two things about them are load-bearing. They count **samples**, not seconds:
+the round interval is a setting, so an operator who halves `AWG_FAILOVER_CHECK_SECONDS` would
+otherwise halve every hour recorded after the change, while a share of samples reads the same
+either way. And a bucket with **zero samples is "no evidence", not "not healthy"** - it is the
+panel having been restarted - so anything that divides by samples has to keep that apart, or an
+upgrade reads as an outage. A revoked node records nothing: the panel cut it off on purpose, and
+recording that as unreachable would be the panel measuring its own decision. They are two tables
+rather than one because the vocabularies genuinely differ - a node is healthy, blocked, down or
+silent; a probe got through, did not, or could not run its check - and the per-probe half is the
+only place the panel can say *where* a node is blocked. Retention is a knob of its own,
+`AWG_AVAILABILITY_RETENTION_DAYS`: `AWG_USAGE_RETENTION_DAYS` is a decision about holding a record
+of people, and it has nothing to say about whether the panel may remember which of the operator's
+own nodes was blocked last week.
+
+**The accrual sits where the evidence is produced.** A node's sample is written by
+`FailoverMonitor` in the round that assessed it, so `NodeHealthEvaluator` stays a pure function of
+its evidence. A probe's is written by `AvailabilityRepository.AccrueProbeRound` inside
+`ProbeRepository.RecordRound`'s transaction, for the same reason `UsageAccounting.Accrue` runs
+inside `ReplacePeerStats`: a round is reported once, and the latest-result row it also writes is
+about to be overwritten by the next one, so a second pass over those rows would miss rounds.
+
+**The metrics endpoint exports servers, never people.** `/api/metrics` is off until
+`AWG_METRICS_TOKEN` is set, and it is the one route under `/api` that authenticates with something
+other than the admin cookie - it checks that token itself, in fixed time. What it exposes is
+deliberately bounded: no client names, no public keys, no per-peer series, and no node addresses.
+A scrape is federated, backed up and shared far more casually than this database, so a peer label
+would put "who" into all of it, and a fleet's addresses are what a blocker wants. Traffic is
+exported per node, which is the operational question; the Traffic page keeps the other one. Node
+counters are exported raw, without the panel's reset baselines, because a scraper is the one
+reader that handles a counter going backwards and subtracting there would hide a node reboot from
+it. There is a test asserting the absence of a client name, a key and an address in the output;
+do not weaken it.
+
+**Per-node settings are validated before they can reach a node.** `EgressInterface` and `Mtu` are
+the per-node half of the bundle, and a node applies its bundle in one shot - so a value `awg` or
+`iptables` refuses does not produce a complaint, it produces a node whose interface does not come
+up at all while the panel shows it merely out of sync. `NodeOverrides.TryRead` is the one place
+both paths go through: the token that carries them to a new node, and `PUT /nodes/{id}` for one
+that already exists. A blank field means "the fleet value applies", never an empty string. The two
+bundle-visible fields bump the revision, because the bundle is served against an ETag of the
+revision and an unchanged revision is answered with a 304 - the node this is about would never
+hear. The name and the endpoint host do not, like a client rename.
+
+**Both histories are read over the same windows.** `HistoryWindows` owns the window set, the range
+arithmetic and the bucket SQL for the traffic history and the availability history alike. Two sets
+that drifted apart would make the same button mean different spans on two pages. Error codes stay
+per-page (`usage_window_invalid`, `availability_window_invalid`) because a code is part of the API
+and sharing the arithmetic must not rename one.
+
 **Status-report fields are not bundle fields.** `NodeStatusReport` is not signed content shared
 byte for byte, so adding an optional field there needs no synchronized fleet upgrade: an older
 agent omits it and reads as null. The bundle rules above still apply to anything inside
@@ -310,8 +370,9 @@ signed; it covers a hash of the body. Node revocation is a flag checked per requ
   `live` is reserved for the path traffic actually takes - the record, the active node and the
   line between them in `FleetGraph`; do not reuse it for emphasis. AmneziaWG parameter names keep
   their exact spelling in mono through `paramField`.
-- Everything under `/api` requires an authenticated admin except `/health`, `/auth/*` and
-  `/shares/*`. Do not add an endpoint to the anonymous set without a reason worth stating.
+- Everything under `/api` requires an authenticated admin except `/health`, `/auth/*`,
+  `/shares/*` and `/metrics` - the last checks `AWG_METRICS_TOKEN` itself and is off without one.
+  Do not add an endpoint to the anonymous set without a reason worth stating.
 - A drag starts on a handle, never on the row itself: a row is also a link to a config and a
   menu, and a list that moves when a finger brushes it is worse than one that cannot be
   rearranged. Dragging is off while a search or a filter narrows the list - a position among the
@@ -333,16 +394,17 @@ never assert on a specific allocated address — assert on what the API returned
 
 ## Known gaps
 
-- The pair has only been exercised in containers on one host, never across real servers.
-- The frontend has no automated tests.
-- The probe's check - handshake, then a request through the tunnel - has not been run against a
-  real node yet; it is covered only through the parser and the panel side of the protocol.
+- The pair has only been exercised in containers on one host, never across real servers. What
+  `scripts/e2e.sh` covers there is real, though: agents applying bundles with awg-quick, a probe
+  completing handshakes and fetching through the tunnel, and both kinds of block.
+- The frontend's tests cover the formatters, the node state words and the availability ribbon.
+  The composables that need a Nuxt app and a stubbed API - `usePeerArrangement`, `useNodeActions` -
+  are still only exercised by hand.
 - A probe's assignment is protected by TLS only, not signed like a bundle. It carries no fleet
   secret, and results about an address other than the node's current one are ignored.
-- `CreateNodeRequest` carries `EndpointHost`, `EgressInterface` and `Mtu`, and `POST /nodes/tokens`
-  drops all three: `EnrollmentService.CreateToken` takes only the name, and the node row is written
-  with them null. So the per-node MTU override is real in `FleetService.BuildBundle` and in the
-  schema, but has no way in from outside yet.
-- Only Cloudflare is implemented behind `IDnsRecordUpdater`. Without a token the panel records the
-  active node and leaves the record to the operator; a floating-IP provider would be a third
-  implementation of the same interface.
+- Only Cloudflare is implemented behind `IDnsRecordUpdater`, by choice. Without a token the panel
+  records the active node and leaves the record to the operator. Another provider - a different DNS
+  API, or a floating IP - is a second implementation of that interface and nothing else.
+- Automatic failover cannot be exercised end to end in `e2e.sh`: arming it requires a DNS provider,
+  and there is none in CI. The script asserts the recommendation the manual path produces instead,
+  which goes through the same policy.

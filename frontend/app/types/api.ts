@@ -205,6 +205,25 @@ export type Node = {
   failoverPriority: number
   /** False keeps automatic failover from ever sending traffic here. */
   autoFailover: boolean
+  /** What this node NATs through, or null when its agent detects the default-route interface. */
+  egressInterface?: string | null
+  /** This node's own tunnel MTU, or null when it runs the fleet value. */
+  mtu?: number | null
+}
+
+/**
+ * The per-node half of a node's configuration. The egress interface and the MTU travel to the
+ * node in its bundle, so changing one moves the fleet revision and that node restarts its
+ * interface once; the name and the endpoint host are notes in the panel, like a client rename.
+ *
+ * The API models "no override" as null while a form input holds undefined, so the conversion
+ * happens at this boundary - as everywhere else here.
+ */
+export type NodeSettings = {
+  name: string
+  endpointHost: string | null
+  egressInterface: string | null
+  mtu: number | null
 }
 
 export type NodeHealth = 'healthy' | 'blocked' | 'down' | 'silent' | 'unknown' | 'revoked'
@@ -253,6 +272,71 @@ export type Probe = {
   revoked: boolean
   enrolledAt: string
   results: ProbeResult[]
+}
+
+/**
+ * One bucket of a node availability series. The counters are samples - one per failover round -
+ * so `samples` is the denominator of any share taken from the rest. Zero samples means the panel
+ * recorded nothing in that bucket, which is not the same as a bucket the node spent down.
+ */
+export type NodeAvailabilityPoint = {
+  at: string
+  samples: number
+  healthy: number
+  blocked: number
+  down: number
+  silent: number
+  unknown: number
+}
+
+export type NodeAvailability = {
+  nodeId: string
+  name: string
+  revoked: boolean
+  samples: number
+  healthy: number
+  blocked: number
+  down: number
+  silent: number
+  unknown: number
+  /** Share of samples the node was healthy in, 0 to 1. Null when nothing was recorded at all. */
+  uptime?: number | null
+  series: NodeAvailabilityPoint[]
+}
+
+/** What one probe saw of one node. `handshakes` beside `unreachable` says which block it was. */
+export type ProbeNodeAvailability = {
+  nodeId: string
+  reachable: number
+  unreachable: number
+  errors: number
+  handshakes: number
+  /** Share of the rounds the probe actually ran that got traffic through. Null when it ran none. */
+  reachability?: number | null
+}
+
+export type ProbeAvailability = {
+  probeId: string
+  name: string
+  revoked: boolean
+  nodes: ProbeNodeAvailability[]
+}
+
+/**
+ * How the fleet stood over a window: per node as the panel judged it, and per probe as each
+ * vantage point saw it. The second is what names the network a block is in.
+ */
+export type AvailabilitySummary = {
+  window: UsageWindowKey
+  bucket: UsageBucket
+  from: string
+  to: string
+  nodes: NodeAvailability[]
+  probes: ProbeAvailability[]
+  /** How long history is kept. Zero means the panel is not recording any. */
+  retentionDays: number
+  /** The oldest hour still kept, or null when nothing has been recorded yet. */
+  recordingSince?: string | null
 }
 
 export type DnsStatus = {

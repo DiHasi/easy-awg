@@ -1,0 +1,53 @@
+# The fleet actually running: a panel, two nodes and a probe in containers, driven through the
+# admin API by scripts/e2e.sh.
+#
+# Kept out of ci.yml on purpose. This builds both images, which pulls a Go toolchain and the
+# AmneziaWG sources - minutes and gigabytes on every pull request, for the half of the system that
+# changes least often. Nightly, and on request, is the right cadence for it: what it covers is the
+# part no unit test can reach, and also the part that only breaks when the images or the agent
+# change.
+name: E2E
+
+on:
+  schedule:
+    # Early morning UTC, after a day's merges have landed.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  # So a change to the pair itself is proven before it is merged, without paying for it on every
+  # unrelated pull request.
+  pull_request:
+    paths:
+      - 'docker/**'
+      - 'compose.e2e.yaml'
+      - 'scripts/e2e.sh'
+      - 'src/AwgEasy.Node/**'
+      - 'src/AwgEasy.Contracts/**'
+      - '.github/workflows/e2e.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fleet:
+    name: Panel, two nodes and a probe
+    runs-on: ubuntu-latest
+    # Building both images is most of this; the run itself is about two minutes.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # The agents bring up real interfaces, so the host needs the module loaded and the device
+      # present. Both are there on the GitHub runners, but loading it explicitly turns a confusing
+      # failure inside a container into a clear one out here.
+      - name: Make sure /dev/net/tun is available
+        run: |
+          sudo modprobe tun
+          test -c /dev/net/tun
+
+      # Invoked through sh, like the other scripts here: nothing in this repo relies on the
+      # executable bit surviving a checkout on every platform.
+      - run: sh ./scripts/e2e.sh

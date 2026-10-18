@@ -16,7 +16,9 @@ public sealed record ControlOptions(
     DnsFailoverOptions Dns,
     FailoverOptions Failover,
     NotificationOptions Notifications,
-    UsageOptions Usage)
+    UsageOptions Usage,
+    AvailabilityOptions Availability,
+    MetricsOptions Metrics)
 {
     public static ControlOptions FromEnvironment()
         => new(
@@ -34,7 +36,9 @@ public sealed record ControlOptions(
             DnsFailoverOptions.FromEnvironment(Value, ReadInt),
             FailoverOptions.FromEnvironment(Value, ReadInt),
             NotificationOptions.FromEnvironment(Value),
-            UsageOptions.FromEnvironment());
+            UsageOptions.FromEnvironment(),
+            AvailabilityOptions.FromEnvironment(),
+            MetricsOptions.FromEnvironment(Value));
 
     /// <summary>
     /// Settings that have no safe default. AWG_ENDPOINT_HOST in particular is written into every
@@ -203,4 +207,53 @@ public sealed record UsageOptions(int RetentionDays)
                 ? Math.Min(days, MaxRetentionDays)
                 : DefaultRetentionDays);
     }
+}
+
+/// <summary>
+/// How long the panel keeps the availability history: how each node stood, and what each probe
+/// saw of it, hour by hour.
+///
+/// A knob of its own rather than the traffic one, even though both are histories on the same
+/// clock. The traffic history is a record about people, and an operator who sets its retention to
+/// zero is saying they do not want to hold one; that decision has nothing to say about whether the
+/// panel may remember which of its own nodes was blocked last week. Tying them together would
+/// make "record nothing about my users" also mean "and tell me nothing about my fleet".
+/// </summary>
+/// <param name="RetentionDays">Days of history kept. Zero switches recording off entirely.</param>
+public sealed record AvailabilityOptions(int RetentionDays)
+{
+    /// <summary>The same ninety days as the traffic history: long enough to see a pattern in which
+    /// node gets blocked, short enough to stay a log.</summary>
+    public const int DefaultRetentionDays = 90;
+
+    /// <summary>A ceiling, not a target. Past a year this stops being a log and becomes an archive.</summary>
+    public const int MaxRetentionDays = 365;
+
+    public bool Records => RetentionDays > 0;
+
+    /// <summary>Read like the traffic knob, and for the same reason: zero has to mean something
+    /// here, so it cannot go through a helper that treats it as a mistyped value.</summary>
+    public static AvailabilityOptions FromEnvironment()
+    {
+        var raw = Environment.GetEnvironmentVariable("AWG_AVAILABILITY_RETENTION_DAYS");
+        return new(
+            int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var days) && days >= 0
+                ? Math.Min(days, MaxRetentionDays)
+                : DefaultRetentionDays);
+    }
+}
+
+/// <summary>
+/// The Prometheus endpoint, which is off until a token is set.
+///
+/// Off by default because it is the one route that answers without a session, and a fleet's node
+/// addresses and health are not something to start publishing because the panel was upgraded. The
+/// token lives in the environment for the same reason the DNS token does: a scrape credential
+/// should not be readable through the panel it scrapes.
+/// </summary>
+public sealed record MetricsOptions(string? Token)
+{
+    public bool IsEnabled => !string.IsNullOrWhiteSpace(Token);
+
+    public static MetricsOptions FromEnvironment(Func<string, string?> value) => new(value("AWG_METRICS_TOKEN"));
 }

@@ -36,11 +36,24 @@ const wording = computed(() => props.kind === 'probe'
 
 const api = useControlApi()
 const toast = useToast()
-const { refresh } = useFleetState()
+const { fleet, refresh } = useFleetState()
 
 const name = ref('')
 const creating = ref(false)
 const token = ref<EnrollmentToken | null>(null)
+
+/**
+ * The per-node settings, folded away because almost no node needs them. They travel on the token
+ * and are written to the node row when the agent enrolls, so a node that does need a narrower MTU
+ * has it in the very first bundle it fetches rather than being corrected afterwards - by which
+ * time it has already brought an interface up at the fleet value.
+ *
+ * Inputs hold undefined where the API wants null, so the conversion happens at the request.
+ */
+const advanced = ref(false)
+const endpointHost = ref<string | undefined>()
+const egressInterface = ref<string | undefined>()
+const mtu = ref<number | undefined>()
 
 async function issue() {
   const trimmed = name.value.trim()
@@ -56,9 +69,9 @@ async function issue() {
       ? await api.post<EnrollmentToken>('/probes/tokens', { name: trimmed })
       : await api.post<EnrollmentToken>('/nodes/tokens', {
           name: trimmed,
-          endpointHost: null,
-          egressInterface: null,
-          mtu: null
+          endpointHost: endpointHost.value?.trim() || null,
+          egressInterface: egressInterface.value?.trim() || null,
+          mtu: mtu.value ?? null
         })
     name.value = ''
   } catch (error) {
@@ -79,6 +92,10 @@ async function copy() {
 function reset() {
   token.value = null
   name.value = ''
+  advanced.value = false
+  endpointHost.value = undefined
+  egressInterface.value = undefined
+  mtu.value = undefined
   void refresh()
   emit('issued')
 }
@@ -92,18 +109,73 @@ function reset() {
     @after:leave="reset"
   >
     <template #body>
-      <UFormField
+      <div
         v-if="!token"
-        :label="wording.label"
+        class="flex flex-col gap-4"
       >
-        <UInput
-          v-model="name"
-          :placeholder="wording.placeholder"
-          class="w-full"
-          autofocus
-          @keyup.enter="issue"
-        />
-      </UFormField>
+        <UFormField :label="wording.label">
+          <UInput
+            v-model="name"
+            :placeholder="wording.placeholder"
+            class="w-full"
+            autofocus
+            @keyup.enter="issue"
+          />
+        </UFormField>
+
+        <template v-if="kind === 'node'">
+          <UButton
+            :icon="advanced ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
+            color="neutral"
+            variant="link"
+            class="-mx-2.5 self-start"
+            @click="advanced = !advanced"
+          >
+            Per-node settings
+          </UButton>
+
+          <div
+            v-if="advanced"
+            class="flex flex-col gap-4 border-s border-default ps-4"
+          >
+            <UFormField
+              label="Egress interface"
+              :ui="paramField"
+              description="What this node NATs through. Empty lets the agent detect the default-route interface, which is right on almost every host."
+            >
+              <UInput
+                v-model="egressInterface"
+                placeholder="detected"
+                class="w-full font-mono"
+              />
+            </UFormField>
+
+            <UFormField
+              label="Tunnel MTU"
+              :description="`Empty runs the fleet value${fleet ? ` (${fleet.tunnelMtu})` : ''}. Lower it only for a node whose own path to the internet is narrower.`"
+            >
+              <UInputNumber
+                v-model="mtu"
+                :min="1280"
+                :max="1420"
+                placeholder="fleet value"
+                class="w-40"
+              />
+            </UFormField>
+
+            <UFormField
+              label="Endpoint host"
+              description="A note for a node you give a record of its own. It is not written into any client config."
+            >
+              <UInput
+                v-model="endpointHost"
+                placeholder="ams.vpn.example.com"
+                class="w-full"
+              />
+            </UFormField>
+          </div>
+        </template>
+      </div>
 
       <div
         v-else

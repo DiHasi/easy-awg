@@ -89,6 +89,10 @@ jobs:
       # Catches the null/undefined drift between the API and the forms that linting does not.
       - run: pnpm run typecheck
 
+      # Vitest, in a Nuxt environment: the composables and components are tested as they ship,
+      # auto-imports and all, rather than as a rewritten copy of themselves.
+      - run: pnpm run test
+
       # The panel serves these static files, so a generate that fails is a panel that ships
       # without a UI.
       - run: pnpm run generate

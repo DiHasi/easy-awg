@@ -171,7 +171,9 @@ public class CloudflareDnsUpdaterTests
             Dns: new DnsFailoverOptions(null, 60, "token", Zone),
             Failover: FailoverOptions.FromEnvironment(_ => null, (_, fallback) => fallback),
             Notifications: new NotificationOptions(null, null, null),
-            Usage: new UsageOptions(UsageOptions.DefaultRetentionDays));
+            Usage: new UsageOptions(UsageOptions.DefaultRetentionDays),
+            Availability: new AvailabilityOptions(AvailabilityOptions.DefaultRetentionDays),
+            Metrics: new MetricsOptions(null));
 
         return new CloudflareDnsUpdater(http, options, NullLogger<CloudflareDnsUpdater>.Instance);
     }

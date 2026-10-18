@@ -21,6 +21,7 @@ public sealed class FailoverMonitor(
     FleetRepository fleetRepository,
     NodeRepository nodes,
     ProbeRepository probes,
+    AvailabilityRepository availability,
     FleetService fleet,
     ControlOptions options,
     Notifier notifier,
@@ -75,6 +76,14 @@ public sealed class FailoverMonitor(
             var now = DateTimeOffset.UtcNow;
             var fleetNodes = nodes.List();
             var health = Assess(fleetNodes, now);
+
+            if (options.Availability.Records)
+            {
+                // This round is the sample: the state of every node, as judged here, credited to
+                // the hour it was judged in. Written from the monitor rather than from the
+                // evaluator so the policy stays a pure function of its evidence.
+                availability.Accrue(health.Values, now);
+            }
 
             await ReportTransitionsAsync(fleetNodes, health, now, cancellationToken);
 

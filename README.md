@@ -231,6 +231,73 @@ Notifications go to a webhook (`AWG_NOTIFY_WEBHOOK_URL`, a JSON POST) and/or Tel
 (`AWG_NOTIFY_TELEGRAM_BOT_TOKEN` and `AWG_NOTIFY_TELEGRAM_CHAT_ID`): nodes becoming blocked, down,
 silent or recovering, switches, and a failover that is stuck or refused. **Test** sends one.
 
+## Availability history
+
+The node cards answer what is wrong right now. **Nodes -> Availability** answers how often it has
+been: one row per node, hour by hour, over the same windows the Traffic page offers.
+
+Each bucket is coloured by the worst state that occurred in it rather than by the most common one,
+because an hour that was blocked for ten minutes is an hour worth seeing, and averaging it away is
+how a flapping node comes to look fine. An hour the panel recorded nothing in - it was restarted,
+or had only just been installed - is drawn as a gap and counts towards nothing: "no evidence" and
+"not healthy" are different answers, and a share is only ever taken over the checks that ran.
+
+Below the rows, the same window **per probe**. This is the only place the panel can say *where* a
+node is blocked: a node no probe reaches and a node only the office probe reaches are different
+problems with different fixes. The handshake count beside it separates the two kinds of block -
+handshakes that complete with no traffic behind them are DPI or broken egress, handshakes that
+never complete are the address or the port.
+
+It is recorded from the failover rounds, so the numbers are the same verdicts the cards show, from
+the same evaluator. `AWG_AVAILABILITY_RETENTION_DAYS` decides how long it is kept, and `0` records
+none - the states on the cards are judged live and keep working either way. It is a separate knob
+from the traffic retention on purpose: that one is a decision about holding a record of people, and
+it has nothing to say about whether the panel may remember which of your own nodes was blocked last
+week.
+
+## Metrics
+
+Set `AWG_METRICS_TOKEN` and the panel exports Prometheus metrics at `/api/metrics`:
+
+```
+awg_node_health{node="helsinki-1",node_id="...",state="blocked"} 1
+awg_node_revision_lag{node="helsinki-1",node_id="..."} 2
+awg_node_report_timestamp_seconds{node="helsinki-1",node_id="..."} 1771000000
+awg_probe_reachable{probe="moscow-home",probe_id="...",node="helsinki-1",node_id="..."} 0
+awg_probe_handshake{probe="moscow-home",probe_id="...",node="helsinki-1",node_id="..."} 1
+```
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: awg
+    metrics_path: /api/metrics
+    authorization:
+      credentials: your-token
+    static_configs:
+      - targets: ['panel.example.com']
+```
+
+It exists because the panel is the only place that knows some of these facts - that a node is
+blocked rather than down, that it is three revisions behind, that no probe has reported in ten
+minutes - and finding that out should not require keeping a browser tab open. The states come from
+the same evaluator the pages use, so a dashboard and the panel cannot disagree about whether a node
+is healthy.
+
+Three things worth knowing:
+
+- **It is off until the token is set.** This is the one route that answers without an admin
+  session; it checks the token itself, in fixed time. The health and whereabouts of a fleet of VPN
+  nodes is not something to start publishing because a panel was upgraded.
+- **Nothing about a person is exported.** No client names, no public keys, no per-peer series. A
+  scrape is federated, backed up and shared far more casually than the panel's database, and a peer
+  label would put "who" into all of it. Traffic is exported per node, which is the operational
+  question; the Traffic page keeps the other one. Node addresses are left out for the same reason -
+  a fleet's addresses are what a blocker wants.
+- **Node counters are raw.** A counter reset in the panel is bookkeeping about a person, and a
+  scraper is the one reader that handles a counter going backwards on its own, so subtracting there
+  would only hide a node reboot from it.
+
 ## Recovering a node
 
 Revoking or deleting a node in the panel cuts off its configuration, but it does **not** stop the
@@ -278,6 +345,8 @@ For a fresh panel you can instead point `AWG_IMPORT_LEGACY_STATE` at a mounted `
 | `AWG_CONTROL_DB` | SQLite file. Default `/etc/awg-control/control.db`. |
 | `AWG_BUNDLE_LIFETIME_MINUTES` | How long a signed bundle stays valid. Default 15. |
 | `AWG_USAGE_RETENTION_DAYS` | Days of per-peer traffic history kept for the Traffic page. `0` records none. Default 90. |
+| `AWG_AVAILABILITY_RETENTION_DAYS` | Days of availability history kept: how each node stood and what each probe saw. `0` records none. Default 90. |
+| `AWG_METRICS_TOKEN` | Turns on `/api/metrics` and is the bearer token it requires. Unset leaves it off. |
 | `AWG_IMPORT_LEGACY_STATE` | One-shot adoption of an old `state.json`. |
 | `AWG_CLOUDFLARE_API_TOKEN` | Lets the panel move the record itself. Needs `Zone:Read` and `Zone:DNS:Edit`. |
 | `AWG_CLOUDFLARE_ZONE_ID` | The zone the record lives in. Both are required, or switching stays manual. |
@@ -422,7 +491,11 @@ bundled `amneziawg-go` need nothing beyond the new image.
   counters - which come from the nodes, not from here - keep working.
 - **Nodes** — status of each agent, its public address, whether it has picked up the current
   revision, which one clients are currently sent to, enrollment commands, and revocation. Revoking
-  a node cuts off its configuration on its very next request.
+  a node cuts off its configuration on its very next request. *Node settings* on a node's own menu
+  holds what that node runs and the rest of the fleet does not - its egress interface and its own
+  tunnel MTU - and the same two fields are offered when a node is enrolled, so a server that needs
+  a narrower MTU has it in the first configuration it ever applies. Below the cards, how each node
+  has stood over time and what each probe saw of it.
 - **Fleet** — the shared identity, obfuscation settings, and the legacy import.
 - **Events** — an audit trail of who changed what and which nodes fetched configuration.
 
@@ -455,6 +528,7 @@ pnpm install
 pnpm run dev        # against a locally running control plane
 pnpm run lint
 pnpm run typecheck
+pnpm run test       # vitest, in a Nuxt environment
 cd ..
 
 # The agent is published ahead of time (AOT), and the trim/AOT analyzer runs only here - a
@@ -466,6 +540,20 @@ dotnet publish src/AwgEasy.Node -c Release -r linux-x64
 advisory anywhere in the dependency graph. The container images are not built there: they pull a
 Go toolchain and the AmneziaWG sources, which is minutes and gigabytes for something that changes
 far less often than the code.
+
+### Running the whole pair
+
+```bash
+sh scripts/e2e.sh     # needs docker, curl, jq and /dev/net/tun
+```
+
+This brings up a panel, two nodes and a probe in containers on one host and drives them through
+the admin API. It covers what the test suite cannot reach: an agent applying a bundle with
+awg-quick and amneziawg-go, a probe completing a real handshake with each node and fetching a
+page through the tunnel, and both kinds of block - a handshake that never completes, and one that
+completes and then carries nothing. It builds both images, so it runs in a workflow of its own
+(`.github/workflows/e2e.yml`): nightly, on request, and on a pull request that touches the images,
+the agent or the contract.
 
 | Project | Role |
 | --- | --- |
@@ -491,16 +579,25 @@ See [AGENTS.md](AGENTS.md) for the architectural invariants worth knowing before
 Phase 1 (multi-server with manual switchover) and Phase 2 (probes, blocked-vs-down detection,
 automatic failover, notifications) are done. What comes next:
 
-- **A floating-IP provider** as a second implementation behind the same interface as Cloudflare,
-  for deployments that move an address rather than a record.
 - **Fleet identity rotation**, so a compromised or seized node is recoverable without rebuilding
   everything by hand.
+- **A backup of the panel itself.** It holds the one thing that cannot be regenerated - the fleet
+  key pair - and there is no export today.
+
+Cloudflare stays the only DNS provider by choice. Another one, or a floating IP, is a second
+implementation of `IDnsRecordUpdater` and nothing else, so it can be added when a deployment
+actually needs it.
 
 ## Known gaps
 
-- The pair has been exercised in containers on a single host, not yet across real servers. The
-  probe's handshake check has not yet been run against a real node either.
-- The frontend has no automated tests.
+- The pair has only been exercised in containers on one host, never across real servers - though
+  what `scripts/e2e.sh` covers there is real: agents applying bundles, a probe handshaking and
+  fetching through the tunnel, and both kinds of block.
+- The frontend's tests cover the formatters, the node state words and the availability ribbon. The
+  composables that need a Nuxt app and a stubbed API are still only exercised by hand.
+- Automatic failover cannot be exercised end to end in CI: arming it requires a DNS provider, and
+  there is none there. The script asserts the recommendation the manual path produces instead,
+  which goes through the same policy.
 - The predecessor single-server app is preserved at tag `v0.9-standalone` and has been removed
   from the tree.
 
@@ -726,6 +823,72 @@ A или AAAA, всегда без проксирования: оранжева�
 или восстановилась, произошло переключение, фейловер застрял или провайдер отказал. Кнопка
 **Test** отправляет пробное уведомление.
 
+## История доступности
+
+Карточки нод отвечают, что не так сейчас. **Nodes → Availability** отвечает, как часто так было:
+по строке на ноду, час за часом, в тех же окнах, что и страница трафика.
+
+Каждый бакет окрашен по худшему состоянию, которое в нём встретилось, а не по самому частому: час,
+в котором нода десять минут была заблокирована, — это час, который стоит увидеть, а усреднение —
+ровно то, из-за чего мигающая нода начинает выглядеть нормальной. Час, в котором панель ничего не
+записала — её перезапускали или она только что поставлена, — рисуется как пропуск и ни во что не
+считается: «нет данных» и «не была здорова» — разные ответы, а доля берётся только по тем
+проверкам, которые действительно состоялись.
+
+Под строками то же окно **по пробам**. Это единственное место, где панель может сказать, *где*
+нода заблокирована: нода, до которой не дотягивается ни одна проба, и нода, до которой не
+дотягивается только офисная, — разные проблемы с разными решениями. Счётчик хендшейков рядом
+разделяет два вида блокировки: хендшейк проходит, а трафика за ним нет — это DPI или сломанный
+egress; хендшейк не проходит вовсе — это адрес или порт.
+
+Запись идёт из раундов фейловера, поэтому числа — те же вердикты, что на карточках, и из того же
+вычислителя. `AWG_AVAILABILITY_RETENTION_DAYS` задаёт срок хранения, `0` не записывает ничего —
+состояния на карточках считаются на лету и работают в любом случае. Это отдельная ручка от
+хранения трафика намеренно: та — решение о том, держать ли запись о людях, и она ничего не говорит
+о том, можно ли панели помнить, какая из ваших же нод была заблокирована на прошлой неделе.
+
+## Метрики
+
+Задайте `AWG_METRICS_TOKEN`, и панель отдаёт метрики Prometheus на `/api/metrics`:
+
+```
+awg_node_health{node="helsinki-1",node_id="...",state="blocked"} 1
+awg_node_revision_lag{node="helsinki-1",node_id="..."} 2
+awg_node_report_timestamp_seconds{node="helsinki-1",node_id="..."} 1771000000
+awg_probe_reachable{probe="moscow-home",probe_id="...",node="helsinki-1",node_id="..."} 0
+awg_probe_handshake{probe="moscow-home",probe_id="...",node="helsinki-1",node_id="..."} 1
+```
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: awg
+    metrics_path: /api/metrics
+    authorization:
+      credentials: ваш-токен
+    static_configs:
+      - targets: ['panel.example.com']
+```
+
+Это нужно потому, что часть таких фактов знает только панель — что нода заблокирована, а не лежит;
+что она отстала на три ревизии; что ни одна проба не отчитывалась десять минут, — и выяснение этого
+не должно требовать открытой вкладки браузера. Состояния берутся из того же вычислителя, что и
+страницы панели, поэтому дашборд и панель не могут расходиться в том, здорова ли нода.
+
+Три вещи, которые стоит знать:
+
+- **Эндпоинт выключен, пока не задан токен.** Это единственный маршрут, отвечающий без сессии
+  администратора; токен он проверяет сам, за постоянное время. Здоровье и местоположение флота
+  VPN-нод — не то, что стоит начать публиковать из-за обновления панели.
+- **Ничего о человеке не отдаётся.** Ни имён клиентов, ни публичных ключей, ни рядов по пирам.
+  Скрейп федерируется, бэкапится и расходится по рукам куда свободнее, чем база панели, и метка с
+  пиром занесла бы «кто» во всё это. Трафик отдаётся по нодам — это эксплуатационный вопрос;
+  второй остаётся за страницей трафика. Адреса нод не отдаются по той же причине: адреса флота —
+  именно то, что нужно блокирующему.
+- **Счётчики нод — сырые.** Сброс счётчика в панели — бухгалтерия о человеке, а скрейпер к тому же
+  единственный читатель, который сам умеет обрабатывать откат счётчика назад, так что вычитание
+  здесь лишь скрыло бы от него перезагрузку ноды.
+
 ## Восстановление ноды
 
 Отзыв или удаление ноды в панели обрывает выдачу конфигурации, но **не останавливает туннель**:
@@ -774,6 +937,8 @@ docker rm -f awg-node && rm -rf /etc/awg-node/*
 | `AWG_CONTROL_DB` | Файл SQLite. По умолчанию `/etc/awg-control/control.db`. |
 | `AWG_BUNDLE_LIFETIME_MINUTES` | Срок жизни подписанного бандла. По умолчанию 15. |
 | `AWG_USAGE_RETENTION_DAYS` | Сколько дней хранится почасовая история трафика по пирам для страницы Traffic. `0` — не вести её вовсе. По умолчанию 90. |
+| `AWG_AVAILABILITY_RETENTION_DAYS` | Сколько дней хранится история доступности: как стояла каждая нода и что о ней видела каждая проба. `0` — не вести её вовсе. По умолчанию 90. |
+| `AWG_METRICS_TOKEN` | Включает `/api/metrics` и служит bearer-токеном для него. Без значения эндпоинт выключен. |
 | `AWG_IMPORT_LEGACY_STATE` | Разовое усыновление старого `state.json`. |
 | `AWG_CLOUDFLARE_API_TOKEN` | Позволяет панели менять запись сама. Нужны права `Zone:Read` и `Zone:DNS:Edit`. |
 | `AWG_CLOUDFLARE_ZONE_ID` | Зона, в которой живёт запись. Без обоих значений переключение остаётся ручным. |
@@ -923,7 +1088,11 @@ userspace, если проверка не прошла. Нодам на встр
   живые счётчики (они приходят с нод, а не отсюда) продолжают работать.
 - **Nodes** — состояние агентов, их внешние адреса, забрали ли они текущую ревизию, куда сейчас
   ходят клиенты, команды подключения и отзыв доступа. Отзыв обрывает выдачу конфигурации со
-  следующего же запроса ноды.
+  следующего же запроса ноды. *Node settings* в меню ноды держит то, что эта нода запускает в
+  отличие от остального флота — интерфейс egress и собственный MTU туннеля, — и те же два поля
+  предлагаются при подключении, так что сервер, которому нужен более узкий MTU, получает его в
+  первой же применённой конфигурации. Под карточками — как каждая нода стояла во времени и что о
+  ней видела каждая проба.
 - **Fleet** — общая идентичность, настройки обфускации, импорт со старого сервера.
 - **Events** — журнал: кто что менял и какие ноды забирали конфигурацию.
 
@@ -956,6 +1125,7 @@ pnpm install
 pnpm run dev        # против локально запущенной панели
 pnpm run lint
 pnpm run typecheck
+pnpm run test       # vitest в окружении Nuxt
 cd ..
 
 # Агент компилируется заранее (AOT), и анализатор trim/AOT работает только здесь — успешный
@@ -966,6 +1136,20 @@ dotnet publish src/AwgEasy.Node -c Release -r linux-x64
 `.github/workflows/ci.yml` гоняет всё это на каждый push и pull request и падает на любой
 известной уязвимости в графе зависимостей. Образы там не собираются: они тянут Go-тулчейн и
 исходники AmneziaWG — минуты и гигабайты ради того, что меняется гораздо реже кода.
+
+### Прогон всей связки
+
+```bash
+sh scripts/e2e.sh     # нужны docker, curl, jq и /dev/net/tun
+```
+
+Поднимает панель, две ноды и пробу в контейнерах на одной машине и гоняет их через админское
+API. Он покрывает то, до чего тестам не достать: агент применяет бандл через awg-quick и
+amneziawg-go, проба делает настоящий хендшейк с каждой нодой и тянет страницу через туннель, и
+воспроизводятся оба вида блокировки — когда хендшейк не проходит вовсе и когда он проходит, а
+трафика за ним нет. Он собирает оба образа, поэтому живёт в отдельном workflow
+(`.github/workflows/e2e.yml`): по ночам, по кнопке и на pull request, который задевает образы,
+агента или контракт.
 
 | Проект | Роль |
 | --- | --- |
@@ -991,15 +1175,24 @@ awg-node --render-bundle bundle.json --control-key <base64url> --egress ens3
 Фаза 1 (мультисерверность с ручным переключением) и фаза 2 (пробы, различение «заблокирована» и
 «лежит», автоматический фейловер, уведомления) готовы. Дальше:
 
-- **Провайдер floating IP** — вторая реализация за тем же интерфейсом, что и Cloudflare, для
-  установок, где переносится адрес, а не запись.
 - **Ротация идентичности флота**, чтобы скомпрометированная или изъятая нода не означала ручную
   пересборку всего.
+- **Бэкап самой панели.** Она держит единственное, что нельзя сгенерировать заново, — ключевую
+  пару флота, — а экспорта сегодня нет.
+
+Cloudflare остаётся единственным DNS-провайдером сознательно. Любой другой, как и floating IP, —
+это вторая реализация `IDnsRecordUpdater` и ничего больше, так что её можно добавить, когда она
+действительно понадобится.
 
 ## Известные пробелы
 
-- Связка проверена в контейнерах на одной машине, но ещё не на разнесённых серверах. Проверка
-  хендшейка пробой против настоящей ноды тоже ещё не запускалась.
-- У фронтенда нет автоматических тестов.
+- Связка проверена в контейнерах на одной машине, но ещё не на разнесённых серверах — хотя то,
+  что проверяет там `scripts/e2e.sh`, настоящее: агенты применяют бандлы, проба делает хендшейк и
+  тянет страницу через туннель, и оба вида блокировки воспроизводятся.
+- Тесты фронтенда покрывают форматтеры, слова состояния ноды и полосу доступности. Композаблы,
+  которым нужно приложение Nuxt и заглушка API, по-прежнему проверяются только руками.
+- Автоматический фейловер нельзя прогнать целиком в CI: чтобы его вооружить, нужен DNS-провайдер,
+  а там его нет. Скрипт вместо этого проверяет рекомендацию, которую выдаёт ручной путь через ту
+  же политику.
 - Предшественник — одиночное приложение — сохранён под тегом `v0.9-standalone` и удалён из
   дерева.

@@ -191,9 +191,12 @@ async function copyRecord() {
           @revoke="nodeActions.revoke(node)"
           @remove="nodeActions.remove(node)"
           @failover="nodeActions.editFailover(node)"
+          @settings="nodeActions.editSettings(node)"
         />
       </div>
     </AppCard>
+
+    <AvailabilityCard />
 
     <FailoverCard />
 

@@ -25,20 +25,37 @@ public sealed class EnrollmentService(
     public const string NodeToken = "node";
     public const string ProbeToken = "probe";
 
-    public EnrollmentTokenResponse CreateToken(string nodeName, string controlUrl, string kind = NodeToken)
+    /// <param name="overrides">
+    /// Per-node settings the node is to be born with, carried on the token rather than applied
+    /// afterwards: the MTU and the egress interface are in the first bundle the agent fetches, so
+    /// a node that needs them gets them before it ever brings an interface up. Probes have none -
+    /// a probe receives no bundle at all.
+    /// </param>
+    public EnrollmentTokenResponse CreateToken(
+        string nodeName,
+        string controlUrl,
+        string kind = NodeToken,
+        NodeOverrides? overrides = null)
     {
         var token = Base64Url.Encode(RandomNumberGenerator.GetBytes(32));
         var now = DateTimeOffset.UtcNow;
         var expiresAt = now.Add(TokenLifetime);
+        var settings = overrides ?? NodeOverrides.None;
 
         using var connection = database.Open();
         using var command = connection.Sql(
-            "INSERT INTO enrollment_tokens (token_hash, node_name, created_at, expires_at, kind) VALUES ($hash, $name, $created, $expires, $kind)",
+            """
+            INSERT INTO enrollment_tokens (token_hash, node_name, created_at, expires_at, kind, endpoint_host, egress_interface, mtu)
+            VALUES ($hash, $name, $created, $expires, $kind, $endpointHost, $egress, $mtu)
+            """,
             ("$hash", Hash(token)),
             ("$kind", kind),
             ("$name", nodeName),
             ("$created", now.ToStorage()),
-            ("$expires", expiresAt.ToStorage()));
+            ("$expires", expiresAt.ToStorage()),
+            ("$endpointHost", settings.EndpointHost),
+            ("$egress", settings.EgressInterface),
+            ("$mtu", settings.Mtu));
 
         command.ExecuteNonQuery();
         events.Record($"{kind}.token_issued", $"Enrollment token issued for {kind} '{nodeName}'.");
@@ -93,7 +110,7 @@ public sealed class EnrollmentService(
         }
 
         var now = DateTimeOffset.UtcNow;
-        var (nodeName, tokenError) = ReadToken(request, NodeToken, now);
+        var (nodeName, overrides, tokenError) = ReadToken(request, NodeToken, now);
         if (nodeName is null)
         {
             return (null, tokenError);
@@ -103,7 +120,7 @@ public sealed class EnrollmentService(
             Id: Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture),
             Name: nodeName,
             Hostname: request.Hostname,
-            EndpointHost: null,
+            EndpointHost: overrides.EndpointHost,
             AgentPublicKey: request.AgentPublicKey,
             AgentVersion: request.AgentVersion,
             Status: NodeStatuses.Provisioning,
@@ -111,8 +128,8 @@ public sealed class EnrollmentService(
             InterfaceUp: false,
             Backend: null,
             BundleSchemaVersion: BundleSchema.Normalize(request.BundleSchemaVersion),
-            EgressInterface: null,
-            Mtu: null,
+            EgressInterface: overrides.EgressInterface,
+            Mtu: overrides.Mtu,
             PublicIp: null,
             LastSeenAt: null,
             LastError: null,
@@ -157,7 +174,7 @@ public sealed class EnrollmentService(
         }
 
         var now = DateTimeOffset.UtcNow;
-        var (probeName, tokenError) = ReadToken(request, ProbeToken, now);
+        var (probeName, _, tokenError) = ReadToken(request, ProbeToken, now);
         if (probeName is null)
         {
             return (null, tokenError);
@@ -184,38 +201,48 @@ public sealed class EnrollmentService(
     /// the operator does not control, and an install command pasted in the wrong place must not
     /// quietly turn one into the other.
     /// </summary>
-    private (string? Name, ApiError Error) ReadToken(EnrollRequest request, string kind, DateTimeOffset now)
+    private (string? Name, NodeOverrides Overrides, ApiError Error) ReadToken(EnrollRequest request, string kind, DateTimeOffset now)
     {
         using var connection = database.Open();
         using var lookup = connection.Sql(
-            "SELECT node_name, expires_at, used_at, kind FROM enrollment_tokens WHERE token_hash = $hash",
+            """
+            SELECT node_name, expires_at, used_at, kind, endpoint_host, egress_interface, mtu
+              FROM enrollment_tokens
+             WHERE token_hash = $hash
+            """,
             ("$hash", Hash(request.EnrollmentToken)));
         using var reader = lookup.ExecuteReader();
 
         if (!reader.Read())
         {
             logger.LogWarning("Enrollment attempted with an unknown token from {Hostname}.", request.Hostname);
-            return (null, new ApiError("enrollment_invalid", "Enrollment token is not valid."));
+            return (null, NodeOverrides.None, new ApiError("enrollment_invalid", "Enrollment token is not valid."));
         }
 
         if (reader.GetString("kind") != kind)
         {
-            return (null, new ApiError(
+            return (null, NodeOverrides.None, new ApiError(
                 "enrollment_wrong_kind",
                 $"This token enrolls a {reader.GetString("kind")}, not a {kind}. Issue a {kind} token in the panel."));
         }
 
         if (reader.GetStringOrNull("used_at") is not null)
         {
-            return (null, new ApiError("enrollment_used", "Enrollment token has already been used."));
+            return (null, NodeOverrides.None, new ApiError("enrollment_used", "Enrollment token has already been used."));
         }
 
         if (reader.GetTimestamp("expires_at") < now)
         {
-            return (null, new ApiError("enrollment_expired", "Enrollment token has expired."));
+            return (null, NodeOverrides.None, new ApiError("enrollment_expired", "Enrollment token has expired."));
         }
 
-        return (reader.GetString("node_name"), ApiError.Empty);
+        return (
+            reader.GetString("node_name"),
+            new NodeOverrides(
+                reader.GetStringOrNull("endpoint_host"),
+                reader.GetStringOrNull("egress_interface"),
+                reader.GetInt32OrNull("mtu")),
+            ApiError.Empty);
     }
 
     private void Consume(string token, string enrolledId, DateTimeOffset now)

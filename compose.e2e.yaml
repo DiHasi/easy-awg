@@ -1,0 +1,116 @@
+# The whole fleet on one host, for scripts/e2e.sh. Not a deployment: use compose.control.yaml,
+# compose.node.yaml and compose.probe.yaml for that.
+#
+# Two differences from the real thing, both deliberate:
+#
+# The nodes run on a bridge with static addresses rather than with host networking, because two
+# nodes on one host cannot both have it - and because the probe has to be able to reach each of
+# them at an address of its own, which is what makes "this node is blocked" a thing a test can
+# arrange. Each node is told its address through AWG_PUBLIC_IP: discovery would ask an echo
+# service and get the runner's one address back for both nodes, which is exactly the answer that
+# makes a two-node test meaningless.
+#
+# The probe fetches the panel's own health endpoint through the tunnel instead of a page on the
+# internet. The point of the traffic check is that a request through the tunnel is answered, and
+# an address on this network proves that without needing the runner to have egress at all.
+name: awg-e2e
+
+networks:
+  fleet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+
+services:
+  control:
+    build:
+      context: .
+      dockerfile: docker/control.Dockerfile
+    networks:
+      fleet:
+        ipv4_address: 172.28.0.10
+    ports:
+      # Localhost only: this panel has a known password.
+      - "127.0.0.1:18080:8080"
+    environment:
+      AWG_ENDPOINT_HOST: "vpn.e2e.invalid"
+      AWG_ADMIN_USER: "e2e"
+      AWG_ADMIN_PASSWORD: "e2e-password-not-a-secret"
+      AWG_SUBNET: "10.9.0.0/24"
+      # Everything is wound down from its default so a run takes a minute rather than ten.
+      AWG_FAILOVER_CHECK_SECONDS: "5"
+      AWG_FAILOVER_GRACE_SECONDS: "10"
+      AWG_FAILOVER_COOLDOWN_MINUTES: "1"
+      AWG_NODE_STALE_SECONDS: "30"
+      AWG_PROBE_INTERVAL_SECONDS: "10"
+      AWG_PROBE_HANDSHAKE_TIMEOUT_SECONDS: "10"
+      AWG_PROBE_CHECK_URLS: "http://172.28.0.10:8080/api/health"
+      AWG_PROBE_TRAFFIC_TIMEOUT_SECONDS: "5"
+      AWG_METRICS_TOKEN: "e2e-scrape-token"
+
+  node-a:
+    build:
+      context: .
+      dockerfile: docker/node.Dockerfile
+    networks:
+      fleet:
+        ipv4_address: 172.28.0.11
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    environment:
+      DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
+      AWG_CONTROL_URL: "http://172.28.0.10:8080"
+      AWG_ENROLLMENT_TOKEN: "${NODE_A_TOKEN:-}"
+      AWG_PUBLIC_IP: "172.28.0.11"
+      AWG_PUBLIC_IP_URLS: ""
+      AWG_POLL_INTERVAL_SECONDS: "5"
+    depends_on:
+      - control
+
+  node-b:
+    build:
+      context: .
+      dockerfile: docker/node.Dockerfile
+    networks:
+      fleet:
+        ipv4_address: 172.28.0.12
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    environment:
+      DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
+      AWG_CONTROL_URL: "http://172.28.0.10:8080"
+      AWG_ENROLLMENT_TOKEN: "${NODE_B_TOKEN:-}"
+      AWG_PUBLIC_IP: "172.28.0.12"
+      AWG_PUBLIC_IP_URLS: ""
+      AWG_POLL_INTERVAL_SECONDS: "5"
+    depends_on:
+      - control
+
+  probe:
+    build:
+      context: .
+      dockerfile: docker/node.Dockerfile
+    networks:
+      fleet:
+        ipv4_address: 172.28.0.20
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      AWG_ROLE: "probe"
+      AWG_CONTROL_URL: "http://172.28.0.10:8080"
+      AWG_ENROLLMENT_TOKEN: "${PROBE_TOKEN:-}"
+    depends_on:
+      - control

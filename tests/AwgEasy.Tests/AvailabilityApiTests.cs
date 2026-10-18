@@ -1,0 +1,158 @@
+using System.Net;
+using System.Net.Http.Json;
+using AwgEasy.Contracts;
+using AwgEasy.Control;
+
+namespace AwgEasy.Tests;
+
+/// <summary>
+/// The availability history as the panel serves it: a real round against a real panel, then the
+/// page's own request for it. What matters here is that the two agree - the history is only worth
+/// keeping if it is the same verdict the node cards show, taken from the same evaluator.
+/// </summary>
+public class AvailabilityApiTests(ControlPlaneFixture fixture) : FleetScenario(fixture), IClassFixture<ControlPlaneFixture>
+{
+    private static async Task<AvailabilitySummaryResponse> AvailabilityAsync(HttpClient admin, string window = "24h")
+        => (await admin.GetFromJsonAsync<AvailabilitySummaryResponse>($"/api/nodes/availability?window={window}"))!;
+
+    [Fact]
+    public async Task A_failover_round_records_a_sample_for_every_node()
+    {
+        var admin = await AdminAsync();
+        var node = await NodeAsync(admin, "history-healthy", "203.0.113.41");
+
+        var before = (await AvailabilityAsync(admin)).Nodes.Single(row => row.NodeId == node.Id);
+        await EvaluateAsync(admin);
+        var after = (await AvailabilityAsync(admin)).Nodes.Single(row => row.NodeId == node.Id);
+
+        // One more sample than before, and it is a healthy one: the agent reports its tunnel up
+        // and no probe contradicts it, which is exactly what the card says too.
+        Assert.Equal(before.Samples + 1, after.Samples);
+        Assert.Equal(before.Healthy + 1, after.Healthy);
+        Assert.Equal(1, after.Uptime);
+    }
+
+    /// <summary>
+    /// A node reporting its tunnel down is recorded as down rather than as nothing, so the hour it
+    /// spent that way is still in the record once it recovers.
+    /// </summary>
+    [Fact]
+    public async Task A_node_reporting_its_tunnel_down_is_recorded_as_down()
+    {
+        var admin = await AdminAsync();
+        var node = await NodeAsync(admin, "history-down", "203.0.113.42");
+
+        await ReportAsync(node, interfaceUp: false);
+        var before = (await AvailabilityAsync(admin)).Nodes.Single(row => row.NodeId == node.Id);
+        await EvaluateAsync(admin);
+        var after = (await AvailabilityAsync(admin)).Nodes.Single(row => row.NodeId == node.Id);
+
+        Assert.Equal(before.Down + 1, after.Down);
+        Assert.Equal(NodeHealthStates.Down, (await NodeStateAsync(admin, node.Id)).Health);
+    }
+
+    /// <summary>
+    /// The breakdown that the combined verdict cannot give: which vantage point reaches the node.
+    /// This is the question an operator actually has when a node is blocked - whose network is it
+    /// blocked in - and it is why the per-probe rows are kept at all.
+    /// </summary>
+    [Fact]
+    public async Task Each_probe_round_is_recorded_against_the_probe_that_saw_it()
+    {
+        var admin = await AdminAsync();
+        var node = await NodeAsync(admin, "history-probed", "203.0.113.43");
+        var (client, probe) = await ProbeAsync(admin, "history-vantage");
+
+        (await ReportProbeAsync(client, probe, Result(node, ProbeOutcomes.Unreachable, handshake: true))).EnsureSuccessStatusCode();
+
+        var seen = (await AvailabilityAsync(admin)).Probes.Single(row => row.ProbeId == probe.NodeId);
+        var about = seen.Nodes.Single(row => row.NodeId == node.Id);
+
+        Assert.Equal(1, about.Unreachable);
+        Assert.Equal(0, about.Reachable);
+        // The handshake completed and nothing followed it, which is the DPI signature rather than
+        // a blocked address - and the number is what lets the page say which it was.
+        Assert.Equal(1, about.Handshakes);
+        Assert.Equal(0, about.Reachability);
+    }
+
+    [Fact]
+    public async Task The_series_is_dense_so_an_unrecorded_hour_is_not_a_failing_one()
+    {
+        var admin = await AdminAsync();
+        var node = await NodeAsync(admin, "history-dense", "203.0.113.44");
+        await EvaluateAsync(admin);
+
+        var summary = await AvailabilityAsync(admin);
+        var series = summary.Nodes.Single(row => row.NodeId == node.Id).Series;
+
+        Assert.Equal("hour", summary.Bucket);
+        Assert.Equal(24, series.Length);
+        // Every hour of the window is present, and the ones the panel recorded nothing in carry no
+        // samples at all - which is what keeps them from reading as hours the node was down.
+        Assert.All(series, point => Assert.True(point.Samples >= 0));
+        Assert.Contains(series, point => point.Samples > 0);
+        Assert.All(
+            series.Where(point => point.Samples == 0),
+            point => Assert.Equal(0, point.Healthy + point.Blocked + point.Down + point.Silent + point.Unknown));
+    }
+
+    [Fact]
+    public async Task Every_node_appears_even_with_no_history_of_its_own()
+    {
+        var admin = await AdminAsync();
+        var node = await NodeAsync(admin, "history-fresh", "203.0.113.45");
+
+        var row = Assert.Single((await AvailabilityAsync(admin)).Nodes, entry => entry.NodeId == node.Id);
+
+        // Present, with whatever has been recorded so far. Uptime over no samples is null rather
+        // than zero: "nothing recorded" and "never once healthy" are opposite answers.
+        Assert.Equal(node.Name, row.Name);
+        if (row.Samples == 0)
+        {
+            Assert.Null(row.Uptime);
+        }
+    }
+
+    [Theory]
+    [InlineData("24h")]
+    [InlineData("7d")]
+    [InlineData("30d")]
+    [InlineData("90d")]
+    public async Task The_windows_are_the_same_ones_the_traffic_page_offers(string window)
+    {
+        var admin = await AdminAsync();
+        var summary = await AvailabilityAsync(admin, window);
+
+        Assert.Equal(window, summary.Window);
+        Assert.Equal(window is "24h" or "7d" ? "hour" : "day", summary.Bucket);
+    }
+
+    [Fact]
+    public async Task An_unknown_window_is_refused_with_a_stable_code()
+    {
+        var admin = await AdminAsync();
+        var response = await admin.GetAsync("/api/nodes/availability?window=forever");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = (await response.Content.ReadFromJsonAsync<ApiError>())!;
+        Assert.Equal("availability_window_invalid", error.Code);
+    }
+
+    [Fact]
+    public async Task An_unreal_timezone_offset_is_refused()
+    {
+        var admin = await AdminAsync();
+        var response = await admin.GetAsync("/api/nodes/availability?offset=2000");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("availability_offset_invalid", (await response.Content.ReadFromJsonAsync<ApiError>())!.Code);
+    }
+
+    [Fact]
+    public async Task The_history_is_behind_the_admin_session_like_everything_else_about_the_fleet()
+    {
+        var response = await Fixture.CreateClient().GetAsync("/api/nodes/availability");
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+}

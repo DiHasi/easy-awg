@@ -18,6 +18,10 @@ public static class AdminApi
         api.MapGet("/health", () => TypedResults.Ok(new HealthResponse("ok"))).AllowAnonymous();
         api.MapAuth();
         api.MapShares();
+        // Scraped by a monitoring system, which has no session to carry. It is off until
+        // AWG_METRICS_TOKEN is set, and it checks that token itself - the only route here that
+        // authenticates with something other than the admin cookie.
+        api.MapMetrics();
 
         // Everything past this point requires a session.
         var admin = api.MapGroup(string.Empty).RequireAuthorization();
@@ -27,6 +31,7 @@ public static class AdminApi
         admin.MapClientGroups();
         admin.MapUsage();
         admin.MapNodes();
+        admin.MapAvailability();
         admin.MapDnsFailover();
         admin.MapFailover();
         admin.MapProbes();

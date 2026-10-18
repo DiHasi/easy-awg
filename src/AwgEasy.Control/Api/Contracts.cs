@@ -79,6 +79,8 @@ public sealed record UpdateTunnelMtuRequest(int Mtu);
 /// <param name="HealthSource">"probes" when probe results decided <paramref name="Health"/>, "agent" when only the node's own reports did.</param>
 /// <param name="FailoverPriority">Lower is tried first when automatic failover picks a node.</param>
 /// <param name="AutoFailover">False keeps automatic failover from ever sending traffic here.</param>
+/// <param name="EgressInterface">What the node NATs through, or null when its agent detects it.</param>
+/// <param name="Mtu">This node's own tunnel MTU, or null when it runs the fleet value.</param>
 public sealed record NodeResponse(
     string Id,
     string Name,
@@ -107,7 +109,9 @@ public sealed record NodeResponse(
     int ProbesReachable,
     int ProbesReporting,
     int FailoverPriority,
-    bool AutoFailover)
+    bool AutoFailover,
+    string? EgressInterface,
+    int? Mtu)
 {
     public static NodeResponse From(NodeRecord node, long fleetRevision, string? activeNodeId, NodeAssessment health)
         => new(
@@ -121,7 +125,8 @@ public sealed record NodeResponse(
             node.LastSeenAt, node.LastError, node.Revoked, node.EnrolledAt,
             health.State, health.Reason, health.Source, health.LastGoodAt, health.FailingSince,
             health.ProbesReachable, health.ProbesReporting,
-            node.FailoverPriority, node.AutoFailover);
+            node.FailoverPriority, node.AutoFailover,
+            node.EgressInterface, node.Mtu);
 }
 
 public sealed record UpdateNodeFailoverRequest(int Priority, bool AutoFailover);
@@ -190,7 +195,19 @@ public sealed record DnsStatusResponse(
     DateTimeOffset? ActivatedAt,
     string? Warning);
 
+/// <summary>
+/// What a node is to be enrolled as. The three optional settings are carried on the token and
+/// written to the node row when the agent enrolls, so a node that needs a narrower MTU or a named
+/// egress interface has them in the very first bundle it fetches.
+/// </summary>
 public sealed record CreateNodeRequest(string Name, string? EndpointHost, string? EgressInterface, int? Mtu);
+
+/// <summary>
+/// The same settings on a node that already exists. Changing the MTU or the egress interface
+/// changes what that node runs and moves the fleet revision; changing the name or the endpoint
+/// host does not, like a client rename.
+/// </summary>
+public sealed record UpdateNodeRequest(string Name, string? EndpointHost, string? EgressInterface, int? Mtu);
 
 /// <summary>The plaintext token is returned exactly once; only its hash is stored.</summary>
 public sealed record EnrollmentTokenResponse(string Token, string NodeName, DateTimeOffset ExpiresAt, string InstallCommand);
@@ -259,6 +276,80 @@ public sealed record ClientUsageSeriesResponse(
     long TransmittedBytes,
     int ActiveDays,
     UsagePoint[] Series,
+    int RetentionDays,
+    DateTimeOffset? RecordingSince);
+
+/// <summary>
+/// One bucket of a node availability series. The counters are samples - one per failover round -
+/// so <paramref name="Samples"/> is the denominator of any share taken from the rest, and zero of
+/// them means the panel recorded nothing in that bucket rather than that the node was never up.
+/// </summary>
+public sealed record NodeAvailabilityPoint(
+    DateTimeOffset At,
+    int Samples,
+    int Healthy,
+    int Blocked,
+    int Down,
+    int Silent,
+    int Unknown);
+
+/// <param name="Uptime">
+/// The share of samples in which the node was healthy, 0 to 1, or null when nothing was recorded.
+/// Null rather than zero: "no history" and "never once healthy" are opposite answers.
+/// </param>
+public sealed record NodeAvailabilityResponse(
+    string NodeId,
+    string Name,
+    bool Revoked,
+    int Samples,
+    int Healthy,
+    int Blocked,
+    int Down,
+    int Silent,
+    int Unknown,
+    double? Uptime,
+    NodeAvailabilityPoint[] Series);
+
+/// <param name="Handshakes">
+/// Rounds in which the handshake completed, reachable or not. Beside <paramref name="Unreachable"/>
+/// it says which block this is: handshakes that complete and carry nothing are DPI, handshakes
+/// that never complete are the address or the port.
+/// </param>
+/// <param name="Reachability">
+/// The share of rounds that got traffic through, 0 to 1, counting only the rounds the probe
+/// actually ran: a probe that could not run its own check says nothing about the node. Null when
+/// it never ran one.
+/// </param>
+public sealed record ProbeNodeAvailabilityResponse(
+    string NodeId,
+    int Reachable,
+    int Unreachable,
+    int Errors,
+    int Handshakes,
+    double? Reachability);
+
+/// <summary>One probe's own view of the fleet: which nodes it reaches from where it stands.</summary>
+public sealed record ProbeAvailabilityResponse(
+    string ProbeId,
+    string Name,
+    bool Revoked,
+    ProbeNodeAvailabilityResponse[] Nodes);
+
+/// <summary>
+/// How the fleet stood over a window. Per node as the panel judged it, and per probe as each
+/// vantage point saw it - the second is what names the network a block is in, which the combined
+/// verdict cannot.
+/// </summary>
+/// <param name="Bucket">"hour" or "day": how wide one point of a node series is.</param>
+/// <param name="RetentionDays">How long history is kept. Zero means nothing is being recorded.</param>
+/// <param name="RecordingSince">The oldest hour still kept, or null when nothing has been recorded.</param>
+public sealed record AvailabilitySummaryResponse(
+    string Window,
+    string Bucket,
+    DateTimeOffset From,
+    DateTimeOffset To,
+    NodeAvailabilityResponse[] Nodes,
+    ProbeAvailabilityResponse[] Probes,
     int RetentionDays,
     DateTimeOffset? RecordingSince);
 

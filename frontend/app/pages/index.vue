@@ -480,6 +480,7 @@ usePolling(refresh, 10000)
         @revoke="nodeActions.revoke"
         @remove="nodeActions.remove"
         @failover="nodeActions.editFailover"
+        @settings="nodeActions.editSettings"
         @new-peer="openCreate()"
         @enroll="enrollOpen = true"
       />

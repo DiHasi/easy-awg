@@ -118,6 +118,10 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<ControlPlaneEntr
     public const string AdminUser = "admin";
     public const string AdminPassword = "correct-horse-battery-staple";
 
+    /// <summary>What the metrics endpoint is configured with, so a test can present it - and
+    /// present something else to check that it is actually checked.</summary>
+    public const string MetricsToken = "scrape-me-9f2b";
+
     public RecordingDnsUpdater Dns { get; } = new();
 
     public StubHostAddressResolver Resolver { get; } = new();
@@ -162,7 +166,11 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<ControlPlaneEntr
                     ProbeCheckUrls: FailoverOptions.DefaultProbeCheckUrls,
                     ProbeTrafficTimeout: TimeSpan.FromSeconds(8)),
                 Notifications: new NotificationOptions(null, null, null),
-                Usage: new UsageOptions(UsageOptions.DefaultRetentionDays)));
+                Usage: new UsageOptions(UsageOptions.DefaultRetentionDays),
+                Availability: new AvailabilityOptions(AvailabilityOptions.DefaultRetentionDays),
+                // A token, so the scrape endpoint is exercised as it ships rather than only in
+                // its disabled state.
+                Metrics: new MetricsOptions(MetricsToken)));
 
             services.AddSingleton<INotificationChannel>(Notifications);
 

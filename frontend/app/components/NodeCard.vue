@@ -23,6 +23,7 @@ const emit = defineEmits<{
   revoke: []
   remove: []
   failover: []
+  settings: []
 }>()
 
 const state = computed(() => describeNode(props.node))
@@ -48,7 +49,10 @@ const reachability = computed(() => {
 const menu = computed(() => {
   const groups: DropdownMenuItem[][] = []
   if (!props.node.revoked) {
-    groups.push([{ label: 'Failover settings', icon: 'i-lucide-route', onSelect: () => emit('failover') }])
+    groups.push([
+      { label: 'Node settings', icon: 'i-lucide-settings-2', onSelect: () => emit('settings') },
+      { label: 'Failover settings', icon: 'i-lucide-route', onSelect: () => emit('failover') }
+    ])
     groups.push([{ label: 'Revoke access', icon: 'i-lucide-ban', onSelect: () => emit('revoke') }])
   }
   groups.push([{ label: 'Remove from panel', icon: 'i-lucide-trash-2', color: 'error', onSelect: () => emit('remove') }])
@@ -193,6 +197,18 @@ const menu = computed(() => {
       </SpecItem>
       <SpecItem label="Reachability">
         {{ reachability }}
+      </SpecItem>
+      <SpecItem
+        label="Egress"
+        mono
+      >
+        <span :class="node.egressInterface ? '' : 'text-muted'">{{ node.egressInterface ?? 'detected' }}</span>
+      </SpecItem>
+      <SpecItem
+        label="MTU"
+        mono
+      >
+        <span :class="node.mtu ? 'text-warning' : 'text-muted'">{{ node.mtu ?? 'fleet value' }}</span>
       </SpecItem>
       <SpecItem label="Auto failover">
         <span

@@ -20,11 +20,7 @@ internal static class UsageAccounting
     /// whole interval lands in the hour the later reading arrived in rather than being split
     /// across the boundary - an error bounded by one report interval, against a bucket of an hour.
     /// </summary>
-    public static DateTimeOffset Bucket(DateTimeOffset at)
-    {
-        var utc = at.ToUniversalTime();
-        return new DateTimeOffset(utc.Year, utc.Month, utc.Day, utc.Hour, 0, 0, TimeSpan.Zero);
-    }
+    public static DateTimeOffset Bucket(DateTimeOffset at) => HistoryWindows.Bucket(at);
 
     /// <summary>
     /// What moved between two readings of the same counter.

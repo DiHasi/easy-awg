@@ -3,13 +3,6 @@ using Microsoft.Data.Sqlite;
 
 namespace AwgEasy.Control;
 
-/// <summary>How wide one point of a series is. The table is hourly; a day is folded out of it.</summary>
-public enum UsageGrain
-{
-    Hour,
-    Day
-}
-
 /// <summary>
 /// One point of a traffic series. <paramref name="At"/> is the instant the bucket starts, as UTC.
 /// For an hour that is a UTC hour; for a day it is the midnight that day began in the timezone the
@@ -50,16 +43,11 @@ public sealed class UsageRepository(Database database)
     public IReadOnlyList<UsageBucket> Series(
         DateTimeOffset from,
         DateTimeOffset to,
-        UsageGrain grain,
+        HistoryGrain grain,
         string? clientId = null,
         int offsetMinutes = 0)
     {
-        // substr over an ISO-8601 string is the cheapest possible date_trunc: every bucket is
-        // written in UTC with the same format, so 13 characters is an hour. A day has to be
-        // truncated in the reader's own frame instead, which is a shift before the same cut.
-        var bucket = grain == UsageGrain.Day
-            ? "strftime('%Y-%m-%d', bucket_start, $shift)"
-            : "substr(bucket_start, 1, 13)";
+        var bucket = HistoryWindows.BucketExpression(grain);
 
         using var connection = database.Open();
         using var command = connection.Sql(
@@ -74,10 +62,10 @@ public sealed class UsageRepository(Database database)
              GROUP BY bucket
              ORDER BY bucket
             """,
-            ("$from", Key(from)),
-            ("$to", Key(to)),
+            ("$from", HistoryWindows.Key(from)),
+            ("$to", HistoryWindows.Key(to)),
             ("$clientId", clientId),
-            ("$shift", Shift(offsetMinutes)));
+            ("$shift", HistoryWindows.Shift(offsetMinutes)));
 
         using var reader = command.ExecuteReader();
 
@@ -85,7 +73,7 @@ public sealed class UsageRepository(Database database)
         while (reader.Read())
         {
             series.Add(new UsageBucket(
-                ParseBucket(reader.GetString("bucket"), grain, offsetMinutes),
+                HistoryWindows.ParseBucket(reader.GetString("bucket"), grain, offsetMinutes),
                 reader.GetInt64("rx"),
                 reader.GetInt64("tx")));
         }
@@ -112,9 +100,9 @@ public sealed class UsageRepository(Database database)
                AND bucket_start <  $to
              GROUP BY client_id
             """,
-            ("$from", Key(from)),
-            ("$to", Key(to)),
-            ("$shift", Shift(offsetMinutes)));
+            ("$from", HistoryWindows.Key(from)),
+            ("$to", HistoryWindows.Key(to)),
+            ("$shift", HistoryWindows.Shift(offsetMinutes)));
 
         using var reader = command.ExecuteReader();
 
@@ -170,7 +158,7 @@ public sealed class UsageRepository(Database database)
         using var connection = database.Open();
         using var transaction = connection.BeginTransaction();
 
-        using var expired = connection.Sql("DELETE FROM client_usage WHERE bucket_start < $before", ("$before", Key(before)));
+        using var expired = connection.Sql("DELETE FROM client_usage WHERE bucket_start < $before", ("$before", HistoryWindows.Key(before)));
         expired.Transaction = transaction;
         var dropped = expired.ExecuteNonQuery();
 
@@ -180,30 +168,5 @@ public sealed class UsageRepository(Database database)
 
         transaction.Commit();
         return dropped;
-    }
-
-    /// <summary>Everything is compared as the string it is stored as, so both ends must be UTC.</summary>
-    private static string Key(DateTimeOffset at) => at.ToUniversalTime().ToStorage();
-
-    /// <summary>
-    /// The offset as a SQLite modifier. Stored timestamps carry their own <c>+00:00</c>, so SQLite
-    /// reads them as UTC and this shifts from there into the reader's frame.
-    /// </summary>
-    private static string Shift(int offsetMinutes)
-        => string.Create(CultureInfo.InvariantCulture, $"{offsetMinutes:+0;-0;+0} minutes");
-
-    /// <summary>
-    /// A grouping key back into the instant its bucket starts. An hour key is already UTC; a day
-    /// key is a date in the reader's frame, so the instant is the midnight that date began there.
-    /// </summary>
-    private static DateTimeOffset ParseBucket(string key, UsageGrain grain, int offsetMinutes)
-    {
-        if (grain != UsageGrain.Day)
-        {
-            return DateTimeOffset.Parse($"{key}:00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
-        }
-
-        var date = DateOnly.ParseExact(key, "yyyy-MM-dd", CultureInfo.InvariantCulture);
-        return new DateTimeOffset(date.ToDateTime(TimeOnly.MinValue), TimeSpan.FromMinutes(offsetMinutes)).ToUniversalTime();
     }
 }

@@ -76,6 +76,13 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
         // change, so the column default does the work and no backfill pass is needed.
         EnsureColumn(connection, "fleet", "tunnel_mtu", "INTEGER NOT NULL DEFAULT 1280");
 
+        // Per-node settings carried from the panel through the one-time token, so a node is born
+        // with them rather than having to be corrected after it has already brought an interface
+        // up. Null is the honest start: no override, and the fleet value applies.
+        EnsureColumn(connection, "enrollment_tokens", "endpoint_host", "TEXT NULL");
+        EnsureColumn(connection, "enrollment_tokens", "egress_interface", "TEXT NULL");
+        EnsureColumn(connection, "enrollment_tokens", "mtu", "INTEGER NULL");
+
         // Grouping peers by the person who holds them. Filed nowhere until an operator says so,
         // so NULL is the honest start here too.
         EnsureColumn(connection, "clients", "group_id", "TEXT NULL");
@@ -313,6 +320,52 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
         );
         -- Retention prunes by bucket, and every read is a range over it.
         CREATE INDEX IF NOT EXISTS ix_client_usage_bucket ON client_usage (bucket_start);
+
+        -- How each node stood, hour by hour: one sample per failover round, counted per state. The
+        -- cards on the Nodes page answer what a node is now; this answers how often it has been
+        -- that, which is the question behind "which node does the blocking actually reach" and
+        -- "where is the next one worth putting".
+        --
+        -- Samples, not seconds: the round interval is a setting, so storing elapsed time would
+        -- make an operator who halves AWG_FAILOVER_CHECK_SECONDS halve every hour recorded after
+        -- the change. A share of samples reads the same either way. A revoked node records
+        -- nothing - the panel has deliberately cut it off, and the availability of something
+        -- switched off on purpose is not a measurement.
+        CREATE TABLE IF NOT EXISTS node_availability (
+            node_id      TEXT    NOT NULL,
+            bucket_start TEXT    NOT NULL,
+            samples      INTEGER NOT NULL DEFAULT 0,
+            healthy      INTEGER NOT NULL DEFAULT 0,
+            blocked      INTEGER NOT NULL DEFAULT 0,
+            down         INTEGER NOT NULL DEFAULT 0,
+            silent       INTEGER NOT NULL DEFAULT 0,
+            unknown      INTEGER NOT NULL DEFAULT 0,
+            updated_at   TEXT    NOT NULL,
+            PRIMARY KEY (node_id, bucket_start)
+        );
+        -- Retention prunes by bucket, and every read is a range over it.
+        CREATE INDEX IF NOT EXISTS ix_node_availability_bucket ON node_availability (bucket_start);
+
+        -- The same hours from each probe's own vantage point. A separate table rather than a
+        -- column on the one above, because the vocabulary genuinely differs: a node is healthy,
+        -- blocked, down or silent, while a probe only ever says it got traffic through, it did
+        -- not, or it could not run its check. The breakdown is what names the network a node is
+        -- blocked in - which the combined verdict, by construction, cannot.
+        CREATE TABLE IF NOT EXISTS probe_availability (
+            probe_id     TEXT    NOT NULL,
+            node_id      TEXT    NOT NULL,
+            bucket_start TEXT    NOT NULL,
+            reachable    INTEGER NOT NULL DEFAULT 0,
+            unreachable  INTEGER NOT NULL DEFAULT 0,
+            errors       INTEGER NOT NULL DEFAULT 0,
+            -- Among the rounds that failed: a handshake that completes and then carries nothing
+            -- is DPI, a handshake that never completes is the address or the port. Counted over
+            -- time because which of the two it is decides what an operator does next.
+            handshakes   INTEGER NOT NULL DEFAULT 0,
+            updated_at   TEXT    NOT NULL,
+            PRIMARY KEY (probe_id, node_id, bucket_start)
+        );
+        CREATE INDEX IF NOT EXISTS ix_probe_availability_bucket ON probe_availability (bucket_start);
 
         CREATE TABLE IF NOT EXISTS events (
             id       INTEGER PRIMARY KEY AUTOINCREMENT,
