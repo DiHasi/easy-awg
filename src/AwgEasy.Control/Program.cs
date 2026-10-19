@@ -59,6 +59,7 @@ builder.Services.AddSingleton<EventLog>();
 builder.Services.AddSingleton<ShareRepository>();
 builder.Services.AddSingleton<IAwgKeyGenerator, AwgToolKeyGenerator>();
 builder.Services.AddSingleton<FleetService>();
+builder.Services.AddSingleton<FleetRotationService>();
 builder.Services.AddSingleton<AdminAccounts>();
 builder.Services.AddSingleton<EnrollmentService>();
 builder.Services.AddSingleton<ProbeRepository>();

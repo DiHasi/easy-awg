@@ -6,6 +6,18 @@ namespace AwgEasy.Control;
 // promise to a caller, and the compiler should complain if a secret-bearing record is ever
 // returned where one of these is expected.
 /// <param name="GroupId">The person this config was filed under, or null for the ungrouped list.</param>
+/// <param name="ConfigGeneration">Which fleet generation this peer's config was last rendered at,
+/// or 0 while the panel has never rendered one.</param>
+/// <param name="ConfigStale">
+/// True when a config was handed out for this peer and the identity it was issued against has
+/// since been replaced, so it works on no node and has to be handed out again. Carried beside the
+/// two numbers rather than left to the caller for the same reason <see cref="NodeResponse.InSync"/>
+/// is: the comparison is the panel's to make, not every page's.
+///
+/// A peer the panel has never rendered a config for is not stale. Nothing of its is in anybody's
+/// hands, and its own key material is current - saying its config is broken would be a claim
+/// about a config that was never issued.
+/// </param>
 public sealed record ClientResponse(
     string Id,
     string Name,
@@ -15,10 +27,18 @@ public sealed record ClientResponse(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     ClientObfuscationOverrides? Obfuscation,
-    string? GroupId)
+    string? GroupId,
+    int ConfigGeneration,
+    int FleetGeneration,
+    bool ConfigStale)
 {
-    public static ClientResponse From(ClientRecord client)
-        => new(client.Id, client.Name, client.Address, client.PublicKey, client.Enabled, client.CreatedAt, client.UpdatedAt, client.Obfuscation, client.GroupId);
+    public static ClientResponse From(ClientRecord client, int fleetGeneration)
+        => new(
+            client.Id, client.Name, client.Address, client.PublicKey, client.Enabled,
+            client.CreatedAt, client.UpdatedAt, client.Obfuscation, client.GroupId,
+            client.ConfigGeneration,
+            fleetGeneration,
+            client.ConfigGeneration != 0 && client.ConfigGeneration != fleetGeneration);
 }
 
 /// <param name="GroupId">Files the new config under a person right away, so a device added from
@@ -52,6 +72,9 @@ public sealed record ClientGroupPlacement(string? GroupId, string[] ClientIds);
 /// </summary>
 public sealed record ArrangeClientsRequest(ClientGroupPlacement[] Groups);
 
+/// <param name="StaleConfigsCount">Peers still holding a config from an older generation. Zero
+/// on a fleet nobody has rotated, and the number of people who have to be found afterwards on one
+/// somebody just did.</param>
 public sealed record FleetResponse(
     int Generation,
     string ServerPublicKey,
@@ -64,7 +87,39 @@ public sealed record FleetResponse(
     ServerObfuscationProfile? Obfuscation,
     long Revision,
     int ClientsCount,
-    int NodesCount);
+    int NodesCount,
+    int StaleConfigsCount);
+
+/// <param name="ReissueClientKeys">
+/// Also replace every peer's own key pair. Off by default: a node never held a client private key,
+/// so a node read off its disk does not expose one. On when the panel's own database has to be
+/// assumed read too.
+/// </param>
+public sealed record RotateFleetRequest(bool ReissueClientKeys = false);
+
+/// <param name="KeyPairReissued">Whether this peer's own key pair changed as well as its preshared
+/// key. The same for every peer in one rotation; carried per peer so a reader does not have to
+/// hold the request to know what it is looking at.</param>
+public sealed record RotatedClientResponse(string Id, string Name, string PublicKey, bool KeyPairReissued);
+
+/// <summary>
+/// What a rotation did. Every config in the field stopped working the moment this returned, so the
+/// peer list is part of the answer rather than something to go and look up: it is the list of
+/// people who now have to be handed a new config.
+/// </summary>
+/// <param name="ProbesReissued">Probe peers re-keyed alongside them. They need no hand-holding -
+/// a probe renders its config from the panel on its next poll - but they were re-keyed too.</param>
+/// <param name="ShareLinksRevoked">Share links that stopped resolving, because each named the
+/// generation that has just been replaced.</param>
+public sealed record FleetRotationResponse(
+    int Generation,
+    int PreviousGeneration,
+    string ServerPublicKey,
+    long Revision,
+    bool ClientKeysReissued,
+    int ShareLinksRevoked,
+    int ProbesReissued,
+    RotatedClientResponse[] Clients);
 
 /// <summary>
 /// The interface MTU every client, probe and node without an override runs. One value for all

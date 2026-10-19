@@ -96,6 +96,20 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             SeedSortOrderFromAddresses(connection);
         }
 
+        // Fleet rotation. The generation a peer's config was last rendered at, so the panel can
+        // say who is still holding one from before a rotation, and the generation a share link
+        // was made for, so a link already in someone's hands stops resolving when the identity
+        // it names is replaced.
+        if (EnsureColumn(connection, "clients", "config_generation", "INTEGER NOT NULL DEFAULT 0"))
+        {
+            BackfillGeneration(connection, "clients", "config_generation");
+        }
+
+        if (EnsureColumn(connection, "client_shares", "generation", "INTEGER NOT NULL DEFAULT 0"))
+        {
+            BackfillGeneration(connection, "client_shares", "generation");
+        }
+
         // Indexed here rather than in the schema above: a clients table written before grouping
         // has no group_id while that runs, and an index on a column that does not exist yet is
         // an error that stops the panel from opening an older database at all.
@@ -128,6 +142,25 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
         alter.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {definition}";
         alter.ExecuteNonQuery();
         return true;
+    }
+
+    /// <summary>
+    /// Stamps rows written before rotation existed with the generation they were in fact made
+    /// at. A fleet only ever had one then, so every config handed out and every live share link
+    /// belongs to it. Left at zero, every existing peer would read as never handed a config - so
+    /// the first rotation after an upgrade would flag nobody, which is the one moment the flag
+    /// exists for - and every share link already passed to somebody would stop resolving the
+    /// moment the panel restarted.
+    ///
+    /// COALESCE because a database can reach this with the fleet row not yet written - the
+    /// identity is created after the schema is - and that is a fleet at generation 1 either way.
+    /// </summary>
+    private static void BackfillGeneration(SqliteConnection connection, string table, string column)
+    {
+        using var command = connection.Sql(
+            $"UPDATE {table} SET {column} = COALESCE((SELECT generation FROM fleet WHERE id = 1), 1)");
+
+        command.ExecuteNonQuery();
     }
 
     /// <summary>
@@ -205,6 +238,12 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             kind           TEXT    NOT NULL DEFAULT 'user',
             group_id       TEXT    NULL,
             sort_order     INTEGER NOT NULL DEFAULT 0,
+            -- The fleet generation this peer's config was last rendered at: after a rotation it
+            -- is what separates the people who have been handed a working config from the people
+            -- whose config is now dead. Left alone by a rotation on purpose - rotating is what
+            -- makes it stale. Zero is "never rendered", which is not stale: nothing of that
+            -- peer's is in anybody's hands.
+            config_generation INTEGER NOT NULL DEFAULT 0,
             created_at     TEXT    NOT NULL,
             updated_at     TEXT    NOT NULL
         );
@@ -263,9 +302,14 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             kind            TEXT NOT NULL DEFAULT 'node'
         );
 
+        -- A link resolves only while it names the generation it was made for. The token itself
+        -- travelled to whoever the config was for, over whatever channel was at hand; after the
+        -- fleet identity has been replaced because a server was read, that link must not be what
+        -- hands the replacement key material to whoever else ended up holding it.
         CREATE TABLE IF NOT EXISTS client_shares (
             token_hash TEXT PRIMARY KEY,
             client_id  TEXT NOT NULL,
+            generation INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             expires_at TEXT NOT NULL
         );

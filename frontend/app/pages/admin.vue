@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Fleet, GeneratedKey, ImportResult, ServerObfuscationProfile } from '~/types/api'
+import type { Fleet, FleetRotation, GeneratedKey, ImportResult, ServerObfuscationProfile } from '~/types/api'
 
 definePageMeta({ middleware: 'auth' })
 
@@ -18,6 +18,11 @@ const generatingKey = ref(false)
 const importing = ref(false)
 const importResult = ref<ImportResult | null>(null)
 const replaceExisting = ref(false)
+
+const rotateOpen = ref(false)
+const rotating = ref(false)
+const reissueClientKeys = ref(false)
+const rotation = ref<FleetRotation | null>(null)
 
 /**
  * The API models "unset" as null, but form inputs only understand undefined. Keep the boundary
@@ -115,6 +120,37 @@ async function copyPublicKey() {
   if (fleet.value) {
     await navigator.clipboard.writeText(fleet.value.serverPublicKey)
     toast.add({ title: 'Key copied', color: 'success', icon: 'i-lucide-check' })
+  }
+}
+
+/**
+ * Replaces the fleet identity. The one action in the panel that disconnects every client at once,
+ * so it is behind its own dialog that says so, and the result is kept on the page afterwards: it
+ * is the list of people who have to be handed a new config before they are back online.
+ */
+async function rotateIdentity() {
+  rotating.value = true
+
+  try {
+    rotation.value = await api.post<FleetRotation>('/fleet/rotate', { reissueClientKeys: reissueClientKeys.value })
+    rotateOpen.value = false
+    await loadFleet()
+    void refresh()
+    toast.add({
+      title: `Fleet is on generation ${rotation.value.generation}`,
+      description: `${rotation.value.clients.length} config(s) have to be handed out again. Nodes converge on their next poll.`,
+      color: 'success',
+      icon: 'i-lucide-refresh-cw'
+    })
+  } catch (error) {
+    toast.add({
+      title: 'Could not rotate the identity',
+      description: describeError(error, ''),
+      color: 'error',
+      icon: 'i-lucide-circle-alert'
+    })
+  } finally {
+    rotating.value = false
   }
 }
 
@@ -224,7 +260,7 @@ onMounted(loadFleet)
     <AppCard
       title="Fleet identity"
       icon="i-lucide-fingerprint"
-      description="Shared by every node and pinned by every client config. It is never regenerated."
+      description="Shared by every node and pinned by every client config. Rotated only when a node has been compromised."
     >
       <template #actions>
         <UButton
@@ -235,6 +271,15 @@ onMounted(loadFleet)
           @click="copyPublicKey"
         >
           Copy public key
+        </UButton>
+        <UButton
+          v-if="fleet"
+          icon="i-lucide-refresh-cw"
+          color="error"
+          variant="outline"
+          @click="rotateOpen = true"
+        >
+          Rotate identity
         </UButton>
       </template>
 
@@ -294,7 +339,114 @@ onMounted(loadFleet)
           {{ fleet.clientsCount }} peers · {{ fleet.nodesCount }} nodes
         </SpecItem>
       </dl>
+
+      <!-- Left on the page after a rotation rather than only in a toast: this is the work that
+           remains, and the panel is where it gets ticked off peer by peer. -->
+      <UAlert
+        v-if="rotation"
+        class="mt-4"
+        color="warning"
+        variant="subtle"
+        icon="i-lucide-triangle-alert"
+        :title="`Rotated from generation ${rotation.previousGeneration} to ${rotation.generation} at revision ${rotation.revision}`"
+      >
+        <template #description>
+          <p>
+            Every node applies the new identity on its next poll. Nothing a client already holds
+            works until it is handed out again: {{ rotation.clients.length }} config(s),
+            {{ rotation.shareLinksRevoked }} share link(s) revoked,
+            {{ rotation.probesReissued }} probe(s) re-keyed on their own.
+            {{ rotation.clientKeysReissued
+              ? 'Client key pairs were reissued as well.'
+              : 'Client key pairs were left alone.' }}
+          </p>
+          <p class="mt-2">
+            <ULink to="/#peers">
+              Go to the peers
+            </ULink>
+            — the ones still on an older generation are marked there.
+          </p>
+        </template>
+      </UAlert>
+
+      <UAlert
+        v-else-if="fleet && fleet.staleConfigsCount > 0"
+        class="mt-4"
+        color="warning"
+        variant="subtle"
+        icon="i-lucide-triangle-alert"
+        :title="`${fleet.staleConfigsCount} peer(s) are not on generation ${fleet.generation}`"
+        description="Their configs were issued against an identity this fleet no longer runs, so they connect to nothing. They are marked on the peer list."
+      />
     </AppCard>
+
+    <UModal
+      v-model:open="rotateOpen"
+      title="Rotate the fleet identity"
+      description="For a node you have to assume was read. Every client is disconnected until they are handed a new config."
+    >
+      <template #body>
+        <div class="flex flex-col gap-5">
+          <p class="text-sm text-muted">
+            Every node runs the same key pair, the same preshared keys and the same wire format —
+            which is what makes failover invisible, and what makes one node's disk the whole
+            fleet's secrets. Rotating draws a new server key pair, a new preshared key for every
+            peer and a fresh wire format (S1–S4, H1–H4 and the header protection key), and moves
+            the fleet to the next generation in one step.
+          </p>
+
+          <ul class="flex flex-col gap-1.5 text-sm text-toned">
+            <li class="flex gap-2">
+              <UIcon
+                name="i-lucide-check"
+                class="mt-0.5 size-4 shrink-0 text-success"
+              />
+              Nodes converge on their next poll, without restarting their interfaces.
+            </li>
+            <li class="flex gap-2">
+              <UIcon
+                name="i-lucide-x"
+                class="mt-0.5 size-4 shrink-0 text-error"
+              />
+              Every config in the field stops working at once, and share links stop resolving.
+            </li>
+            <li class="flex gap-2">
+              <UIcon
+                name="i-lucide-minus"
+                class="mt-0.5 size-4 shrink-0 text-muted"
+              />
+              The bundle signing key is left alone, so no node has to be re-enrolled.
+            </li>
+          </ul>
+
+          <USwitch
+            v-model="reissueClientKeys"
+            label="Also reissue every client key pair"
+            description="A node never held one, so a read node does not expose them. Turn this on if the panel's own database may have been read too."
+          />
+        </div>
+      </template>
+
+      <template #footer>
+        <div class="flex w-full justify-end gap-2">
+          <UButton
+            color="neutral"
+            variant="ghost"
+            @click="rotateOpen = false"
+          >
+            Cancel
+          </UButton>
+          <UButton
+            color="error"
+            icon="i-lucide-refresh-cw"
+            :loading="rotating"
+            @click="rotateIdentity"
+          >
+            Rotate identity
+          </UButton>
+        </div>
+      </template>
+    </UModal>
 
     <AppCard
       title="Tunnel MTU"

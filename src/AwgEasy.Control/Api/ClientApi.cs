@@ -11,8 +11,13 @@ public static class ClientApi
 {
     public static void MapClients(this RouteGroupBuilder admin)
     {
-        admin.MapGet("/clients", (ClientRepository clients) =>
-            TypedResults.Ok(clients.List().Select(ClientResponse.From).ToArray()));
+        admin.MapGet("/clients", (ClientRepository clients, FleetService fleet) =>
+        {
+            // The fleet generation travels with every row, so the list can say which peers are
+            // still holding a config from before a rotation without a second request.
+            var generation = fleet.Current.Generation;
+            return TypedResults.Ok(clients.List().Select(client => ClientResponse.From(client, generation)).ToArray());
+        });
 
         admin.MapGet("/clients/stats", (ClientRepository clients, NodeRepository nodes) =>
         {
@@ -99,13 +104,16 @@ public static class ClientApi
             fleet.BumpRevision($"client {name} created");
             events.Record("client.created", $"Client {name} created at {address}.", actor: context.User.Identity?.Name);
 
-            return Results.Created($"/api/clients/{client.Id}", ClientResponse.From(client));
+            // Left at generation 0 - nothing has been handed over yet. Fetching the config is
+            // what records that somebody could have been, and the panel does that next.
+            return Results.Created($"/api/clients/{client.Id}", ClientResponse.From(client, current.Generation));
         });
 
         admin.MapPut("/clients/{id}", (
             string id,
             UpdateClientRequest request,
             ClientRepository clients,
+            FleetService fleet,
             EventLog events,
             HttpContext context) =>
         {
@@ -127,7 +135,7 @@ public static class ClientApi
 
             // A rename changes no peer material, so nodes do not need a new revision for it.
             events.Record("client.renamed", $"Client renamed to {name}.", actor: context.User.Identity?.Name);
-            return Results.Ok(ClientResponse.From(clients.Find(id)!));
+            return Results.Ok(ClientResponse.From(clients.Find(id)!, fleet.Current.Generation));
         });
 
         admin.MapPost("/clients/{id}/enable", (string id, ClientRepository clients, FleetService fleet, EventLog events, HttpContext context)
@@ -164,6 +172,7 @@ public static class ClientApi
             string id,
             ClientRepository clients,
             ShareRepository shares,
+            FleetService fleet,
             EventLog events,
             HttpContext context) =>
         {
@@ -173,7 +182,8 @@ public static class ClientApi
                 return Results.NotFound(new ApiError("client_not_found", "Client was not found."));
             }
 
-            var token = shares.Create(client.Id, DateTimeOffset.UtcNow);
+            // Stamped with the generation it is a link to, so rotating the identity stops it.
+            var token = shares.Create(client.Id, DateTimeOffset.UtcNow, fleet.Current.Generation);
             var url = $"{context.Request.Scheme}://{context.Request.Host}/share/{token}";
 
             events.Record("client.shared", $"Share link created for {client.Name}.", actor: context.User.Identity?.Name);
@@ -190,6 +200,11 @@ public static class ClientApi
 
             var current = fleet.Current;
             var config = ClientConfigRenderer.Render(current, client, current.EndpointHost);
+            // Rendering is the only moment the panel can observe that this peer was in a position
+            // to be handed its current config - it is what the QR code, the download and the share
+            // link all go through. After a rotation it is what separates the people who have the
+            // replacement from the people still holding one that works nowhere.
+            clients.StampConfigGeneration(client.Id, current.Generation);
             return Results.File(Encoding.UTF8.GetBytes(config), ClientConfigRenderer.ContentType, ClientConfigRenderer.FileName(client.Name));
         });
     }
@@ -227,6 +242,6 @@ public static class ClientApi
         fleet.BumpRevision($"client {client.Name} {state}");
         events.Record($"client.{state}", $"Client {client.Name} {state}.", actor: context.User.Identity?.Name);
 
-        return Results.Ok(ClientResponse.From(clients.Find(id)!));
+        return Results.Ok(ClientResponse.From(clients.Find(id)!, fleet.Current.Generation));
     }
 }

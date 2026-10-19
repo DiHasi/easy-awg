@@ -179,6 +179,123 @@ public class ServerObfuscationValidationTests
     }
 }
 
+/// <summary>
+/// The wire format a rotation draws. A node applies its bundle in one shot, so a profile that
+/// trips a single one of amneziawg's rules does not produce a complaint - it produces a fleet
+/// where no interface comes up at all, at the moment an operator is rotating because a server was
+/// read. Drawn at random, so it is checked over many draws rather than one.
+/// </summary>
+public class ServerObfuscationGeneratorTests
+{
+    private const int Draws = 200;
+
+    [Fact]
+    public void Every_draw_is_a_profile_the_nodes_would_accept()
+    {
+        var keys = new FakeKeyGenerator();
+
+        for (var draw = 0; draw < Draws; draw++)
+        {
+            var profile = ServerObfuscationGenerator.Rotate(null, keys);
+
+            Assert.True(
+                AwgObfuscationValidator.TryValidateServerProfile(profile, out var error),
+                $"draw {draw}: {error.Message}");
+        }
+    }
+
+    [Fact]
+    public void The_four_headers_never_overlap_and_never_enter_the_range_wireguard_reserves()
+    {
+        var keys = new FakeKeyGenerator();
+
+        for (var draw = 0; draw < Draws; draw++)
+        {
+            var profile = ServerObfuscationGenerator.Rotate(null, keys);
+            string?[] headers = [profile.H1, profile.H2, profile.H3, profile.H4];
+
+            for (var i = 0; i < headers.Length; i++)
+            {
+                Assert.True(AwgRange.TryParse(headers[i], AwgRange.MaxUInt32, out var low, out var high));
+                Assert.True(low > 4, $"draw {draw}: H{i + 1} is {headers[i]}");
+                Assert.True(high > low, $"draw {draw}: H{i + 1} is a single value, not a range");
+
+                for (var j = i + 1; j < headers.Length; j++)
+                {
+                    Assert.False(AwgRange.Overlap(headers[i], headers[j]), $"draw {draw}: H{i + 1} overlaps H{j + 1}");
+                }
+            }
+        }
+    }
+
+    // The header cipher nonce rides in the S1-S4 padding, and amneziawg refuses a handshake
+    // initiation and response that come out the same length - 56 bytes apart, which the band the
+    // paddings are drawn from cannot span.
+    [Fact]
+    public void Every_padding_leaves_room_for_the_nonce_and_no_two_are_56_apart()
+    {
+        var keys = new FakeKeyGenerator();
+
+        for (var draw = 0; draw < Draws; draw++)
+        {
+            var profile = ServerObfuscationGenerator.Rotate(null, keys);
+            int[] paddings = [profile.S1!.Value, profile.S2!.Value, profile.S3!.Value, profile.S4!.Value];
+
+            Assert.All(paddings, padding => Assert.True(padding >= AwgObfuscationValidator.HeaderProtectionNonceSize));
+            Assert.NotEqual(56, Math.Abs(paddings[1] - paddings[0]));
+        }
+    }
+
+    // Every draw replaces the whole must-match half, so two rotations in a row cannot land on the
+    // same wire format - which would leave the thing a read node gave up unchanged.
+    [Fact]
+    public void Two_draws_do_not_produce_the_same_wire_format()
+    {
+        var keys = new FakeKeyGenerator();
+
+        var first = ServerObfuscationGenerator.Rotate(null, keys);
+        var second = ServerObfuscationGenerator.Rotate(first, keys);
+
+        Assert.NotEqual(first.H1, second.H1);
+        Assert.NotEqual(first.HeaderProtectionKey, second.HeaderProtectionKey);
+    }
+
+    /// <summary>
+    /// The half that may legally differ per client is the operator's own tuning, not key material.
+    /// Rewriting it would silently undo decisions somebody made for a reason - and a rotation that
+    /// moved RejectAfterTime under RekeyAfterTime would be a profile the nodes refuse outright.
+    /// </summary>
+    [Fact]
+    public void The_per_client_half_is_carried_over_untouched()
+    {
+        var current = new ServerObfuscationProfile
+        {
+            S1 = 12,
+            H1 = "99",
+            DefaultJc = 5,
+            DefaultI1 = "<b 0xaa>",
+            DefaultRekeyAfterTime = "110-130",
+            DefaultRejectAfterTime = "170-190",
+            DefaultDisableCookies = true,
+            RandomTrailers = true
+        };
+
+        var rotated = ServerObfuscationGenerator.Rotate(current, new FakeKeyGenerator());
+
+        Assert.Equal(5, rotated.DefaultJc);
+        Assert.Equal("<b 0xaa>", rotated.DefaultI1);
+        Assert.Equal("110-130", rotated.DefaultRekeyAfterTime);
+        Assert.Equal("170-190", rotated.DefaultRejectAfterTime);
+        Assert.True(rotated.DefaultDisableCookies);
+        // Fleet-wide, but a boolean has no secrecy to refresh and flipping it would change the
+        // wire format in a direction nobody asked for.
+        Assert.True(rotated.RandomTrailers);
+
+        Assert.NotEqual(12, rotated.S1);
+        Assert.NotEqual("99", rotated.H1);
+    }
+}
+
 public class SchemaDowngradeTests
 {
     private static readonly ServerObfuscationProfile Full = new()

@@ -10,9 +10,13 @@ public static class ShareApi
 {
     public static void MapShares(this RouteGroupBuilder api)
     {
-        api.MapGet("/shares/{token}", (string token, ShareRepository shares, ClientRepository clients) =>
+        // A link resolves only while it names the generation it was made for. The token travelled
+        // to whoever the config was for over whatever channel was at hand, so once the identity it
+        // named has been rotated - because a server was read - that link must not be what hands
+        // the replacement key material to whoever else ended up holding it.
+        api.MapGet("/shares/{token}", (string token, ShareRepository shares, ClientRepository clients, FleetService fleet) =>
         {
-            var share = shares.Resolve(token, DateTimeOffset.UtcNow);
+            var share = shares.Resolve(token, DateTimeOffset.UtcNow, fleet.Current.Generation);
             var client = share is null ? null : clients.Find(share.ClientId);
 
             return client is null
@@ -22,15 +26,18 @@ public static class ShareApi
 
         api.MapGet("/shares/{token}/config", (string token, ShareRepository shares, ClientRepository clients, FleetService fleet) =>
         {
-            var share = shares.Resolve(token, DateTimeOffset.UtcNow);
+            var current = fleet.Current;
+            var share = shares.Resolve(token, DateTimeOffset.UtcNow, current.Generation);
             var client = share is null ? null : clients.Find(share.ClientId);
             if (client is null)
             {
                 return Results.NotFound(new ApiError("share_not_found", "This link is not valid or has expired."));
             }
 
-            var current = fleet.Current;
             var config = ClientConfigRenderer.Render(current, client, current.EndpointHost);
+            // The person on the other end of the link now holds this generation's config, which
+            // is the same fact the panel records when an operator downloads it themselves.
+            clients.StampConfigGeneration(client.Id, current.Generation);
             // Not the client name: the file lands in someone else's downloads folder, and the label
             // an operator filed them under is not theirs to read.
             return Results.File(Encoding.UTF8.GetBytes(config), ClientConfigRenderer.ContentType, "amneziawg.conf");

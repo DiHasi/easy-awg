@@ -27,6 +27,10 @@ public sealed record FleetRecord(
 
 /// <param name="GroupId">The person this config belongs to, or null while it is filed nowhere.
 /// The panel's own bookkeeping: no node is told about it and no config changes with it.</param>
+/// <param name="ConfigGeneration">The fleet generation this peer's config was last rendered at,
+/// or 0 while the panel has never rendered one. Below <see cref="FleetRecord.Generation"/> it
+/// means the config this person is holding was issued against an identity the fleet has since
+/// replaced, and no longer works anywhere.</param>
 public sealed record ClientRecord(
     string Id,
     string Name,
@@ -38,7 +42,8 @@ public sealed record ClientRecord(
     ClientObfuscationOverrides? Obfuscation,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
-    string? GroupId = null);
+    string? GroupId = null,
+    int ConfigGeneration = 0);
 
 /// <summary>One person, holding however many devices. Nothing a node ever sees.</summary>
 public sealed record ClientGroupRecord(

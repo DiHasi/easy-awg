@@ -123,6 +123,13 @@ const counts = computed(() => {
   return result
 })
 
+/**
+ * Peers whose config was issued against an identity the fleet has since rotated. Normally none,
+ * and after a rotation the list of people still to be found - so the card header says how many
+ * rather than leaving it to be counted off the badges.
+ */
+const staleCount = computed(() => clients.value.filter(client => client.configStale).length)
+
 const filters = computed(() => [
   { value: 'all' as const, label: 'All', count: counts.value.total },
   { value: 'up' as const, label: 'Online', count: counts.value.up },
@@ -311,6 +318,16 @@ function applyStats(updated: ClientStats) {
   stats.value = { ...stats.value, [updated.id]: updated }
 }
 
+/**
+ * The config dialog has just rendered this peer's config, which is what the panel records as
+ * handing it over. Applied here too so the row drops its badge now instead of at the next poll.
+ */
+function markHandedOut(clientId: string) {
+  clients.value = clients.value.map(client => client.id === clientId
+    ? { ...client, configGeneration: client.fleetGeneration, configStale: false }
+    : client)
+}
+
 function openEdit(client: Client) {
   editingClient.value = client
   editName.value = client.name
@@ -492,7 +509,8 @@ usePolling(refresh, 10000)
       icon="i-lucide-users"
       :description="loading
         ? 'Reading the peers and what they have moved'
-        : `${counts.total} configs issued · ${counts.up} online now`"
+        : `${counts.total} configs issued · ${counts.up} online now`
+          + (staleCount ? ` · ${staleCount} still to be handed a new config` : '')"
       flush
       class="scroll-mt-20"
     >
@@ -834,6 +852,7 @@ usePolling(refresh, 10000)
     <PeerConfigModal
       v-model:open="configOpen"
       :client="configClient"
+      @rendered="markHandedOut"
     />
 
     <PeerStatsModal

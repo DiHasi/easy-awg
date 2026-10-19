@@ -112,7 +112,8 @@ public static class ClientGroupApi
         admin.MapPut("/clients/arrangement", (
             ArrangeClientsRequest request,
             ClientRepository clients,
-            ClientGroupRepository groups) =>
+            ClientGroupRepository groups,
+            FleetService fleet) =>
         {
             if (request.Groups is null || request.Groups.Any(bucket => bucket.ClientIds is null))
             {
@@ -140,7 +141,8 @@ public static class ClientGroupApi
                 return Results.BadRequest(new ApiError("client_not_found", "The arrangement names a peer that no longer exists."));
             }
 
-            return Results.Ok(clients.List().Select(ClientResponse.From).ToArray());
+            var generation = fleet.Current.Generation;
+            return Results.Ok(clients.List().Select(client => ClientResponse.From(client, generation)).ToArray());
         });
     }
 }

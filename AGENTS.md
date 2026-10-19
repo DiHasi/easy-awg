@@ -37,7 +37,7 @@ compose.e2e.yaml         What that script brings up. Not a deployment; the other
 
 ```bash
 dotnet build Awg-easy.sln          # whole solution
-dotnet test Awg-easy.sln           # 307 tests, all must pass
+dotnet test Awg-easy.sln           # 323 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
 cd frontend && pnpm run test       # vitest, in a Nuxt environment
@@ -79,6 +79,34 @@ subnet and obfuscation profile. That is precisely what makes failover invisible:
 pins the server public key, so switching endpoints does not change what the client is talking to.
 Never regenerate the fleet identity as a side effect of anything. Importing a legacy deployment
 must preserve its key pair, or every existing user is disconnected.
+
+**Rotation is the one exception, and it is an act, not a side effect.** `POST /api/fleet/rotate`
+exists because the shared identity's cost is its blast radius: a provider that reads one node's
+disk has read the fleet private key, every preshared key and the wire format. Only
+`FleetRotationService` may replace them, it is reached only from that endpoint, and nothing else
+in the panel - no migration, no setting, no upgrade - may move `FleetRecord.Generation`. The whole
+change lands in one `FleetRepository.Rotate` transaction (identity, generation, every peer's
+preshared key, one revision bump), because a rotation that half-applied is a fleet where nothing
+handshakes and the panel cannot say why. Client key pairs are optional and off by default: a node
+never held one, so a read node does not expose it, and reissuing them changes every peer's public
+key. The bundle signing key pair is **not** rotated - agents pin it at enrollment and refuse
+bundles signed by anything else, so replacing it would stop the fleet converging exactly when it
+must converge fastest. If you ever need to rotate it, design the re-pinning; half of it is worse
+than none.
+
+**Rotation invalidates every client config, so the panel says who still holds a dead one.**
+`clients.config_generation` records the generation a peer's config was last *rendered* at -
+stamped by the download, the QR code and the share-link fetch alike, since rendering is the only
+moment the panel can observe that somebody was in a position to be handed it. A rotation
+deliberately leaves the column alone: making those rows stale is the point. `config_generation` is
+the panel's own bookkeeping like grouping - it never reaches a node, never enters a bundle and
+never bumps the revision - and it is not a claim that a person installed anything, only that the
+panel produced the current config for them. 0 means no config was ever rendered, and that is
+**not** stale: nothing of that peer's is in anybody's hands and its own material is current, so
+counting it among the people to go and find would be a claim about a config that was never issued.
+Share links carry the generation they were made for and resolve only while it is current: the
+token travelled over whatever channel was at hand, and after an identity has been replaced because
+a server was read, a stale link must not be what hands out the replacement.
 
 **The bundle carries no client private keys and no client names.** A node needs only public keys,
 preshared keys and addresses to build its peer list. Nodes hold the fleet private key, so a seized

@@ -141,6 +141,30 @@ public sealed class DatabaseMigrationTests : IDisposable
         Assert.Equal(7, fleet.Revision);
     }
 
+    /// <summary>
+    /// A panel upgraded into fleet rotation has handed out exactly one generation's worth of
+    /// configs, because until now there was only one. Starting those rows at zero would open the
+    /// peer list claiming nobody holds a working config - and every share link already in
+    /// somebody's hands would stop resolving on the upgrade, which is the opposite of what the
+    /// generation check is for.
+    /// </summary>
+    [Fact]
+    public void An_upgraded_panel_reads_its_existing_peers_as_holding_a_current_config()
+    {
+        WriteFleetWithoutTunnelMtu();
+        WriteUngroupedClients(("first", "10.8.0.9"), ("second", "10.8.0.12"));
+
+        var database = new Database(Options(), NullLogger<Database>.Instance);
+        database.Migrate();
+
+        var fleet = new FleetRepository(database).Find()!;
+        var clients = new ClientRepository(database).List();
+
+        Assert.Equal(2, clients.Count);
+        Assert.All(clients, client => Assert.Equal(fleet.Generation, client.ConfigGeneration));
+        Assert.Equal(0, new ClientRepository(database).CountStaleConfigs(fleet.Generation));
+    }
+
     private ControlOptions Options() => new(
         DatabasePath: _path,
         DefaultSubnet: "10.8.0.0/24",
