@@ -472,6 +472,9 @@ bundled `amneziawg-go` need nothing beyond the new image.
   where the counter stood and reports the difference.
   A share link shows only the QR code, the config and a link to the AmneziaWG build for whatever
   device opened it - never the name the client is filed under here.
+  A peer is marked when the config it holds was issued against an identity the fleet has since
+  rotated, so after a rotation the list itself is the checklist of who still has to be handed a
+  new one; the mark clears as soon as that config is rendered again.
 - **Groups** — one person usually holds several configs, so peers can be filed into groups: a
   group is a person, the peers in it are their devices. Drag a peer by its handle to move it
   between groups or to reorder it, drag a group header to reorder the groups, or use *Move to* in
@@ -496,7 +499,9 @@ bundled `amneziawg-go` need nothing beyond the new image.
   tunnel MTU - and the same two fields are offered when a node is enrolled, so a server that needs
   a narrower MTU has it in the first configuration it ever applies. Below the cards, how each node
   has stood over time and what each probe saw of it.
-- **Fleet** — the shared identity, obfuscation settings, and the legacy import.
+- **Fleet** — the shared identity, obfuscation settings, the legacy import, and *Rotate identity*
+  for a node you have to assume was read. It says how many peers are still holding a config from
+  an older generation, which after a rotation is the list of people yet to be found.
 - **Events** — an audit trail of who changed what and which nodes fetched configuration.
 
 ## Security model
@@ -515,7 +520,54 @@ bundled `amneziawg-go` need nothing beyond the new image.
 - Enrollment and share tokens are stored only as hashes.
 
 Assume that a hosting provider can read a node's disk. Treat any seized node as a compromise of
-the whole fleet, since every node carries the shared identity.
+the whole fleet, since every node carries the shared identity. When that happens, rotate.
+
+### Rotating the fleet identity
+
+**Fleet → Fleet identity → Rotate identity**, or `POST /api/fleet/rotate`. This is the answer to a
+node you have to assume was read, and it is the only thing in the panel that replaces the shared
+identity. In one step it draws a new server key pair, a new preshared key for every peer - probes
+included, enabled or not - and a fresh fleet-wide wire format (`S1`-`S4`, `H1`-`H4` and the header
+protection key, which are in the config on that node's disk and are what makes the fleet's traffic
+recognizable as this fleet's), moves the fleet to the next generation and bumps the revision once.
+
+What it costs and what it does not:
+
+- **Nodes need nothing.** They pick the whole change up on their next poll, and `awg syncconf`
+  carries keys, so no interface is restarted and no server has to be visited.
+- **Every client config in the field stops working at once.** They pin the old server public key
+  and carry the old preshared key. There is no overlap window: one identity answers at a time.
+- **Every share link stops resolving.** A link names the generation it was made for. The token
+  went to its recipient over whatever channel was at hand, and after a rotation it must not be
+  what hands out the replacement.
+- **The bundle signing key is left alone,** so no node has to be re-enrolled. Agents pin it at
+  enrollment and would refuse bundles signed by anything else.
+- **Client key pairs are kept unless you ask.** A node never held one, so a read node does not
+  expose them. Turn on *Also reissue every client key pair* if the panel's own database has to be
+  assumed read too; every peer's public key then changes as well, and their live traffic counters
+  start again from zero.
+- **It does not take the compromised server off the air.** Nodes are fail-static, so revoking one
+  only stops new bundles reaching it: it re-applies its cached bundle indefinitely and keeps
+  serving the configs that were issued before the rotation. *Revoke, then rotate* is not
+  containment — power the host down, or have the provider destroy it. The panel says so in the
+  rotation result, naming the revoked nodes it applies to.
+- **A node that has not applied the rotation yet is not a failover target.** It answers with the
+  previous key pair while reporting itself healthy, so no current config works there. The panel
+  marks it *Previous identity*, keeps automatic failover off it, and refuses *Make active* with
+  `node_previous_identity` until it converges — one poll interval, normally under 20 seconds.
+  Because probes only re-render their own config on their next round, keep
+  `AWG_FAILOVER_GRACE_SECONDS` above `AWG_PROBE_INTERVAL_SECONDS`: for up to one round after a
+  rotation no probe can complete a handshake anywhere, and the grace period is what stops that
+  reading as a fleet-wide outage.
+
+Afterwards the work is handing the new configs out, so the panel tracks it: a peer is marked
+`generation 3` on the **Clients** list until its config has been rendered again, which downloading
+it, showing its QR code or opening a fresh share link all do. The Fleet page counts how many are
+still outstanding. A peer no config was ever rendered for is not marked - nothing of its is in
+anybody's hands - and the mark is not a claim that anybody installed anything; it says the panel
+produced the current config for that peer, which is the most it can honestly know. A rotation is written to the event log and announced through `AWG_NOTIFY_*` if a
+channel is configured - if the person pressing it is not the person reading that channel, it is
+the most important thing the fleet could tell them.
 
 ## Development
 
@@ -577,12 +629,14 @@ See [AGENTS.md](AGENTS.md) for the architectural invariants worth knowing before
 ## Roadmap
 
 Phase 1 (multi-server with manual switchover) and Phase 2 (probes, blocked-vs-down detection,
-automatic failover, notifications) are done. What comes next:
+automatic failover, notifications) are done, and so is fleet identity rotation - a seized node is
+now recoverable from the panel rather than by rebuilding everything by hand. What comes next:
 
-- **Fleet identity rotation**, so a compromised or seized node is recoverable without rebuilding
-  everything by hand.
-- **A backup of the panel itself.** It holds the one thing that cannot be regenerated - the fleet
-  key pair - and there is no export today.
+- **Re-pinning the bundle signing key.** Rotation deliberately leaves it alone, because an agent
+  that cannot verify a bundle stops converging rather than fetching a new key. Rotating it needs
+  a re-pinning handshake of its own.
+- **A backup of the panel itself.** It holds the one thing nothing else can reproduce - the fleet
+  key pair and every client's - and there is no export today.
 
 Cloudflare stays the only DNS provider by choice. Another one, or a floating IP, is a second
 implementation of `IDnsRecordUpdater` and nothing else, so it can be added when a deployment
@@ -598,6 +652,11 @@ actually needs it.
 - Automatic failover cannot be exercised end to end in CI: arming it requires a DNS provider, and
   there is none there. The script asserts the recommendation the manual path produces instead,
   which goes through the same policy.
+- A rotation leaves one probe round's worth of failures in the availability history. Probes
+  re-render their config only on their next round, so until then none completes a handshake and
+  those rounds are recorded as unreachable. Nothing acts on them - the grace period covers it and
+  the monitor withholds the alerts - but the ribbon shows a notch that was the rotation, not the
+  nodes.
 - The predecessor single-server app is preserved at tag `v0.9-standalone` and has been removed
   from the tree.
 
@@ -1069,6 +1128,9 @@ userspace, если проверка не прошла. Нодам на встр
   текущее значение и дальше показывает разницу.
   Share-страница показывает только QR-код, конфиг и ссылку на сборку AmneziaWG под то устройство,
   с которого её открыли, — но не имя, под которым клиент записан в панели.
+  Пир помечается, если его конфиг выдан под идентичность, которую флот с тех пор сменил: после
+  ротации сам список и есть чеклист того, кому ещё не выдали новый конфиг. Метка снимается, как
+  только этот конфиг отрендерят заново.
 - **Groups** — у одного человека обычно несколько конфигов, поэтому пиры можно складывать в
   группы: группа — это человек, пиры внутри — его устройства. Пир перетаскивается за ручку слева
   внутри группы и между группами, группа — за ручку в её заголовке; там, где мышью неудобно, есть
@@ -1093,7 +1155,9 @@ userspace, если проверка не прошла. Нодам на встр
   предлагаются при подключении, так что сервер, которому нужен более узкий MTU, получает его в
   первой же применённой конфигурации. Под карточками — как каждая нода стояла во времени и что о
   ней видела каждая проба.
-- **Fleet** — общая идентичность, настройки обфускации, импорт со старого сервера.
+- **Fleet** — общая идентичность, настройки обфускации, импорт со старого сервера и *Rotate
+  identity* для ноды, диск которой приходится считать прочитанным. Здесь же видно, сколько пиров
+  всё ещё держат конфиг прошлого поколения — после ротации это список тех, кого осталось найти.
 - **Events** — журнал: кто что менял и какие ноды забирали конфигурацию.
 
 ## Модель безопасности
@@ -1112,7 +1176,53 @@ userspace, если проверка не прошла. Нодам на встр
 - Токены регистрации и share-ссылок хранятся только в виде хешей.
 
 Исходите из того, что хостер может прочитать диск ноды. Считайте изъятую ноду компрометацией
-всего флота, поскольку общая идентичность есть на каждой.
+всего флота, поскольку общая идентичность есть на каждой. Если это случилось — проводите ротацию.
+
+### Ротация идентичности флота
+
+**Fleet → Fleet identity → Rotate identity**, либо `POST /api/fleet/rotate`. Это ответ на ноду,
+диск которой приходится считать прочитанным, и единственное место в панели, которое заменяет общую
+идентичность. Одним шагом: новая серверная пара ключей, новый preshared-ключ каждому пиру — включая
+пробы и выключенных — и заново сгенерированный общий формат провода (`S1`-`S4`, `H1`-`H4` и
+HeaderProtectionKey: они лежат в конфиге на диске той ноды и именно они делают трафик флота
+узнаваемым как трафик этого флота). Поколение флота увеличивается, ревизия — один раз.
+
+Чего это стоит и чего не стоит:
+
+- **Нодам ничего не нужно.** Они подхватят всё на следующем опросе, а `awg syncconf` переносит
+  ключи, так что интерфейс не перезапускается и ни на один сервер заходить не надо.
+- **Все выданные клиентские конфиги перестают работать сразу.** Они прибиты к старому публичному
+  ключу сервера и несут старый preshared-ключ. Окна совместимости нет: идентичность отвечает одна.
+- **Все share-ссылки перестают открываться.** Ссылка привязана к поколению, для которого сделана.
+  Токен ушёл получателю по какому-то каналу, и после ротации именно он не должен выдавать замену.
+- **Ключ подписи бандлов не меняется,** поэтому ноды не нужно регистрировать заново: агент
+  закрепляет его при регистрации и отверг бы бандлы, подписанные чем-то другим.
+- **Клиентские пары ключей сохраняются, если не попросить иначе.** Нода их никогда не держала, так
+  что прочитанный диск ноды их не раскрывает. Включайте *Also reissue every client key pair*, если
+  базу самой панели тоже приходится считать прочитанной: тогда меняются и публичные ключи пиров, а
+  их счётчики трафика начинают считать с нуля.
+- **Скомпрометированный сервер это не выключает.** Ноды fail-static: отзыв только прекращает
+  выдачу новых бандлов, а нода бесконечно применяет закешированный и продолжает обслуживать
+  конфиги, выданные до ротации. «Отозвать, потом ротировать» — это не изоляция: гасите хост или
+  просите хостера его уничтожить. Панель говорит об этом в результате ротации и называет
+  отозванные ноды, к которым это относится.
+- **Нода, ещё не применившая ротацию, не может стать активной.** Она отвечает прежней парой
+  ключей, но сообщает о себе, что здорова, так что ни один текущий конфиг там не работает. Панель
+  помечает её как *Previous identity*, автоматический фейловер её не выбирает, а *Make active*
+  отвечает `node_previous_identity`, пока она не догонит — один интервал опроса, обычно меньше 20
+  секунд. Пробы перегенерируют свой конфиг только на следующем круге, поэтому держите
+  `AWG_FAILOVER_GRACE_SECONDS` больше `AWG_PROBE_INTERVAL_SECONDS`: до одного круга после ротации
+  ни одна проба нигде не завершит handshake, и именно grace не даёт прочитать это как аварию всего
+  флота.
+
+Дальше остаётся выдать новые конфиги, и панель за этим следит: пир помечен в списке **Clients**
+как `generation 3`, пока его конфиг не отрендерят снова, а это делает любое из: скачивание, показ
+QR-кода, новая share-ссылка. На странице Fleet видно, сколько осталось. Пир, для которого конфиг
+вообще ни разу не рендерили, не помечается — на руках ни у кого ничего нет. И метка не означает,
+что человек что-то установил: она значит, что панель выдала для него текущий конфиг — большего она
+честно знать не может. Ротация пишется в журнал событий и уходит в
+`AWG_NOTIFY_*`, если канал настроен: если кнопку нажал не тот, кто читает канал, это самое важное,
+что флот может сообщить.
 
 ## Разработка
 
@@ -1194,5 +1304,9 @@ Cloudflare остаётся единственным DNS-провайдером 
 - Автоматический фейловер нельзя прогнать целиком в CI: чтобы его вооружить, нужен DNS-провайдер,
   а там его нет. Скрипт вместо этого проверяет рекомендацию, которую выдаёт ручной путь через ту
   же политику.
+- Ротация оставляет в истории доступности один круг проб, записанный как недоступность. Пробы
+  перегенерируют конфиг только на следующем круге, так что до этого handshake нигде не проходит.
+  Никаких действий из этого не следует — grace это покрывает, а алерты монитор придерживает, — но
+  на полосе остаётся зарубка, которая была ротацией, а не нодами.
 - Предшественник — одиночное приложение — сохранён под тегом `v0.9-standalone` и удалён из
   дерева.

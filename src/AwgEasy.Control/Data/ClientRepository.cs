@@ -6,11 +6,11 @@ namespace AwgEasy.Control;
 
 public sealed class ClientRepository(Database database)
 {
-    private const string Columns = "id, name, address, private_key, public_key, preshared_key, enabled, obfuscation_json, group_id, created_at, updated_at";
+    private const string Columns = "id, name, address, private_key, public_key, preshared_key, enabled, obfuscation_json, group_id, config_generation, created_at, updated_at";
 
     /// <summary>The same columns for the one query that has to join the groups to sort by them.</summary>
     private const string QualifiedColumns = "c.id, c.name, c.address, c.private_key, c.public_key, c.preshared_key, "
-        + "c.enabled, c.obfuscation_json, c.group_id, c.created_at, c.updated_at";
+        + "c.enabled, c.obfuscation_json, c.group_id, c.config_generation, c.created_at, c.updated_at";
 
     /// <summary>
     /// The people the fleet serves, in exactly the order the panel draws them: the groups in the
@@ -40,6 +40,19 @@ public sealed class ClientRepository(Database database)
     {
         using var connection = database.Open();
         return Read(connection, $"SELECT {Columns} FROM clients WHERE enabled = 1 ORDER BY address");
+    }
+
+    /// <summary>
+    /// Every peer the panel holds: probes as well as people, and the disabled ones too.
+    ///
+    /// What a fleet rotation has to walk. A disabled peer's config is in somebody's hands exactly
+    /// like an enabled one's, so leaving it on the old preshared key would hand that key material
+    /// back the moment the peer was enabled again.
+    /// </summary>
+    public IReadOnlyList<ClientRecord> ListAll()
+    {
+        using var connection = database.Open();
+        return Read(connection, $"SELECT {Columns} FROM clients ORDER BY address");
     }
 
     /// <summary>A person's client. Probe clients are not reachable through the client endpoints.</summary>
@@ -86,11 +99,12 @@ public sealed class ClientRepository(Database database)
         using var connection = database.Open();
         using var command = connection.Sql(
             """
-            INSERT INTO clients (id, name, address, private_key, public_key, preshared_key, enabled, obfuscation_json, created_at, updated_at, kind, group_id, sort_order)
-            VALUES ($id, $name, $address, $privateKey, $publicKey, $presharedKey, $enabled, $obfuscation, $createdAt, $updatedAt, $kind, $groupId,
+            INSERT INTO clients (id, name, address, private_key, public_key, preshared_key, enabled, obfuscation_json, created_at, updated_at, kind, group_id, config_generation, sort_order)
+            VALUES ($id, $name, $address, $privateKey, $publicKey, $presharedKey, $enabled, $obfuscation, $createdAt, $updatedAt, $kind, $groupId, $configGeneration,
                     (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM clients WHERE group_id IS $groupId))
             """,
             ("$kind", kind),
+            ("$configGeneration", client.ConfigGeneration),
             ("$groupId", client.GroupId),
             ("$id", client.Id),
             ("$name", client.Name),
@@ -149,6 +163,33 @@ public sealed class ClientRepository(Database database)
         return true;
     }
 
+    /// <summary>
+    /// Records that this peer's config has been rendered at <paramref name="generation"/>, which
+    /// is the only moment the panel can know somebody was in a position to be handed it.
+    ///
+    /// Deliberately does not touch <c>updated_at</c>: that says when the peer's own material last
+    /// changed, and rendering a config changes nothing about the peer.
+    /// </summary>
+    public void StampConfigGeneration(string id, int generation)
+        => Execute("UPDATE clients SET config_generation = $generation WHERE id = $id", ("$id", id), ("$generation", generation));
+
+    /// <summary>
+    /// How many of the people's peers are still holding a config from an older generation - the
+    /// number an operator needs after a rotation, and 0 at every other time.
+    ///
+    /// A peer no config was ever rendered for does not count: nothing of its is in anybody's
+    /// hands, so there is nobody to go and find.
+    /// </summary>
+    public int CountStaleConfigs(int generation)
+    {
+        using var connection = database.Open();
+        using var command = connection.Sql(
+            "SELECT COUNT(*) FROM clients WHERE kind = 'user' AND config_generation <> 0 AND config_generation <> $generation",
+            ("$generation", generation));
+
+        return Convert.ToInt32(command.ExecuteScalar());
+    }
+
     public bool SetEnabled(string id, bool enabled, DateTimeOffset now)
         => Execute("UPDATE clients SET enabled = $enabled, updated_at = $now WHERE id = $id", ("$id", id), ("$enabled", enabled ? 1 : 0), ("$now", now.ToStorage()));
 
@@ -188,7 +229,8 @@ public sealed class ClientRepository(Database database)
                 Deserialize(reader.GetStringOrNull("obfuscation_json")),
                 reader.GetTimestamp("created_at"),
                 reader.GetTimestamp("updated_at"),
-                reader.GetStringOrNull("group_id")));
+                reader.GetStringOrNull("group_id"),
+                reader.GetInt32("config_generation")));
         }
 
         return clients;

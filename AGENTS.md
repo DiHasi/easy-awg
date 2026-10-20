@@ -37,7 +37,7 @@ compose.e2e.yaml         What that script brings up. Not a deployment; the other
 
 ```bash
 dotnet build Awg-easy.sln          # whole solution
-dotnet test Awg-easy.sln           # 307 tests, all must pass
+dotnet test Awg-easy.sln           # 339 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
 cd frontend && pnpm run test       # vitest, in a Nuxt environment
@@ -79,6 +79,43 @@ subnet and obfuscation profile. That is precisely what makes failover invisible:
 pins the server public key, so switching endpoints does not change what the client is talking to.
 Never regenerate the fleet identity as a side effect of anything. Importing a legacy deployment
 must preserve its key pair, or every existing user is disconnected.
+
+**Rotation is the one exception, and it is an act, not a side effect.** `POST /api/fleet/rotate`
+exists because the shared identity's cost is its blast radius: a provider that reads one node's
+disk has read the fleet private key, every preshared key and the wire format. Only
+`FleetRotationService` may replace them, it is reached only from that endpoint, and nothing else
+in the panel - no migration, no setting, no upgrade - may move `FleetRecord.Generation`. The whole
+change lands in one `FleetRepository.Rotate` transaction (identity, generation, every peer's
+preshared key, one revision bump), because a rotation that half-applied is a fleet where nothing
+handshakes and the panel cannot say why. Client key pairs are optional and off by default: a node
+never held one, so a read node does not expose it, and reissuing them changes every peer's public
+key. The bundle signing key pair is **not** rotated - agents pin it at enrollment and refuse
+bundles signed by anything else, so replacing it would stop the fleet converging exactly when it
+must converge fastest. If you ever need to rotate it, design the re-pinning; half of it is worse
+than none.
+
+**Rotation is not containment of the node, and the panel has to say so.** It follows from
+fail-static: revoking a node only stops new bundles reaching it, and it goes on re-applying its
+cached bundle indefinitely, so the configs issued before the rotation keep working through the
+very server whose disk was read. "Revoke, then rotate" therefore is not enough - only powering
+that host off is - and an operator has every reason to believe otherwise, which is why
+`FleetRotationResponse.Warning` carries it and names the revoked nodes. Do not quietly drop that
+field because it reads like a caveat; it is the gap between what rotation does and what the
+operator came to do.
+
+**Rotation invalidates every client config, so the panel says who still holds a dead one.**
+`clients.config_generation` records the generation a peer's config was last *rendered* at -
+stamped by the download, the QR code and the share-link fetch alike, since rendering is the only
+moment the panel can observe that somebody was in a position to be handed it. A rotation
+deliberately leaves the column alone: making those rows stale is the point. `config_generation` is
+the panel's own bookkeeping like grouping - it never reaches a node, never enters a bundle and
+never bumps the revision - and it is not a claim that a person installed anything, only that the
+panel produced the current config for them. 0 means no config was ever rendered, and that is
+**not** stale: nothing of that peer's is in anybody's hands and its own material is current, so
+counting it among the people to go and find would be a claim about a config that was never issued.
+Share links carry the generation they were made for and resolve only while it is current: the
+token travelled over whatever channel was at hand, and after an identity has been replaced because
+a server was read, a stale link must not be what hands out the replacement.
 
 **The bundle carries no client private keys and no client names.** A node needs only public keys,
 preshared keys and addresses to build its peer list. Nodes hold the fleet private key, so a seized
@@ -134,9 +171,14 @@ a device configuration as a unit — the interface does not come up with the res
 honoured, it does not come up at all. That is why `AwgObfuscationValidator` mirrors amneziawg's own
 rules rather than trusting the form: H1-H4 ranges may not overlap and may not enter the 1-4 range
 WireGuard reserves, S1-S4 must be at least 12 when `HeaderProtectionKey` is set (the ChaCha20
-nonce rides in that padding), and `RejectAfterTime` must stay above `RekeyAfterTime`. The legacy
-import path validates too, and drops an unusable profile with a warning rather than poisoning the
-fleet with it.
+nonce rides in that padding), `S1` and `S2` may not differ by exactly 56 — that would leave the
+padded handshake initiation and the padded response the same length on the wire, which amneziawg
+refuses — and `RejectAfterTime` must stay above `RekeyAfterTime`. The legacy import path validates
+too, and drops an unusable profile with a warning rather than poisoning the fleet with it. Anything
+that *generates* a profile asks the validator for the same rule rather than keeping its own idea of
+it: `AwgObfuscationValidator.HandshakeSizesDiffer` is public for exactly that, and
+`ServerObfuscationGenerator` draws against it instead of relying on the band its paddings happen to
+span.
 
 **The tunnel MTU is one value for both halves, and it is sized against 3.x, not WireGuard.**
 `FleetRecord.TunnelMtu` is written into every client config, every probe config, and - unless the
@@ -156,6 +198,21 @@ client config already names that host and pins the fleet public key, so the same
 obfuscation profile answer at a different address. Nothing is reissued and no node re-applies
 anything, so `POST /nodes/{id}/activate` deliberately does not bump the revision. If you ever find
 yourself bumping it there, the model has drifted.
+
+**A node below the identity revision is not a failover target, manual or automatic.**
+`fleet.identity_revision` is the revision the identity last changed at, written inside
+`FleetRepository.Rotate` in the same statement as the revision itself. A node whose
+`applied_revision` is below it still answers with the previous key pair, preshared keys and wire
+format, so not one config issued since the rotation can complete a handshake with it - while it
+reports itself healthy, and in sync with everything except the one thing that matters. So it is a
+hard condition in `FailoverPolicy.IsEligible` and, unusually, on the manual path too:
+`DnsFailoverService.ActivateAsync` refuses with `node_previous_identity`. Everything else the
+policy weighs is a judgement an operator may know better than the panel; this is arithmetic about
+which key pair the node is holding, and overruling it disconnects the whole fleet. It resolves
+itself within one poll interval, which is why refusing costs nothing. Keep it apart from `InSync`
+in the API and in the UI - one peer behind is an inconvenience, an identity behind is a node that
+serves nobody - and keep `Stuck` able to say which of the two it hit, or the operator goes looking
+for a fault that is not there.
 
 **The stored active node means "the record points here".** `FleetRepository.SetActiveNode` is
 written only after the provider confirms the edit; a provider that refuses leaves the previous
@@ -191,6 +248,18 @@ node like anyone's client, hidden from the client list. It must never receive a 
 in the networks that do the blocking, and a bundle carries the fleet private key. A node token
 cannot enroll a probe and a probe token cannot enroll a node; keep that check in
 `EnrollmentService.ReadToken`.
+
+**The grace period has to outlast a probe round, and since rotation that is a requirement rather
+than a coincidence.** A probe re-renders its config only when it fetches its next assignment, so
+for up to one `AWG_PROBE_INTERVAL_SECONDS` after a rotation every probe is still speaking the
+previous wire format with the previous preshared key: no handshake completes anywhere and the whole
+fleet reads as `blocked`, including the nodes that have already converged. The default 120s grace
+against a 60s probe interval covers it, so nothing switches - but `AWG_FAILOVER_GRACE_SECONDS` must
+stay above `AWG_PROBE_INTERVAL_SECONDS` or a rotation becomes a reason to fail over. `FailoverMonitor`
+also withholds newly-failing transitions for one probe round after `identity_rotated_at`, without
+recording them, so the rotation does not page an operator about the fleet they are standing over
+and a block that is still there afterwards is still announced. Probe rounds inside that window do
+land in `probe_availability` as failures; that is a known gap, not a decision.
 
 **Automatic failover is reluctant by design.** It is off until armed, cannot be armed without a
 DNS provider, and runs the provider's `CheckAsync` before it is armed. It waits out the grace

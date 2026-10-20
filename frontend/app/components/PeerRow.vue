@@ -61,6 +61,18 @@ const emit = defineEmits<{
       >
         <p class="flex min-w-0 items-center gap-2">
           <span class="truncate font-medium text-highlighted">{{ client.name }}</span>
+          <!-- The config this person holds no longer works anywhere: the fleet identity was
+               rotated under it. Said on the row rather than only in Settings, because the work
+               left after a rotation is going through these one at a time. -->
+          <UBadge
+            v-if="client.configStale"
+            size="sm"
+            color="warning"
+            variant="subtle"
+            :title="`Handed out at generation ${client.configGeneration}; the fleet is on ${client.fleetGeneration}. Hand this config over again.`"
+          >
+            generation {{ client.configGeneration }}
+          </UBadge>
           <UBadge
             v-if="client.obfuscation"
             size="sm"

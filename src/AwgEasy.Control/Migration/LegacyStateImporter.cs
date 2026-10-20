@@ -113,7 +113,12 @@ public sealed class LegacyStateImporter(
                 legacy.Enabled,
                 legacy.Obfuscation?.Normalize(),
                 legacy.CreatedAt == default ? now : legacy.CreatedAt,
-                now));
+                now,
+                GroupId: null,
+                // These configs are already in people's hands and the import preserves the key
+                // pair they were issued against, so they are current - not "never handed out",
+                // which is what the peer list would otherwise say about every one of them.
+                ConfigGeneration: current.Generation));
         }
 
         if (replaceExistingClients)

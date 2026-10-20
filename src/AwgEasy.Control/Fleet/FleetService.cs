@@ -98,7 +98,10 @@ public sealed class FleetService(
             current.Obfuscation,
             current.Revision,
             clients.List().Count,
-            nodes.List().Count);
+            nodes.List().Count,
+            clients.CountStaleConfigs(current.Generation),
+            current.IdentityRevision,
+            current.IdentityRotatedAt);
     }
 
     /// <summary>

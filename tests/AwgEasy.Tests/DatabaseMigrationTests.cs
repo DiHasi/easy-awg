@@ -141,6 +141,83 @@ public sealed class DatabaseMigrationTests : IDisposable
         Assert.Equal(7, fleet.Revision);
     }
 
+    /// <summary>
+    /// A panel upgraded into fleet rotation has handed out exactly one generation's worth of
+    /// configs, because until now there was only one. Starting those rows at zero would open the
+    /// peer list claiming nobody holds a working config - and every share link already in
+    /// somebody's hands would stop resolving on the upgrade, which is the opposite of what the
+    /// generation check is for.
+    /// </summary>
+    [Fact]
+    public void An_upgraded_panel_reads_its_existing_peers_as_holding_a_current_config()
+    {
+        WriteFleetWithoutTunnelMtu();
+        WriteUngroupedClients(("first", "10.8.0.9"), ("second", "10.8.0.12"));
+
+        var database = new Database(Options(), NullLogger<Database>.Instance);
+        database.Migrate();
+
+        var fleet = new FleetRepository(database).Find()!;
+        var clients = new ClientRepository(database).List();
+
+        Assert.Equal(2, clients.Count);
+        Assert.All(clients, client => Assert.Equal(fleet.Generation, client.ConfigGeneration));
+        Assert.Equal(0, new ClientRepository(database).CountStaleConfigs(fleet.Generation));
+    }
+
+    /// <summary>A share link as a panel that predates the generation check wrote it.</summary>
+    private void WriteShare(string tokenHash, string clientId)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = _path }.ToString());
+        connection.Open();
+
+        using var create = connection.CreateCommand();
+        create.CommandText = """
+            CREATE TABLE IF NOT EXISTS client_shares (
+                token_hash TEXT PRIMARY KEY,
+                client_id  TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            );
+
+            INSERT INTO client_shares (token_hash, client_id, created_at, expires_at)
+            VALUES ($hash, $clientId, $created, $expires);
+            """;
+        create.Parameters.AddWithValue("$hash", tokenHash);
+        create.Parameters.AddWithValue("$clientId", clientId);
+        create.Parameters.AddWithValue("$created", "2026-01-01T00:00:00.0000000+00:00");
+        create.Parameters.AddWithValue("$expires", DateTimeOffset.UtcNow.AddHours(12).ToString("O", CultureInfo.InvariantCulture));
+        create.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// The sharper half of the same backfill. A share link resolves only while it names the current
+    /// generation, so a link already in somebody's hands has to be stamped with the generation it
+    /// was in fact made for - otherwise merely restarting an upgraded panel would stop every
+    /// outstanding link, which is the opposite of what that check exists to do.
+    /// </summary>
+    [Fact]
+    public void An_upgraded_panel_keeps_resolving_the_share_links_already_handed_out()
+    {
+        WriteFleetWithoutTunnelMtu();
+        WriteShare(ShareHash("live-token"), "some-client");
+
+        var database = new Database(Options(), NullLogger<Database>.Instance);
+        database.Migrate();
+
+        var fleet = new FleetRepository(database).Find()!;
+        var share = new ShareRepository(database).Resolve("live-token", DateTimeOffset.UtcNow, fleet.Generation);
+
+        Assert.NotNull(share);
+        Assert.Equal("some-client", share.ClientId);
+
+        // And it stops the moment the identity it named is replaced, which is the point.
+        Assert.Null(new ShareRepository(database).Resolve("live-token", DateTimeOffset.UtcNow, fleet.Generation + 1));
+    }
+
+    private static string ShareHash(string token)
+        => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
+
     private ControlOptions Options() => new(
         DatabasePath: _path,
         DefaultSubnet: "10.8.0.0/24",

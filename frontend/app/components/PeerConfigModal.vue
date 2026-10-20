@@ -8,6 +8,13 @@ import type { Client, ClientShare } from '~/types/api'
 const props = defineProps<{ client: Client | null }>()
 const open = defineModel<boolean>('open', { default: false })
 
+/**
+ * Fetching the config is what records that this peer has been handed the current generation, so
+ * the list is told at once rather than finding out on its next poll - a row that still reads
+ * "generation 2" beside the config it was just shown is the panel contradicting itself.
+ */
+const emit = defineEmits<{ rendered: [string] }>()
+
 const api = useControlApi()
 const toast = useToast()
 
@@ -38,6 +45,7 @@ watch(open, async (isOpen) => {
 
   try {
     configText.value = await (await fetchConfig(props.client)).text()
+    emit('rendered', props.client.id)
   } catch (error) {
     fail('Could not load the config', error)
   }

@@ -67,6 +67,16 @@ export type Client = {
   obfuscation?: ClientObfuscationOverrides | null
   /** The person this config was filed under; null or absent for the ungrouped list. */
   groupId?: string | null
+  /** Which fleet generation this peer's config was last rendered at; 0 if one never was. */
+  configGeneration: number
+  fleetGeneration: number
+  /**
+   * A config was handed out for this peer and the identity it was issued against has since been
+   * rotated, so it works on no node and has to be handed over again. The comparison is made
+   * server-side, like a node's `inSync`. A peer no config was ever rendered for is not stale:
+   * nothing of its is in anybody's hands.
+   */
+  configStale: boolean
 }
 
 /**
@@ -168,6 +178,38 @@ export type Fleet = {
   revision: number
   clientsCount: number
   nodesCount: number
+  /** Peers still holding a config from an older generation. Zero unless the identity was rotated. */
+  staleConfigsCount: number
+  /** The revision the identity last changed at; 0 on a fleet that has never been rotated. */
+  identityRevision: number
+  /** When that happened, or null until the first rotation. */
+  identityRotatedAt?: string | null
+}
+
+/** One peer a rotation re-keyed: the list of people who now need a new config. */
+export type RotatedClient = {
+  id: string
+  name: string
+  publicKey: string
+  keyPairReissued: boolean
+}
+
+/**
+ * What a rotation did. Every config in the field stopped working when this came back, so the peer
+ * list is part of the answer rather than something to go and look up afterwards.
+ */
+export type FleetRotation = {
+  generation: number
+  previousGeneration: number
+  serverPublicKey: string
+  revision: number
+  clientKeysReissued: boolean
+  shareLinksRevoked: number
+  /** Probe peers re-keyed too. They render their own config from the panel and need no help. */
+  probesReissued: number
+  clients: RotatedClient[]
+  /** What a rotation does not do: a fail-static node keeps serving the old configs until it is off. */
+  warning: string
 }
 
 export type Node = {
@@ -209,6 +251,13 @@ export type Node = {
   egressInterface?: string | null
   /** This node's own tunnel MTU, or null when it runs the fleet value. */
   mtu?: number | null
+  /**
+   * False means this node has not applied the last rotation: it still answers with the previous
+   * key pair and preshared keys, so no config issued since can reach it. Deliberately distinct
+   * from `inSync` - a node one peer behind is an inconvenience, a node an identity behind serves
+   * nobody, and the panel refuses to send traffic there at all.
+   */
+  onCurrentIdentity: boolean
 }
 
 /**

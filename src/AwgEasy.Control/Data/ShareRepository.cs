@@ -17,15 +17,18 @@ public sealed class ShareRepository(Database database)
 {
     public static readonly TimeSpan Lifetime = TimeSpan.FromHours(24);
 
-    public string Create(string clientId, DateTimeOffset now)
+    /// <param name="generation">The fleet generation the config behind this link belongs to. A
+    /// link is a promise about one identity, so it is stamped with the one it was made for.</param>
+    public string Create(string clientId, DateTimeOffset now, int generation)
     {
         var token = Base64Url.Encode(RandomNumberGenerator.GetBytes(24));
 
         using var connection = database.Open();
         using var command = connection.Sql(
-            "INSERT INTO client_shares (token_hash, client_id, created_at, expires_at) VALUES ($hash, $clientId, $created, $expires)",
+            "INSERT INTO client_shares (token_hash, client_id, generation, created_at, expires_at) VALUES ($hash, $clientId, $generation, $created, $expires)",
             ("$hash", Hash(token)),
             ("$clientId", clientId),
+            ("$generation", generation),
             ("$created", now.ToStorage()),
             ("$expires", now.Add(Lifetime).ToStorage()));
 
@@ -33,7 +36,14 @@ public sealed class ShareRepository(Database database)
         return token;
     }
 
-    public ClientShare? Resolve(string token, DateTimeOffset now)
+    /// <param name="generation">
+    /// The fleet generation as it stands now. A link made for an earlier one does not resolve: the
+    /// config it promised no longer exists, and the replacement is not something to hand to
+    /// whoever is still holding a token that was passed around before the identity was rotated.
+    /// A rotation sweeps these rows itself, so this is what the sweep is being checked against
+    /// rather than the only thing stopping them.
+    /// </param>
+    public ClientShare? Resolve(string token, DateTimeOffset now, int generation)
     {
         using var connection = database.Open();
 
@@ -45,8 +55,9 @@ public sealed class ShareRepository(Database database)
         }
 
         using var command = connection.Sql(
-            "SELECT client_id, expires_at FROM client_shares WHERE token_hash = $hash",
-            ("$hash", Hash(token)));
+            "SELECT client_id, expires_at FROM client_shares WHERE token_hash = $hash AND generation = $generation",
+            ("$hash", Hash(token)),
+            ("$generation", generation));
 
         using var reader = command.ExecuteReader();
         if (!reader.Read())
