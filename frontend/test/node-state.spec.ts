@@ -29,6 +29,7 @@ function node(overrides: Partial<Node> = {}): Node {
     probesReporting: 0,
     failoverPriority: 100,
     autoFailover: true,
+    onCurrentIdentity: true,
     ...overrides
   }
 }
@@ -63,5 +64,25 @@ describe('describeNode', () => {
 
   it('says a node is updating while it is behind the fleet revision', () => {
     expect(describeNode(node({ appliedRevision: 6, inSync: false }))).toEqual({ word: 'Updating', tone: 'warning' })
+  })
+
+  // Behind the identity is not the same news as behind the fleet: the node answers with the
+  // previous key pair, so every current config fails on it while it reports itself healthy.
+  it('says previous identity rather than updating for a node that has not applied a rotation', () => {
+    expect(describeNode(node({ appliedRevision: 6, inSync: false, onCurrentIdentity: false })))
+      .toEqual({ word: 'Previous identity', tone: 'error' })
+  })
+
+  // Said before "Active" for the same reason as down and blocked: the record pointing at a node
+  // that can serve nobody is the worst version of this.
+  it('says previous identity even while the record still points there', () => {
+    expect(describeNode(node({ isActive: true, onCurrentIdentity: false })))
+      .toEqual({ word: 'Previous identity', tone: 'error' })
+  })
+
+  // But a node that is down says so: it being an identity behind is not the headline.
+  it('still leads with down for a node that is both behind and failing', () => {
+    expect(describeNode(node({ health: 'down', onCurrentIdentity: false })))
+      .toEqual({ word: 'Down', tone: 'error' })
   })
 })

@@ -180,6 +180,10 @@ export type Fleet = {
   nodesCount: number
   /** Peers still holding a config from an older generation. Zero unless the identity was rotated. */
   staleConfigsCount: number
+  /** The revision the identity last changed at; 0 on a fleet that has never been rotated. */
+  identityRevision: number
+  /** When that happened, or null until the first rotation. */
+  identityRotatedAt?: string | null
 }
 
 /** One peer a rotation re-keyed: the list of people who now need a new config. */
@@ -204,6 +208,8 @@ export type FleetRotation = {
   /** Probe peers re-keyed too. They render their own config from the panel and need no help. */
   probesReissued: number
   clients: RotatedClient[]
+  /** What a rotation does not do: a fail-static node keeps serving the old configs until it is off. */
+  warning: string
 }
 
 export type Node = {
@@ -245,6 +251,13 @@ export type Node = {
   egressInterface?: string | null
   /** This node's own tunnel MTU, or null when it runs the fleet value. */
   mtu?: number | null
+  /**
+   * False means this node has not applied the last rotation: it still answers with the previous
+   * key pair and preshared keys, so no config issued since can reach it. Deliberately distinct
+   * from `inSync` - a node one peer behind is an inconvenience, a node an identity behind serves
+   * nobody, and the panel refuses to send traffic there at all.
+   */
+  onCurrentIdentity: boolean
 }
 
 /**

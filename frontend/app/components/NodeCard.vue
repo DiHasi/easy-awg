@@ -122,6 +122,22 @@ const menu = computed(() => {
       <span v-else>Updating r{{ node.appliedRevision }} → r{{ node.fleetRevision }}</span>
     </p>
     <!--
+      Behind the identity, not merely behind the fleet: this node answers with the key pair and
+      preshared keys from before the last rotation, so every config handed out since fails on it.
+      It reports itself healthy, which is exactly why it has to be said here.
+    -->
+    <p
+      v-if="!node.onCurrentIdentity && !node.revoked"
+      class="mt-1 flex items-start gap-1.5 text-xs text-error"
+    >
+      <UIcon
+        name="i-lucide-key-round"
+        class="mt-px size-3.5 shrink-0"
+      />
+      Still on the previous fleet identity — no current client config works here, and traffic
+      cannot be switched to it until it applies the rotation
+    </p>
+    <!--
       A node behind the bundle schema is served the older obfuscation profile, so it quietly speaks
       a different wire format from the rest of the fleet. Worth saying rather than looking healthy.
     -->

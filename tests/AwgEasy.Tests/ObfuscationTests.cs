@@ -177,6 +177,38 @@ public class ServerObfuscationValidationTests
         Assert.False(AwgObfuscationValidator.TryValidateClientOverrides(overrides, out var error));
         Assert.Contains("PersistentKeepalive", error.Message);
     }
+
+    /// <summary>
+    /// S1 pads the handshake initiation (148 bytes) and S2 the response (92), so paddings 56 apart
+    /// leave both messages the same length on the wire and amneziawg refuses the pair. It refuses
+    /// the device configuration as a unit, so this is not one setting ignored - it is a fleet where
+    /// no interface comes up at all.
+    /// </summary>
+    [Theory]
+    [InlineData(16, 72)]
+    [InlineData(0, 56)]
+    [InlineData(null, 56)]
+    [InlineData(100, 156)]
+    public void Rejects_paddings_that_make_both_handshake_messages_the_same_length(int? s1, int s2)
+    {
+        var profile = new ServerObfuscationProfile { S1 = s1, S2 = s2, S3 = 20, S4 = 24 };
+
+        Assert.False(AwgObfuscationValidator.TryValidateServerProfile(profile, out var error));
+        Assert.Equal("invalid_obfuscation", error.Code);
+        Assert.Contains("S1 and S2", error.Message);
+    }
+
+    [Theory]
+    [InlineData(16, 71)]
+    [InlineData(16, 73)]
+    [InlineData(16, 16)]
+    [InlineData(null, null)]
+    public void Accepts_paddings_that_leave_the_two_handshake_messages_distinguishable(int? s1, int? s2)
+    {
+        var profile = new ServerObfuscationProfile { S1 = s1, S2 = s2, S3 = 20, S4 = 24 };
+
+        Assert.True(AwgObfuscationValidator.TryValidateServerProfile(profile, out var error), error.Message);
+    }
 }
 
 /// <summary>
@@ -242,7 +274,11 @@ public class ServerObfuscationGeneratorTests
             int[] paddings = [profile.S1!.Value, profile.S2!.Value, profile.S3!.Value, profile.S4!.Value];
 
             Assert.All(paddings, padding => Assert.True(padding >= AwgObfuscationValidator.HeaderProtectionNonceSize));
-            Assert.NotEqual(56, Math.Abs(paddings[1] - paddings[0]));
+            // Asked of the validator rather than restated here, so the generator and the rule it
+            // has to satisfy can never drift into two different numbers.
+            Assert.True(
+                AwgObfuscationValidator.HandshakeSizesDiffer(profile.S1, profile.S2),
+                $"draw {draw}: S1 {profile.S1} and S2 {profile.S2} make the two handshake messages the same length");
         }
     }
 

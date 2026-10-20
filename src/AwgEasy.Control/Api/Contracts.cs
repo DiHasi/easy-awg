@@ -75,6 +75,9 @@ public sealed record ArrangeClientsRequest(ClientGroupPlacement[] Groups);
 /// <param name="StaleConfigsCount">Peers still holding a config from an older generation. Zero
 /// on a fleet nobody has rotated, and the number of people who have to be found afterwards on one
 /// somebody just did.</param>
+/// <param name="IdentityRevision">The revision the identity last changed at, or 0 on a fleet that
+/// has never been rotated. A node below it is on the previous identity and serves nothing.</param>
+/// <param name="IdentityRotatedAt">When that happened. Null until the first rotation.</param>
 public sealed record FleetResponse(
     int Generation,
     string ServerPublicKey,
@@ -88,7 +91,9 @@ public sealed record FleetResponse(
     long Revision,
     int ClientsCount,
     int NodesCount,
-    int StaleConfigsCount);
+    int StaleConfigsCount,
+    long IdentityRevision,
+    DateTimeOffset? IdentityRotatedAt);
 
 /// <param name="ReissueClientKeys">
 /// Also replace every peer's own key pair. Off by default: a node never held a client private key,
@@ -111,6 +116,12 @@ public sealed record RotatedClientResponse(string Id, string Name, string Public
 /// a probe renders its config from the panel on its next poll - but they were re-keyed too.</param>
 /// <param name="ShareLinksRevoked">Share links that stopped resolving, because each named the
 /// generation that has just been replaced.</param>
+/// <param name="Warning">
+/// What a rotation does not do, in the panel's own words - the one thing an operator who revoked
+/// a node and then rotated has every reason to believe is handled and is not. Carried on the
+/// response rather than written into the page like <see cref="DnsStatusResponse.Warning"/>, so a
+/// caller driving the API hears it too.
+/// </param>
 public sealed record FleetRotationResponse(
     int Generation,
     int PreviousGeneration,
@@ -119,7 +130,8 @@ public sealed record FleetRotationResponse(
     bool ClientKeysReissued,
     int ShareLinksRevoked,
     int ProbesReissued,
-    RotatedClientResponse[] Clients);
+    RotatedClientResponse[] Clients,
+    string Warning);
 
 /// <summary>
 /// The interface MTU every client, probe and node without an override runs. One value for all
@@ -136,6 +148,12 @@ public sealed record UpdateTunnelMtuRequest(int Mtu);
 /// <param name="AutoFailover">False keeps automatic failover from ever sending traffic here.</param>
 /// <param name="EgressInterface">What the node NATs through, or null when its agent detects it.</param>
 /// <param name="Mtu">This node's own tunnel MTU, or null when it runs the fleet value.</param>
+/// <param name="OnCurrentIdentity">
+/// False means this node has not applied the last rotation: it is still answering with the
+/// previous key pair and preshared keys, so no config issued since can reach it. Distinct from
+/// <paramref name="InSync"/> on purpose - being one peer behind is an inconvenience, being an
+/// identity behind means the node serves nobody, and traffic may not be sent there at all.
+/// </param>
 public sealed record NodeResponse(
     string Id,
     string Name,
@@ -166,9 +184,15 @@ public sealed record NodeResponse(
     int FailoverPriority,
     bool AutoFailover,
     string? EgressInterface,
-    int? Mtu)
+    int? Mtu,
+    bool OnCurrentIdentity)
 {
-    public static NodeResponse From(NodeRecord node, long fleetRevision, string? activeNodeId, NodeAssessment health)
+    public static NodeResponse From(
+        NodeRecord node,
+        long fleetRevision,
+        long identityRevision,
+        string? activeNodeId,
+        NodeAssessment health)
         => new(
             node.Id, node.Name, node.Hostname, node.EndpointHost,
             node.PublicIp, string.Equals(node.Id, activeNodeId, StringComparison.Ordinal),
@@ -181,7 +205,8 @@ public sealed record NodeResponse(
             health.State, health.Reason, health.Source, health.LastGoodAt, health.FailingSince,
             health.ProbesReachable, health.ProbesReporting,
             node.FailoverPriority, node.AutoFailover,
-            node.EgressInterface, node.Mtu);
+            node.EgressInterface, node.Mtu,
+            node.AppliedRevision >= identityRevision);
 }
 
 public sealed record UpdateNodeFailoverRequest(int Priority, bool AutoFailover);

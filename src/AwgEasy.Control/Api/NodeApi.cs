@@ -10,11 +10,13 @@ public static class NodeApi
     {
         admin.MapGet("/nodes", (NodeRepository nodes, FleetService fleet, DnsFailoverService failover, FailoverMonitor monitor) =>
         {
-            var revision = fleet.Current.Revision;
+            var current = fleet.Current;
             var activeNodeId = failover.ActiveNodeId;
             var list = nodes.List();
             var health = monitor.Assess(list, DateTimeOffset.UtcNow);
-            return TypedResults.Ok(list.Select(node => NodeResponse.From(node, revision, activeNodeId, health[node.Id])).ToArray());
+            return TypedResults.Ok(list
+                .Select(node => NodeResponse.From(node, current.Revision, current.IdentityRevision, activeNodeId, health[node.Id]))
+                .ToArray());
         });
 
         // The per-node half of a node's configuration. Two kinds of field in one request, and the
@@ -87,7 +89,8 @@ public static class NodeApi
 
             var node = nodes.Find(id)!;
             var health = monitor.Assess([node], DateTimeOffset.UtcNow);
-            return Results.Ok(NodeResponse.From(node, fleet.Current.Revision, failover.ActiveNodeId, health[node.Id]));
+            var current = fleet.Current;
+            return Results.Ok(NodeResponse.From(node, current.Revision, current.IdentityRevision, failover.ActiveNodeId, health[node.Id]));
         });
 
         // Not a fleet change either: which node automatic failover prefers decides nothing any
@@ -122,7 +125,8 @@ public static class NodeApi
 
             var node = nodes.Find(id)!;
             var health = monitor.Assess([node], DateTimeOffset.UtcNow);
-            return Results.Ok(NodeResponse.From(node, fleet.Current.Revision, failover.ActiveNodeId, health[node.Id]));
+            var current = fleet.Current;
+            return Results.Ok(NodeResponse.From(node, current.Revision, current.IdentityRevision, failover.ActiveNodeId, health[node.Id]));
         });
 
         // Manual failover. Deliberately not a fleet change: the record every client config already

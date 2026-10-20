@@ -52,6 +52,22 @@ public sealed class DnsFailoverService(
                 "This node is revoked, so it no longer receives configuration. Restore it before sending clients to it."));
         }
 
+        // Refused on the manual path too, unlike the rest of what FailoverPolicy weighs. Those are
+        // judgements an operator may know better than the panel; this one is arithmetic about which
+        // key pair the node is holding. Below the identity revision it has not applied the rotation
+        // yet, so it still answers with the old key pair and the old preshared keys, and not one
+        // config issued since can complete a handshake with it. Pointing the record there would
+        // disconnect the entire fleet, and it resolves itself within one poll interval.
+        var current = fleet.Current;
+        if (node.AppliedRevision < current.IdentityRevision)
+        {
+            return (null, new ApiError(
+                "node_previous_identity",
+                $"This node is still on the previous fleet identity: it has applied revision {node.AppliedRevision} "
+                + $"and the identity changed at {current.IdentityRevision}. Every current client config would fail on it. "
+                + "It picks the new identity up on its next poll - wait for it to go in sync, then switch."));
+        }
+
         if (string.IsNullOrWhiteSpace(node.PublicIp))
         {
             return (null, new ApiError(

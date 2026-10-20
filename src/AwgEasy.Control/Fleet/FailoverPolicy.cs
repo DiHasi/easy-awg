@@ -53,12 +53,18 @@ public sealed record FailoverDecision(FailoverAction Action, string Message, str
 /// </summary>
 public static class FailoverPolicy
 {
+    /// <param name="identityRevision">
+    /// The revision the fleet identity last changed at. A node below it is running the previous
+    /// key pair and preshared keys, so it cannot serve a single config the panel has issued since -
+    /// sending traffic there would be a switch to a node where every client fails.
+    /// </param>
     public static FailoverDecision Decide(
         string? activeNodeId,
         DateTimeOffset? activeSince,
         IReadOnlyList<NodeRecord> nodes,
         IReadOnlyDictionary<string, NodeAssessment> health,
         long fleetRevision,
+        long identityRevision,
         bool requiresCurrentSchema,
         DateTimeOffset now,
         FailoverOptions options)
@@ -89,10 +95,12 @@ public static class FailoverPolicy
                 active.Id);
         }
 
-        var candidate = nodes
-            .Where(node => node.Id != active.Id && IsEligible(node, health, requiresCurrentSchema))
+        var others = nodes.Where(node => node.Id != active.Id).ToArray();
+        var candidate = others
+            .Where(node => IsEligible(node, health, requiresCurrentSchema, identityRevision))
             // A node that has not caught up with the fleet revision does not know the newest
-            // clients yet. It beats no node, but not a node that does.
+            // clients yet. It beats no node, but not a node that does. Only a preference, unlike
+            // the identity revision above - one peer missing is not every peer failing.
             .OrderByDescending(node => node.AppliedRevision == fleetRevision)
             // Seen from where clients are beats the node's word for itself.
             .ThenByDescending(node => health[node.Id].ProbeVerified)
@@ -102,9 +110,21 @@ public static class FailoverPolicy
 
         if (candidate is null)
         {
+            // A node held back only by the identity revision is a different message. It reads as
+            // healthy on the Nodes page, so "no healthy node can take over" would send the
+            // operator looking for a fault that is not there - what it needs is one more poll.
+            // Zero is the revision every node is at or above, so asking with it answers "eligible
+            // apart from the rotation".
+            const long AnyIdentity = 0;
+            var behind = others.Count(node => node.AppliedRevision < identityRevision
+                && IsEligible(node, health, requiresCurrentSchema, AnyIdentity));
+
             return new(
                 FailoverAction.Stuck,
-                $"{active.Name} has been {state.State} for {Describe(failingFor)} and no healthy node can take over.",
+                behind > 0
+                    ? $"{active.Name} has been {state.State} for {Describe(failingFor)} and no node can take over: "
+                      + $"{Count(behind)} healthy node(s) are still applying the rotated identity and would serve no current config yet."
+                    : $"{active.Name} has been {state.State} for {Describe(failingFor)} and no healthy node can take over.",
                 active.Id);
         }
 
@@ -128,16 +148,32 @@ public static class FailoverPolicy
     /// <summary>
     /// What a node needs before traffic can be sent to it without anyone looking. The manual
     /// button is more forgiving on purpose: an operator may know something the panel does not.
+    ///
+    /// The identity revision is the exception to that - it is checked on the manual path too, in
+    /// <see cref="DnsFailoverService.ActivateAsync"/>. The rest of these are judgements an
+    /// operator may reasonably overrule; a node on the previous identity is not a judgement but
+    /// an arithmetic fact about which key pair it is holding, and overruling it sends every
+    /// client to a server that will refuse all of them.
     /// </summary>
-    public static bool IsEligible(NodeRecord node, IReadOnlyDictionary<string, NodeAssessment> health, bool requiresCurrentSchema)
+    public static bool IsEligible(
+        NodeRecord node,
+        IReadOnlyDictionary<string, NodeAssessment> health,
+        bool requiresCurrentSchema,
+        long identityRevision)
         => !node.Revoked
             && node.AutoFailover
             && !string.IsNullOrWhiteSpace(node.PublicIp)
             && health.TryGetValue(node.Id, out var state)
             && state.State == NodeHealthStates.Healthy
+            // Still on the identity before the last rotation: the old key pair, the old preshared
+            // keys, the old wire format. It is up, it reports healthy, and not one config issued
+            // since the rotation can complete a handshake with it.
+            && node.AppliedRevision >= identityRevision
             // A node a schema behind serves the downgraded wire format, which clients on the 3.x
             // profile cannot complete a handshake with. It looks healthy and carries nobody.
             && (!requiresCurrentSchema || node.BundleSchemaVersion >= DesiredStateBundle.CurrentSchemaVersion);
+
+    private static string Count(int value) => value.ToString(CultureInfo.InvariantCulture);
 
     internal static string Describe(TimeSpan span)
     {

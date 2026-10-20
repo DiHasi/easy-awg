@@ -16,9 +16,27 @@ public static class AwgObfuscationValidator
 
     private const int HeaderProtectionKeySize = 32;
 
+    /// <summary>
+    /// Sizes of the two handshake messages S1 and S2 pad. amneziawg refuses a profile where the
+    /// padded initiation and the padded response come out the same length: the two would be
+    /// indistinguishable on the wire, and a responder cannot tell which it is looking at.
+    /// </summary>
+    private const int HandshakeInitiationSize = 148;
+
+    private const int HandshakeResponseSize = 92;
+
     /// <summary>WireGuard uses message types 1-4. A magic header set to its own stock type is
     /// how amneziawg asks for that message to be left alone; anything else must clear the range.</summary>
     private const uint ReservedHeaderMax = 4;
+
+    /// <summary>
+    /// Whether these two paddings leave the handshake initiation and the handshake response at
+    /// different lengths on the wire. Absent means no padding, which is what amneziawg computes
+    /// with. Public because anything generating a profile needs the same rule the validator
+    /// applies, rather than its own idea of the gap.
+    /// </summary>
+    public static bool HandshakeSizesDiffer(int? s1, int? s2)
+        => (s1 ?? 0) + HandshakeInitiationSize != (s2 ?? 0) + HandshakeResponseSize;
 
     public static bool TryValidateServerProfile(ServerObfuscationProfile? obfuscation, out ApiError error)
     {
@@ -29,6 +47,11 @@ public static class AwgObfuscationValidator
         }
 
         if (!ValidateHeaders(obfuscation, out error))
+        {
+            return false;
+        }
+
+        if (!ValidateHandshakeSizes(obfuscation, out error))
         {
             return false;
         }
@@ -186,6 +209,31 @@ public static class AwgObfuscationValidator
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// S1 pads the handshake initiation and S2 the handshake response, and amneziawg refuses the
+    /// pair when the two padded messages come out the same length - a responder has no way to tell
+    /// them apart on the wire. It refuses the device configuration as a unit, so a profile that
+    /// trips this does not produce a complaint from one node: it produces a fleet where no
+    /// interface comes up at all, which is why it is caught here and not there.
+    /// </summary>
+    private static bool ValidateHandshakeSizes(ServerObfuscationProfile obfuscation, out ApiError error)
+    {
+        error = ApiError.Empty;
+        if (HandshakeSizesDiffer(obfuscation.S1, obfuscation.S2))
+        {
+            return true;
+        }
+
+        var initiation = (obfuscation.S1 ?? 0) + HandshakeInitiationSize;
+        error = new ApiError(
+            "invalid_obfuscation",
+            $"S1 and S2 must not differ by exactly {HandshakeInitiationSize - HandshakeResponseSize}: "
+            + $"the handshake initiation and the handshake response would both be {initiation} bytes, "
+            + "which amneziawg refuses. Change either by one.");
+
+        return false;
     }
 
     private static bool ValidateHeaderProtection(ServerObfuscationProfile obfuscation, out ApiError error)

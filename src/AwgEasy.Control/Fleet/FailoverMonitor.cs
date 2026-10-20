@@ -85,9 +85,10 @@ public sealed class FailoverMonitor(
                 availability.Accrue(health.Values, now);
             }
 
-            await ReportTransitionsAsync(fleetNodes, health, now, cancellationToken);
-
             var current = fleet.Current;
+
+            await ReportTransitionsAsync(fleetNodes, health, current, now, cancellationToken);
+
             var (activeNodeId, activeSince) = fleetRepository.FindActiveNode();
             var mode = fleetRepository.FindFailoverMode();
 
@@ -97,6 +98,7 @@ public sealed class FailoverMonitor(
                 fleetNodes,
                 health,
                 current.Revision,
+                current.IdentityRevision,
                 current.Obfuscation?.UsesSchema3Features == true,
                 now,
                 options.Failover);
@@ -198,6 +200,7 @@ public sealed class FailoverMonitor(
     private async Task ReportTransitionsAsync(
         IReadOnlyList<NodeRecord> fleetNodes,
         IReadOnlyDictionary<string, NodeAssessment> health,
+        FleetRecord current,
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
@@ -207,10 +210,24 @@ public sealed class FailoverMonitor(
             return;
         }
 
+        // Right after a rotation every probe is still carrying the previous config, so until each
+        // has fetched its next assignment no handshake completes anywhere and the whole fleet
+        // reads as blocked. Announcing that would page an operator about the rotation they are
+        // standing over, for nodes that are fine. The failing state is not recorded either, so if
+        // it is still there once the probes have caught up it is announced then, as news.
+        var settling = current.IdentityRotatedAt is { } rotatedAt
+            && now - rotatedAt <= options.Failover.ProbeInterval + options.Failover.ProbeHandshakeTimeout;
+
         foreach (var node in fleetNodes)
         {
             var assessment = health[node.Id];
             var previous = _states.GetValueOrDefault(node.Id);
+
+            if (settling && assessment.IsFailing && previous != assessment.State)
+            {
+                continue;
+            }
+
             _states[node.Id] = assessment.State;
 
             if (previous == assessment.State)

@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using AwgEasy.Contracts;
 using Microsoft.Data.Sqlite;
 

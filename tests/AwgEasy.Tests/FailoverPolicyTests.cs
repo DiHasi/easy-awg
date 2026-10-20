@@ -233,7 +233,8 @@ public class FailoverPolicyTests
         IReadOnlyList<NodeRecord> nodes,
         IReadOnlyList<ProbeObservation>? observations = null,
         TimeSpan? activeFor = null,
-        bool requiresCurrentSchema = false)
+        bool requiresCurrentSchema = false,
+        long identityRevision = 0)
     {
         var health = NodeHealthEvaluator.AssessAll(nodes, observations ?? [], Fleet.Now, Fleet.Options);
         return FailoverPolicy.Decide(
@@ -242,6 +243,9 @@ public class FailoverPolicyTests
             nodes,
             health,
             fleetRevision: 10,
+            // Zero by default: a fleet nobody has rotated has no node behind its identity, which
+            // is what every other case here is about.
+            identityRevision,
             requiresCurrentSchema,
             Fleet.Now,
             Fleet.Options);
@@ -390,6 +394,70 @@ public class FailoverPolicyTests
         var decision = Decide("a", [a, b, c], [Fleet.Probe(c, ProbeOutcomes.Reachable)]);
 
         Assert.Equal("c", decision.TargetNodeId);
+    }
+
+    /// <summary>
+    /// A node that has not applied the rotation yet answers with the previous key pair and the
+    /// previous preshared keys, so every config the panel has issued since fails on it - while it
+    /// reports itself perfectly healthy. Switching there would disconnect the whole fleet rather
+    /// than rescue it, so a converged node wins however little else recommends it.
+    /// </summary>
+    [Fact]
+    public void Passes_over_a_node_that_has_not_applied_the_rotated_identity()
+    {
+        var a = Fleet.Node("a", interfaceUp: false, upAgo: TimeSpan.FromMinutes(5));
+        // Everything in b's favour except the one thing that matters: first by priority, first
+        // enrolled, and one revision short of the identity.
+        var b = Fleet.Node("b", appliedRevision: 9, priority: 0, enrolledOrder: 0);
+        var c = Fleet.Node("c", appliedRevision: 10, priority: 90, enrolledOrder: 5);
+
+        var decision = Decide("a", [a, b, c], identityRevision: 10);
+
+        Assert.Equal(FailoverAction.Switch, decision.Action);
+        Assert.Equal("c", decision.TargetNodeId);
+    }
+
+    // Being behind the fleet revision is still only a preference: one peer missing is not every
+    // peer failing, so such a node is a worse target than a current one but better than none.
+    [Fact]
+    public void Still_switches_to_a_node_merely_behind_the_fleet_revision()
+    {
+        var a = Fleet.Node("a", interfaceUp: false, upAgo: TimeSpan.FromMinutes(5));
+        var b = Fleet.Node("b", appliedRevision: 9);
+
+        var decision = Decide("a", [a, b], identityRevision: 5);
+
+        Assert.Equal(FailoverAction.Switch, decision.Action);
+        Assert.Equal("b", decision.TargetNodeId);
+    }
+
+    // The only candidate is healthy, so "no healthy node can take over" would send the operator
+    // hunting a fault that is not there. What it needs is one more poll, and the message says so.
+    [Fact]
+    public void Reports_stuck_and_names_the_rotation_when_every_candidate_is_on_the_old_identity()
+    {
+        var a = Fleet.Node("a", interfaceUp: false, upAgo: TimeSpan.FromMinutes(5));
+        var b = Fleet.Node("b", appliedRevision: 9);
+
+        var decision = Decide("a", [a, b], identityRevision: 10);
+
+        Assert.Equal(FailoverAction.Stuck, decision.Action);
+        Assert.Null(decision.TargetNodeId);
+        Assert.Contains("rotated identity", decision.Message);
+    }
+
+    // A node that is behind the identity and also unhealthy is not evidence of a settling
+    // rotation, so the message must not blame one.
+    [Fact]
+    public void Reports_plain_stuck_when_nothing_is_held_back_by_the_rotation()
+    {
+        var a = Fleet.Node("a", interfaceUp: false, upAgo: TimeSpan.FromMinutes(5));
+        var b = Fleet.Node("b", interfaceUp: false, upAgo: TimeSpan.FromMinutes(5), appliedRevision: 9);
+
+        var decision = Decide("a", [a, b], identityRevision: 10);
+
+        Assert.Equal(FailoverAction.Stuck, decision.Action);
+        Assert.DoesNotContain("rotated identity", decision.Message);
     }
 }
 

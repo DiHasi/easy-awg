@@ -546,6 +546,19 @@ What it costs and what it does not:
   expose them. Turn on *Also reissue every client key pair* if the panel's own database has to be
   assumed read too; every peer's public key then changes as well, and their live traffic counters
   start again from zero.
+- **It does not take the compromised server off the air.** Nodes are fail-static, so revoking one
+  only stops new bundles reaching it: it re-applies its cached bundle indefinitely and keeps
+  serving the configs that were issued before the rotation. *Revoke, then rotate* is not
+  containment — power the host down, or have the provider destroy it. The panel says so in the
+  rotation result, naming the revoked nodes it applies to.
+- **A node that has not applied the rotation yet is not a failover target.** It answers with the
+  previous key pair while reporting itself healthy, so no current config works there. The panel
+  marks it *Previous identity*, keeps automatic failover off it, and refuses *Make active* with
+  `node_previous_identity` until it converges — one poll interval, normally under 20 seconds.
+  Because probes only re-render their own config on their next round, keep
+  `AWG_FAILOVER_GRACE_SECONDS` above `AWG_PROBE_INTERVAL_SECONDS`: for up to one round after a
+  rotation no probe can complete a handshake anywhere, and the grace period is what stops that
+  reading as a fleet-wide outage.
 
 Afterwards the work is handing the new configs out, so the panel tracks it: a peer is marked
 `generation 3` on the **Clients** list until its config has been rendered again, which downloading
@@ -639,6 +652,11 @@ actually needs it.
 - Automatic failover cannot be exercised end to end in CI: arming it requires a DNS provider, and
   there is none there. The script asserts the recommendation the manual path produces instead,
   which goes through the same policy.
+- A rotation leaves one probe round's worth of failures in the availability history. Probes
+  re-render their config only on their next round, so until then none completes a handshake and
+  those rounds are recorded as unreachable. Nothing acts on them - the grace period covers it and
+  the monitor withholds the alerts - but the ribbon shows a notch that was the rotation, not the
+  nodes.
 - The predecessor single-server app is preserved at tag `v0.9-standalone` and has been removed
   from the tree.
 
@@ -1183,6 +1201,19 @@ HeaderProtectionKey: они лежат в конфиге на диске той 
   что прочитанный диск ноды их не раскрывает. Включайте *Also reissue every client key pair*, если
   базу самой панели тоже приходится считать прочитанной: тогда меняются и публичные ключи пиров, а
   их счётчики трафика начинают считать с нуля.
+- **Скомпрометированный сервер это не выключает.** Ноды fail-static: отзыв только прекращает
+  выдачу новых бандлов, а нода бесконечно применяет закешированный и продолжает обслуживать
+  конфиги, выданные до ротации. «Отозвать, потом ротировать» — это не изоляция: гасите хост или
+  просите хостера его уничтожить. Панель говорит об этом в результате ротации и называет
+  отозванные ноды, к которым это относится.
+- **Нода, ещё не применившая ротацию, не может стать активной.** Она отвечает прежней парой
+  ключей, но сообщает о себе, что здорова, так что ни один текущий конфиг там не работает. Панель
+  помечает её как *Previous identity*, автоматический фейловер её не выбирает, а *Make active*
+  отвечает `node_previous_identity`, пока она не догонит — один интервал опроса, обычно меньше 20
+  секунд. Пробы перегенерируют свой конфиг только на следующем круге, поэтому держите
+  `AWG_FAILOVER_GRACE_SECONDS` больше `AWG_PROBE_INTERVAL_SECONDS`: до одного круга после ротации
+  ни одна проба нигде не завершит handshake, и именно grace не даёт прочитать это как аварию всего
+  флота.
 
 Дальше остаётся выдать новые конфиги, и панель за этим следит: пир помечен в списке **Clients**
 как `generation 3`, пока его конфиг не отрендерят снова, а это делает любое из: скачивание, показ
@@ -1273,5 +1304,9 @@ Cloudflare остаётся единственным DNS-провайдером 
 - Автоматический фейловер нельзя прогнать целиком в CI: чтобы его вооружить, нужен DNS-провайдер,
   а там его нет. Скрипт вместо этого проверяет рекомендацию, которую выдаёт ручной путь через ту
   же политику.
+- Ротация оставляет в истории доступности один круг проб, записанный как недоступность. Пробы
+  перегенерируют конфиг только на следующем круге, так что до этого handshake нигде не проходит.
+  Никаких действий из этого не следует — grace это покрывает, а алерты монитор придерживает, — но
+  на полосе остаётся зарубка, которая была ротацией, а не нодами.
 - Предшественник — одиночное приложение — сохранён под тегом `v0.9-standalone` и удалён из
   дерева.

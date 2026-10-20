@@ -110,6 +110,17 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             BackfillGeneration(connection, "client_shares", "generation");
         }
 
+        // The revision the identity last changed at, which is what separates "behind by one added
+        // peer" from "running the previous key pair". Zero is the honest start and needs no
+        // backfill: a fleet that has never been rotated has no node behind its identity, and every
+        // applied_revision is at or above zero.
+        EnsureColumn(connection, "fleet", "identity_revision", "INTEGER NOT NULL DEFAULT 0");
+
+        // When it changed, which the monitor needs for a different reason: for up to one probe
+        // round after a rotation the probes are still carrying the previous config, so nodes that
+        // have already converged read as blocked through no fault of their own.
+        EnsureColumn(connection, "fleet", "identity_rotated_at", "TEXT NULL");
+
         // Indexed here rather than in the schema above: a clients table written before grouping
         // has no group_id while that runs, and an index on a column that does not exist yet is
         // an error that stops the panel from opening an older database at all.
@@ -222,6 +233,12 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             active_node_set_at   TEXT    NULL,
             failover_mode        TEXT    NOT NULL DEFAULT 'manual',
             tunnel_mtu           INTEGER NOT NULL DEFAULT 1280,
+            -- The revision at which the identity last changed, and when. A node whose
+            -- applied_revision is below this is running the previous key pair, the previous
+            -- preshared keys and the previous wire format: it serves no config the panel has
+            -- issued since, so it is not a place traffic may be sent. Zero means never rotated.
+            identity_revision    INTEGER NOT NULL DEFAULT 0,
+            identity_rotated_at  TEXT    NULL,
             created_at           TEXT    NOT NULL,
             updated_at           TEXT    NOT NULL
         );

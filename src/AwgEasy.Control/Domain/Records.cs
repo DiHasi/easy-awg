@@ -9,6 +9,13 @@ namespace AwgEasy.Control;
 /// override runs. One value for all three because each must be sized against the same worst-case
 /// client path; see <see cref="FleetService.DefaultTunnelMtu"/> for why the default is what it
 /// is.</param>
+/// <param name="IdentityRevision">
+/// The revision at which <see cref="ServerPrivateKey"/> and the fleet's preshared keys last
+/// changed, or 0 on a fleet that has never been rotated. A node below it is still running the
+/// previous identity, so it serves no config this panel has issued since - which is a different
+/// thing from merely being out of sync, and the one state traffic must never be sent into.
+/// </param>
+/// <param name="IdentityRotatedAt">When that happened. Null until the first rotation.</param>
 public sealed record FleetRecord(
     int Generation,
     string ServerPrivateKey,
@@ -23,7 +30,9 @@ public sealed record FleetRecord(
     int TunnelMtu,
     string EndpointHost,
     ServerObfuscationProfile? Obfuscation,
-    long Revision);
+    long Revision,
+    long IdentityRevision = 0,
+    DateTimeOffset? IdentityRotatedAt = null);
 
 /// <param name="GroupId">The person this config belongs to, or null while it is filed nowhere.
 /// The panel's own bookkeeping: no node is told about it and no config changes with it.</param>

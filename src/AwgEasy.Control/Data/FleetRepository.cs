@@ -54,7 +54,9 @@ public sealed class FleetRepository(Database database)
             reader.GetInt32("tunnel_mtu"),
             reader.GetString("endpoint_host"),
             Deserialize(reader.GetStringOrNull("obfuscation_json")),
-            reader.GetInt64("revision"));
+            reader.GetInt64("revision"),
+            reader.GetInt64("identity_revision"),
+            reader.GetTimestampOrNull("identity_rotated_at"));
     }
 
     public void Insert(FleetRecord fleet, DateTimeOffset now)
@@ -227,6 +229,11 @@ public sealed class FleetRepository(Database database)
                    server_public_key   = $public,
                    obfuscation_json    = $obfuscation,
                    revision            = revision + 1,
+                   -- The revision this identity starts at. SQLite reads the right-hand side from
+                   -- the row as it was, so this is the same new value `revision` gets, written in
+                   -- the same statement: the two can never disagree about which revision it was.
+                   identity_revision   = revision + 1,
+                   identity_rotated_at = $now,
                    updated_at          = $now
              WHERE id = 1
             RETURNING generation, revision

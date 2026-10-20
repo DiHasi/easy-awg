@@ -21,6 +21,13 @@ export function describeNode(node: Node): { word: string, tone: Tone } {
   if (node.health === 'silent') {
     return { word: 'Silent', tone: 'warning' }
   }
+  // Running the key pair from before the last rotation, so every current config fails on it. Its
+  // own word for itself is "healthy" and it is one poll from being right, but until then no
+  // traffic may be sent here - said before "Active" because the record pointing at it is the
+  // worst version of this, and kept apart from "Updating" because the two are not the same news.
+  if (!node.onCurrentIdentity) {
+    return { word: 'Previous identity', tone: 'error' }
+  }
   if (node.isActive) {
     return { word: 'Active', tone: 'live' }
   }

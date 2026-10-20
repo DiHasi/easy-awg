@@ -343,6 +343,90 @@ public class FleetRotationTests(ControlPlaneFixture fixture) : IClassFixture<Con
         Assert.Contains(fixture.Notifications.Sent, sent => sent.Kind == "fleet.rotated");
     }
 
+    /// <summary>
+    /// Rotation disconnects every peer, and a disabled one's config is in somebody's hands exactly
+    /// like an enabled one's. Leaving it on the old preshared key would quietly hand that key
+    /// material back the moment the peer was enabled again - which is the whole reason
+    /// <c>ClientRepository.ListAll</c> exists rather than reusing <c>ListEnabled</c>.
+    /// </summary>
+    [Fact]
+    public async Task A_disabled_peer_is_re_keyed_too()
+    {
+        var (admin, agentClient, agent) = await EnrolledAgentAsync("rotate-node-disabled");
+
+        var created = await admin.PostAsJsonAsync("/api/clients", new CreateClientRequest("rotate-disabled", null));
+        var client = (await created.Content.ReadFromJsonAsync<ClientResponse>())!;
+
+        var before = await FetchAsync(agentClient, agent);
+        var presharedKeyBefore = before.Peers.Single(peer => peer.PublicKey == client.PublicKey).PresharedKey;
+
+        (await admin.PostAsync($"/api/clients/{client.Id}/disable", null)).EnsureSuccessStatusCode();
+
+        // Disabled, so it is in no bundle at all while the rotation runs - nothing in the peer list
+        // a node is handed could show whether it was touched.
+        var rotation = await RotateAsync(admin);
+        Assert.Contains(rotation.Clients, entry => entry.Id == client.Id);
+
+        (await admin.PostAsync($"/api/clients/{client.Id}/enable", null)).EnsureSuccessStatusCode();
+
+        var after = await FetchAsync(agentClient, agent, before.Revision);
+        var peer = after.Peers.Single(entry => entry.PublicKey == client.PublicKey);
+        Assert.NotEqual(presharedKeyBefore, peer.PresharedKey);
+    }
+
+    /// <summary>
+    /// A node that has not applied the rotation still answers with the previous key pair, so no
+    /// config the panel has issued since works there - while its own reports say it is healthy.
+    /// The manual button is forgiving about most things on purpose; this one is not a judgement
+    /// but arithmetic, and overruling it would disconnect the whole fleet.
+    /// </summary>
+    [Fact]
+    public async Task A_node_on_the_previous_identity_cannot_be_made_active()
+    {
+        var (admin, agentClient, agent) = await EnrolledAgentAsync("rotate-node-activate");
+
+        // Healthy, with an address, and reporting the revision it has applied - everything the
+        // activate path asks for apart from the rotation it has not seen.
+        await ReportAsync(agentClient, agent, appliedRevision: 1, publicIp: "203.0.113.77");
+
+        var rotation = await RotateAsync(admin);
+
+        var refused = await admin.PostAsync($"/api/nodes/{agent.NodeId}/activate", null);
+        Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+        var error = (await refused.Content.ReadFromJsonAsync<ApiError>())!;
+        Assert.Equal("node_previous_identity", error.Code);
+
+        var behind = (await admin.GetFromJsonAsync<NodeResponse[]>("/api/nodes"))!.Single(node => node.Id == agent.NodeId);
+        Assert.False(behind.OnCurrentIdentity);
+        // And it is a different claim from being out of sync, which it also is.
+        Assert.False(behind.InSync);
+
+        // Once it has applied the rotation, the same request goes through.
+        await ReportAsync(agentClient, agent, appliedRevision: rotation.Revision, publicIp: "203.0.113.77");
+
+        var converged = (await admin.GetFromJsonAsync<NodeResponse[]>("/api/nodes"))!.Single(node => node.Id == agent.NodeId);
+        Assert.True(converged.OnCurrentIdentity);
+
+        (await admin.PostAsync($"/api/nodes/{agent.NodeId}/activate", null)).EnsureSuccessStatusCode();
+    }
+
+    // Rotation replaces what the fleet runs; it does not take a compromised server off the air,
+    // because a node the panel stops configuring keeps serving its cached bundle. An operator who
+    // revoked a node and then rotated has every reason to believe otherwise.
+    [Fact]
+    public async Task The_response_says_that_a_fail_static_node_keeps_serving_the_old_configs()
+    {
+        var (admin, _, agent) = await EnrolledAgentAsync("rotate-node-revoked");
+
+        (await admin.PostAsync($"/api/nodes/{agent.NodeId}/revoke", null)).EnsureSuccessStatusCode();
+
+        var rotation = await RotateAsync(admin);
+
+        Assert.Contains("rotate-node-revoked", rotation.Warning);
+        Assert.Contains("cached bundle", rotation.Warning);
+        Assert.Contains("power the host down", rotation.Warning, StringComparison.OrdinalIgnoreCase);
+    }
+
     // A scraper watching the fleet should see the generation move: it is the one number that says
     // an identity was replaced, and the alert worth having is one that never moves.
     [Fact]
@@ -362,4 +446,27 @@ public class FleetRotationTests(ControlPlaneFixture fixture) : IClassFixture<Con
 
     private static async Task<ClientResponse> ReadAsync(HttpClient admin, string clientId)
         => (await admin.GetFromJsonAsync<ClientResponse[]>("/api/clients"))!.Single(entry => entry.Id == clientId);
+
+    /// <summary>A status report, which is the only way a node's applied revision moves.</summary>
+    private static async Task ReportAsync(HttpClient client, TestAgent agent, long appliedRevision, string? publicIp = null)
+    {
+        var report = new NodeStatusReport(
+            AppliedRevision: appliedRevision,
+            InterfaceUp: true,
+            Backend: "Kernel module",
+            AgentVersion: "test-agent/1.0",
+            ReportedAt: DateTimeOffset.UtcNow,
+            Peers: [],
+            Metrics: null,
+            LastError: null,
+            BundleSchemaVersion: DesiredStateBundle.CurrentSchemaVersion,
+            PublicIp: publicIp);
+
+        var response = await client.SendAsync(agent.SignedRequest(
+            HttpMethod.Post,
+            $"/api/v1/agents/{agent.NodeId}/status",
+            JsonContent.Create(report)));
+
+        response.EnsureSuccessStatusCode();
+    }
 }

@@ -24,10 +24,7 @@ public static class ServerObfuscationGenerator
     /// <summary>
     /// Junk padding for each message type. At least
     /// <see cref="AwgObfuscationValidator.HeaderProtectionNonceSize"/>, because the header cipher
-    /// nonce rides in this padding, and drawn from a band narrow enough that no two of the four
-    /// can differ by the 56 bytes that would make a handshake initiation and a handshake response
-    /// the same length on the wire - which amneziawg refuses, and which would be a profile the
-    /// nodes reject as one.
+    /// nonce rides in this padding.
     /// </summary>
     private const int MinPadding = 16;
 
@@ -48,11 +45,12 @@ public static class ServerObfuscationGenerator
     public static ServerObfuscationProfile Rotate(ServerObfuscationProfile? current, IAwgKeyGenerator keys)
     {
         var headers = DrawHeaders();
+        var s1 = RandomNumberGenerator.GetInt32(MinPadding, MaxPadding);
 
         return (current ?? new ServerObfuscationProfile()) with
         {
-            S1 = RandomNumberGenerator.GetInt32(MinPadding, MaxPadding),
-            S2 = RandomNumberGenerator.GetInt32(MinPadding, MaxPadding),
+            S1 = s1,
+            S2 = DrawResponsePadding(s1),
             S3 = RandomNumberGenerator.GetInt32(MinPadding, MaxPadding),
             S4 = RandomNumberGenerator.GetInt32(MinPadding, MaxPadding),
             H1 = headers[0],
@@ -63,6 +61,26 @@ public static class ServerObfuscationGenerator
             // than a second source of key material in the panel.
             HeaderProtectionKey = keys.GenerateHeaderProtectionKey()
         };
+    }
+
+    /// <summary>
+    /// The handshake response padding, never the one value that would make the padded response the
+    /// same length as the padded initiation - which amneziawg refuses, taking the whole device
+    /// configuration with it. The band these are drawn from is narrower than the gap, so as it
+    /// stands the draw cannot land there; stated as a condition anyway, because the alternative is
+    /// a correct generator resting on an arithmetic coincidence that widening the band would
+    /// quietly undo. <see cref="AwgObfuscationValidator"/> enforces the same rule on the way in.
+    /// </summary>
+    private static int DrawResponsePadding(int initiationPadding)
+    {
+        int padding;
+        do
+        {
+            padding = RandomNumberGenerator.GetInt32(MinPadding, MaxPadding);
+        }
+        while (!AwgObfuscationValidator.HandshakeSizesDiffer(initiationPadding, padding));
+
+        return padding;
     }
 
     /// <summary>

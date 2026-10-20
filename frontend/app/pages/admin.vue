@@ -361,6 +361,9 @@ onMounted(loadFleet)
               : 'Client key pairs were left alone.' }}
           </p>
           <p class="mt-2">
+            {{ rotation.warning }}
+          </p>
+          <p class="mt-2">
             <ULink to="/#peers">
               Go to the peers
             </ULink>
@@ -416,6 +419,15 @@ onMounted(loadFleet)
                 class="mt-0.5 size-4 shrink-0 text-muted"
               />
               The bundle signing key is left alone, so no node has to be re-enrolled.
+            </li>
+            <li class="flex gap-2">
+              <UIcon
+                name="i-lucide-x"
+                class="mt-0.5 size-4 shrink-0 text-error"
+              />
+              It does not take the compromised server off the air. Nodes are fail-static: one this
+              panel stops configuring re-applies its cached bundle and keeps serving the old
+              configs. Power that host down as well.
             </li>
           </ul>
 
