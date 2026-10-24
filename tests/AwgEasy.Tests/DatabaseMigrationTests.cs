@@ -216,6 +216,38 @@ public sealed class DatabaseMigrationTests : IDisposable
         Assert.Equal(state.AgentPublicKey, AwgEasy.Contracts.BundleSigning.ExportPublicKey(key));
     }
 
+    /// <summary>
+    /// A panel rewrites its own name on every round. Without that, a row created the day the pair
+    /// was formed could never be renamed: nothing else touches the column, and a panel can neither
+    /// revoke nor delete itself. In a container the fallback is the container id, so the first
+    /// name is very often one nobody chose.
+    /// </summary>
+    [Fact]
+    public void A_panel_can_rename_itself()
+    {
+        WriteFleetWithoutTunnelMtu();
+
+        var database = new Database(Options(), NullLogger<Database>.Instance);
+        database.Migrate();
+
+        var panels = new PanelRepository(database);
+        var now = DateTimeOffset.UtcNow;
+        panels.Insert(new PanelRecord(
+            "self",
+            Name: "8f3c91a2b7de",
+            Hostname: null,
+            AgentPublicKey: "pub",
+            Revoked: false,
+            EnrolledAt: now,
+            Role: PanelRoles.Active));
+
+        panels.RecordSelf("self", "panel-amsterdam", PanelRoles.Active, 1, "https://a.example.com", "203.0.113.1", now, now);
+
+        var panel = panels.Find("self")!;
+        Assert.Equal("panel-amsterdam", panel.Name);
+        Assert.Equal("https://a.example.com", panel.Url);
+    }
+
     /// <summary>A share link as a panel that predates the generation check wrote it.</summary>
     private void WriteShare(string tokenHash, string clientId)
     {

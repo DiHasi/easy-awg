@@ -140,13 +140,22 @@ public sealed class PanelRepository(Database database)
 
     /// <summary>What this panel reports about itself, so its own row reads the same on both sides
     /// of the pair rather than only on the replica that told it.</summary>
-    public void RecordSelf(string id, string role, long term, string? url, string? publicIp, DateTimeOffset? snapshotAt, DateTimeOffset now)
+    public void RecordSelf(
+        string id,
+        string name,
+        string role,
+        long term,
+        string? url,
+        string? publicIp,
+        DateTimeOffset? snapshotAt,
+        DateTimeOffset now)
     {
         using var connection = database.Open();
         using var command = connection.Sql(
             """
             UPDATE panels
-               SET url           = COALESCE($url, url),
+               SET name          = $name,
+                   url           = COALESCE($url, url),
                    public_ip     = COALESCE($publicIp, public_ip),
                    agent_version = $version,
                    role          = $role,
@@ -156,6 +165,11 @@ public sealed class PanelRepository(Database database)
              WHERE id = $id
             """,
             ("$id", id),
+            // Rewritten every round rather than only at enrollment: the row is created from
+            // AWG_PANEL_NAME, and without this a panel that was first enrolled under a container
+            // id could never be renamed - it cannot revoke or delete itself, and nothing else
+            // touches the column.
+            ("$name", name),
             ("$url", url),
             ("$publicIp", publicIp),
             ("$version", PanelVersion.Current),

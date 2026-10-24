@@ -39,7 +39,7 @@ docs/                    Operator documentation, en/ and ru/ in step. README.md 
 
 ```bash
 dotnet build Awg-easy.sln          # whole solution
-dotnet test Awg-easy.sln           # 376 tests, all must pass
+dotnet test Awg-easy.sln           # 384 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
 cd frontend && pnpm run test       # vitest, in a Nuxt environment

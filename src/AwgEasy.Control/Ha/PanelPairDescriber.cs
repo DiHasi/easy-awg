@@ -22,7 +22,7 @@ public sealed class PanelPairDescriber(
         var now = DateTimeOffset.UtcNow;
 
         return [..panels.List()
-            .Select(panel => PanelResponse.From(panel, state.PanelId, pairState.ActivePanelId, state.SnapshotAt, options.Panel.Grace, now))
+            .Select(panel => PanelResponse.From(panel, state.PanelId, pairState.ActivePanelId, state.SnapshotAt, state.SyncedAt, options.Panel.Grace, now))
             .OrderByDescending(panel => panel.IsActive)
             .ThenBy(panel => panel.Revoked)
             .ThenBy(panel => panel.EnrolledAt)];
@@ -39,7 +39,7 @@ public sealed class PanelPairDescriber(
         return new PanelPairResponse(
             state.Role,
             state.PanelId,
-            self?.Name ?? options.Panel.Name ?? Environment.MachineName,
+            self?.Name ?? options.Panel.DisplayName,
             Math.Max(pairState.Term, state.PromotedTerm),
             pairState.ActivePanelId,
             pairState.PromotedAt,

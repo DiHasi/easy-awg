@@ -325,6 +325,14 @@ public sealed record PanelOptions(
 
     public bool StartsAsStandby => Role == PanelRoles.Standby;
 
+    /// <summary>
+    /// How this panel is listed in the pair. The machine name is a poor fallback in a container -
+    /// it is the container id, and a new one every time the container is recreated - so setting
+    /// AWG_PANEL_NAME is worth doing, and the panel rewrites its own row from this on every round
+    /// rather than freezing whatever it happened to be called the day the pair was formed.
+    /// </summary>
+    public string DisplayName => Name ?? Environment.MachineName;
+
     public static PanelOptions FromEnvironment(Func<string, string?> value, Func<string, int, int> readInt)
         => new(
             (value("AWG_PANEL_ROLE") ?? PanelRoles.Active).ToLowerInvariant(),

@@ -87,7 +87,7 @@ public sealed class PanelPromotionService(
         store.SetRole(PanelRoles.Active, term, now);
         store.ClearSyncState();
         context.Reload();
-        panels.RecordSelf(state.PanelId, PanelRoles.Active, term, options.Panel.Url, options.Panel.PublicIp, state.SnapshotAt, now);
+        panels.RecordSelf(state.PanelId, options.Panel.DisplayName, PanelRoles.Active, term, options.Panel.Url, options.Panel.PublicIp, state.SnapshotAt, now);
 
         var warning = await PointRecordAsync(cancellationToken);
         var message = $"This panel took charge at term {term}: {reason}."
@@ -157,7 +157,7 @@ public sealed class PanelPromotionService(
 
         store.SetRole(PanelRoles.Standby, term, now);
         context.Reload();
-        panels.RecordSelf(state.PanelId, PanelRoles.Standby, term, options.Panel.Url, options.Panel.PublicIp, state.SnapshotAt, now);
+        panels.RecordSelf(state.PanelId, options.Panel.DisplayName, PanelRoles.Standby, term, options.Panel.Url, options.Panel.PublicIp, state.SnapshotAt, now);
 
         var message = $"This panel stepped down to standby at term {term}: {reason}.";
         events.Record("panel.demoted", message, actor: actor);

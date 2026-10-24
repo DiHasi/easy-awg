@@ -169,7 +169,7 @@ public sealed class PanelPairService(
             pair = pair with { Term = panels.AdoptAsActive(state.PanelId, now), ActivePanelId = state.PanelId };
         }
 
-        panels.RecordSelf(state.PanelId, PanelRoles.Active, pair.Term, options.Panel.Url, options.Panel.PublicIp, state.SnapshotAt, now);
+        panels.RecordSelf(state.PanelId, options.Panel.DisplayName, PanelRoles.Active, pair.Term, options.Panel.Url, options.Panel.PublicIp, state.SnapshotAt, now);
 
         var peers = panels.List()
             .Where(panel => panel.Id != state.PanelId && !panel.Revoked)
@@ -379,7 +379,7 @@ public sealed class PanelPairService(
         // The standby's own row, so its pages name the right role and term before the next
         // snapshot replaces the table with the active's copy of it.
         var applied = context.State;
-        panels.RecordSelf(state.PanelId, PanelRoles.Standby, live.Term, options.Panel.Url, options.Panel.PublicIp, applied.SnapshotAt, now);
+        panels.RecordSelf(state.PanelId, options.Panel.DisplayName, PanelRoles.Standby, live.Term, options.Panel.Url, options.Panel.PublicIp, applied.SnapshotAt, now);
 
         await client.ReportStatusAsync(
             peerUrl,

@@ -23,7 +23,31 @@ builder.WebHost.UseUrls(options.HealthUrl);
 
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton<AgentIdentityStore>();
-builder.Services.AddHttpClient<ControlPlaneClient>(client => client.Timeout = TimeSpan.FromSeconds(20));
+// Two minutes, matching the handler rotation IHttpClientFactory would have done if these clients
+// were not held by hosted services, and in the same ballpark as the TTL a failover record is
+// served with. It never interrupts a request in flight - it only stops a connection being reused
+// past that age - so the cost is one extra handshake every couple of minutes.
+var agentConnectionLifetime = TimeSpan.FromMinutes(2);
+
+// Retires a pooled connection by age, which is the only thing that makes the agent follow a
+// control plane that has moved.
+//
+// Without it the agent is pinned to whatever its hostname resolved to when the process started.
+// SocketsHttpHandler drops a connection after a minute idle but never retires one for age, and
+// the agent polls every twenty seconds, so the same socket is reused for the life of the process
+// and the name is never resolved a second time. IHttpClientFactory's own handler rotation does
+// not help here: these typed clients are taken into hosted services, which hold one instance -
+// and so one handler - forever.
+//
+// A dead panel is not the dangerous case; the connection breaks and the next attempt resolves
+// afresh. The dangerous case is a panel that is up and has been superseded: it answers 503 over
+// a perfectly healthy socket, so nothing ever forces a new connection, and the node would sit
+// there re-applying its cached bundle while the fleet it belongs to is being served elsewhere.
+builder.Services.AddHttpClient<ControlPlaneClient>(client => client.Timeout = TimeSpan.FromSeconds(20))
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+    {
+        PooledConnectionLifetime = agentConnectionLifetime
+    });
 
 if (options.IsProbe)
 {
@@ -48,7 +72,14 @@ else
         // These services answer with one short line. Capping the buffer means a misconfigured URL that
         // serves a whole web page is a failed lookup rather than something the agent reads into memory.
         client.MaxResponseContentBufferSize = 4096;
-    });
+    })
+        // Same reason, different consequence: this answer is what the panel points the failover
+        // record at, so an agent pinned to an echo service that has moved stops noticing that its
+        // own address changed.
+        .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+        {
+            PooledConnectionLifetime = agentConnectionLifetime
+        });
     builder.Services.AddHostedService<ReconcileService>();
 }
 

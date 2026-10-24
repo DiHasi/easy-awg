@@ -475,8 +475,17 @@ public static class PanelStates
 
 /// <param name="IsSelf">True for the panel answering the request, so the page can say "this one"
 /// without the caller having to compare ids.</param>
-/// <param name="LagSeconds">How far behind this panel's applied snapshot is, or null when it has
-/// never applied one. The number an operator actually wants before switching.</param>
+/// <param name="LagSeconds">
+/// How stale this panel's copy of the fleet is: seconds since it last confirmed it was current.
+/// Null on the panel in charge, which is the source rather than a copy of anything, and on a
+/// replica that has never reported in.
+///
+/// Deliberately not measured from <see cref="SnapshotAt"/>. A snapshot is re-fetched only when
+/// the fleet actually changes, so on a quiet fleet the moment it was published ages without
+/// bound while the replica is perfectly up to date - reading that out as "behind" sends an
+/// operator looking for a replication fault that is not there, and it is the number they check
+/// before deciding whether this panel is safe to promote.
+/// </param>
 public sealed record PanelResponse(
     string Id,
     string Name,
@@ -502,6 +511,7 @@ public sealed record PanelResponse(
         string selfId,
         string? activePanelId,
         DateTimeOffset? selfSnapshotAt,
+        DateTimeOffset? selfSyncedAt,
         TimeSpan grace,
         DateTimeOffset now)
     {
@@ -512,6 +522,12 @@ public sealed record PanelResponse(
         var snapshotAt = isSelf ? selfSnapshotAt ?? panel.SnapshotAt : panel.SnapshotAt;
         var isActive = string.Equals(panel.Id, activePanelId, StringComparison.Ordinal);
         var silent = panel.LastSeenAt is null || now - panel.LastSeenAt > grace;
+
+        // When this panel last established that it held the current fleet - a pull that either
+        // applied a snapshot or was answered 304. For itself that is its own clock; for a peer it
+        // is the last time the peer reported in, which is the same fact seen from one side further
+        // away.
+        var confirmedAt = isSelf ? selfSyncedAt : panel.LastSeenAt;
 
         var state = panel.Revoked ? PanelStates.Revoked
             : isActive ? PanelStates.Active
@@ -535,12 +551,14 @@ public sealed record PanelResponse(
             snapshotAt,
             panel.LastSeenAt,
             panel.LastError,
-            snapshotAt is null ? null : (int)Math.Max(0, Math.Round((now - snapshotAt.Value).TotalSeconds)),
+            isActive || confirmedAt is null
+                ? null
+                : (int)Math.Max(0, Math.Round((now - confirmedAt.Value).TotalSeconds)),
             state,
-            Reason(state, panel, snapshotAt, now));
+            Reason(state, panel, confirmedAt, now));
     }
 
-    private static string Reason(string state, PanelRecord panel, DateTimeOffset? snapshotAt, DateTimeOffset now) => state switch
+    private static string Reason(string state, PanelRecord panel, DateTimeOffset? confirmedAt, DateTimeOffset now) => state switch
     {
         PanelStates.Revoked => "Cut off on purpose: it receives no configuration and cannot take over.",
         PanelStates.Active => $"In charge of the fleet at term {panel.Term}.",
@@ -548,8 +566,8 @@ public sealed record PanelResponse(
             ? $"Nothing heard from it for {PanelFailoverPolicy.Describe(now - seen)}."
             : "Enrolled, but it has never reported in.",
         PanelStates.NeverSynced => "In touch, but it has not applied a snapshot yet, so it holds no fleet state and cannot take over.",
-        _ => snapshotAt is { } applied
-            ? $"Replicating; its configuration is {PanelFailoverPolicy.Describe(now - applied)} behind."
+        _ => confirmedAt is { } confirmed
+            ? $"Replicating; last confirmed current {PanelFailoverPolicy.Describe(now - confirmed)} ago."
             : "Replicating."
     };
 }

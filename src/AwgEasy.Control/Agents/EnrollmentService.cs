@@ -274,7 +274,7 @@ public sealed class EnrollmentService(
         {
             panels.Insert(new PanelRecord(
                 self.PanelId,
-                options.Panel.Name ?? Environment.MachineName,
+                options.Panel.DisplayName,
                 Environment.MachineName,
                 self.AgentPublicKey,
                 Revoked: false,
@@ -315,7 +315,7 @@ public sealed class EnrollmentService(
                 panel.Id,
                 current.SigningPublicKey,
                 current.SigningKeyId,
-                selfRow?.Name ?? options.Panel.Name ?? Environment.MachineName,
+                selfRow?.Name ?? options.Panel.DisplayName,
                 term,
                 options.Panel.Url),
             ApiError.Empty);

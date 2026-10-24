@@ -327,8 +327,13 @@ async function act(call: () => Promise<unknown>, title: string) {
           v-if="pair.role === 'standby'"
           label="Configuration"
         >
+          <!--
+            When the configuration this panel holds was published, not how stale it is. On a quiet
+            fleet those are different numbers: nothing has changed for an hour, so the snapshot is
+            an hour old and perfectly current. Staleness is "Last pull" beside it.
+          -->
           <span :class="pair.hasFleetState ? '' : 'text-error'">
-            {{ pair.snapshotAt ? `${relativeTime(pair.snapshotAt)} behind` : 'nothing replicated' }}
+            {{ pair.snapshotAt ? `published ${relativeTime(pair.snapshotAt)}` : 'nothing replicated' }}
           </span>
         </SpecItem>
         <SpecItem
