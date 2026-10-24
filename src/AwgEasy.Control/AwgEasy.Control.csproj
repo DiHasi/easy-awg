@@ -13,6 +13,10 @@
             libraries this side actually needs.
         -->
         <PublishAot>false</PublishAot>
+        <!-- Overridden per build, like the agent's. The other panel of a pair reads this to
+             say which of the two is behind - and a standby one release behind is refused the
+             snapshot, so the number has to be the real one. -->
+        <Version>0.0.0-dev</Version>
         <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
     </PropertyGroup>
 

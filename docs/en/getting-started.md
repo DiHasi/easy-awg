@@ -46,8 +46,9 @@ for this reason: build once somewhere with room, push, and pull on the servers.
 
 ```bash
 # On a build machine or in CI. AGENT_VERSION is what each node reports back to
-# the panel; leave it out and the agent identifies itself as 0.0.0-dev.
-# The panel is at 1.10.0 while the node image stays at 1.4.1: the agent did not change
+# the panel, and PANEL_VERSION is what one panel of a pair reports to the other;
+# leave either out and that side identifies itself as 0.0.0-dev.
+# The panel is at 1.11.0 while the node image stays at 1.4.2: the agent did not change
 # in it. Rebuild the node image when something under src/AwgEasy.Node,
 # src/AwgEasy.Contracts or docker/node.Dockerfile does, not when only the panel moved.
 # Both images are multi-arch (amd64 and arm64 - a probe on a Raspberry Pi), built on an amd64
@@ -57,9 +58,9 @@ for this reason: build once somewhere with room, push, and pull on the servers.
 # default builder uses the "docker" driver, which refuses a two-architecture build
 # outright, and a shell where the default has reset back to it is the normal case.
 docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/control.Dockerfile \
-    -t dihasi/awg-control:1.10.0 -t dihasi/awg-control:latest --push .
+    --build-arg PANEL_VERSION=1.11.0 -t dihasi/awg-control:1.11.0 -t dihasi/awg-control:latest --push .
 docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/node.Dockerfile \
-    --build-arg AGENT_VERSION=1.4.1 -t dihasi/awg-node:1.4.1 -t dihasi/awg-node:latest --push .
+    --build-arg AGENT_VERSION=1.4.2 -t dihasi/awg-node:1.4.2 -t dihasi/awg-node:latest --push .
 ```
 
 ```bash

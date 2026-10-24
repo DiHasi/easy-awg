@@ -32,12 +32,15 @@ RUN pnpm run generate
 
 FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release
+# Stamped into the panel assembly so the other panel of a pair can tell which of the two is
+# running an older build. Left out, the panel calls itself 0.0.0-dev.
+ARG PANEL_VERSION=0.0.0-dev
 WORKDIR /src
 COPY ["src/AwgEasy.Contracts/AwgEasy.Contracts.csproj", "src/AwgEasy.Contracts/"]
 COPY ["src/AwgEasy.Control/AwgEasy.Control.csproj", "src/AwgEasy.Control/"]
 RUN dotnet restore "src/AwgEasy.Control/AwgEasy.Control.csproj"
 COPY src/ src/
-RUN dotnet publish "src/AwgEasy.Control/AwgEasy.Control.csproj" -c $BUILD_CONFIGURATION -p:UseAppHost=false -o /app/publish
+RUN dotnet publish "src/AwgEasy.Control/AwgEasy.Control.csproj" -c $BUILD_CONFIGURATION -p:UseAppHost=false -p:Version=$PANEL_VERSION -o /app/publish
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
