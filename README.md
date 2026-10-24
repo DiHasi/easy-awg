@@ -83,7 +83,7 @@ for this reason: build once somewhere with room, push, and pull on the servers.
 ```bash
 # On a build machine or in CI. AGENT_VERSION is what each node reports back to
 # the panel; leave it out and the agent identifies itself as 0.0.0-dev.
-# The panel is at 1.9.0 while the node image stays at 1.4.1: the agent did not change
+# The panel is at 1.10.0 while the node image stays at 1.4.1: the agent did not change
 # in it. Rebuild the node image when something under src/AwgEasy.Node,
 # src/AwgEasy.Contracts or docker/node.Dockerfile does, not when only the panel moved.
 # Both images are multi-arch (amd64 and arm64 - a probe on a Raspberry Pi), built on an amd64
@@ -93,7 +93,7 @@ for this reason: build once somewhere with room, push, and pull on the servers.
 # default builder uses the "docker" driver, which refuses a two-architecture build
 # outright, and a shell where the default has reset back to it is the normal case.
 docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/control.Dockerfile \
-    -t dihasi/awg-control:1.9.0 -t dihasi/awg-control:latest --push .
+    -t dihasi/awg-control:1.10.0 -t dihasi/awg-control:latest --push .
 docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/node.Dockerfile \
     --build-arg AGENT_VERSION=1.4.1 -t dihasi/awg-node:1.4.1 -t dihasi/awg-node:latest --push .
 ```
@@ -255,6 +255,88 @@ from the traffic retention on purpose: that one is a decision about holding a re
 it has nothing to say about whether the panel may remember which of your own nodes was blocked last
 week.
 
+## A second panel
+
+Everything above protects the fleet from losing a node. This protects it from losing the panel.
+
+A **standby panel** is the same image with a database of its own, pointed at the panel you already
+run. It replicates everything the fleet needs - the fleet identity, the bundle signing key, every
+client with its private key, the groups and the arrangement, each node's own settings, the probes,
+the admin accounts, the share links, and both histories - and it refuses every change. When the
+panel in charge is gone, one click makes the standby the one in charge, and **no client config is
+reissued**: a config pins the fleet public key, which both panels hold.
+
+```bash
+# On the panel you already run, before enrolling anything:
+#   AWG_PANEL_URL=https://panel.example.com     how the standby reaches it
+#   AWG_PANEL_PUBLIC_IP=203.0.113.1             what the panel record points at
+#   AWG_PANEL_DNS_RECORD_NAME=panel.example.com optional: the record agents follow
+```
+
+Then **Nodes -> Panel pair -> Enroll standby**. The panel hands back three variables and a
+one-time token, good for 30 minutes. Put them in the second machine's environment beside the same
+`AWG_ENDPOINT_HOST`, its own `AWG_PANEL_URL` and `AWG_PANEL_PUBLIC_IP`, and start it:
+
+```bash
+AWG_PANEL_ROLE=standby
+AWG_PANEL_PEER_URL=https://panel.example.com
+AWG_PANEL_ENROLLMENT_TOKEN=<from the panel>
+AWG_PANEL_URL=https://standby.example.com
+AWG_PANEL_PUBLIC_IP=203.0.113.9
+```
+
+It enrolls itself, pulls the fleet, and from then on pulls every 30 seconds. Both panels show the
+pair, the term, and how far behind the replica is. A standby puts a band across the top of every
+page saying it is read-only, so you cannot mistake one for the other.
+
+**Enrolling a standby hands that machine the whole control plane** - the fleet private key, the
+bundle signing key, every client private key and every admin password hash. That is what it takes
+to keep the fleet converging when the first panel is gone. Put it somewhere you trust as much as
+the first one.
+
+### Switching panels
+
+Press **Take over** on the standby. It starts accepting changes at the next term, points
+`AWG_PANEL_DNS_RECORD_NAME` at itself if one is configured, and the other panel steps down the
+next time the two can see each other.
+
+The **term** is what makes this safe to do under pressure. It is a number that only ever goes up,
+one per switch, and the pair settles who is in charge by comparing it - no quorum and nothing to
+arbitrate. A panel that comes back up still believing it is in charge asks its peer once, sees a
+higher term, and steps down to standby on the spot. Until it manages that one call it is still
+accepting changes nobody will see, which is why the card tells you to check it rather than
+pretending the switch was instantaneous.
+
+Agents follow `AWG_PANEL_DNS_RECORD_NAME`. If you have not configured one, they keep reaching the
+old panel until you repoint them - and that costs you the fleet's *management*, never its traffic:
+nodes are fail-static, so a node that cannot reach a panel re-applies its cached bundle and keeps
+serving indefinitely. The panel says so after a switch rather than claiming more than it did.
+
+### Letting the standby take over by itself
+
+Off until you arm it, under the same switch on the card, and it is more reluctant than node
+failover for a reason worth knowing before you arm it.
+
+A node has probes in other networks to vouch for it: when three probes cannot reach a node, the
+node is the problem. A panel has no such witness. When a standby cannot reach the panel in charge,
+it has learned exactly one thing - that it cannot reach it - and it cannot tell that apart from
+its own uplink having broken. The nearest thing to evidence is whether it can still reach anything
+at all, which is what `AWG_PANEL_WITNESS_URLS` is for, and arming is refused without it.
+
+So an armed standby takes over only when all of this holds:
+
+- it has failed to pull for `AWG_PANEL_FAILOVER_GRACE_SECONDS` (default 300 - ten missed polls),
+- it already holds the fleet, because a panel promoted with nothing would publish an empty fleet
+  and every node would dutifully drop every peer it serves,
+- it can still reach one of the witness URLs,
+- it is not within `AWG_PANEL_FAILOVER_COOLDOWN_MINUTES` of its own last role change,
+- and it has not been **held**, which is a switch on the standby itself and the one control that
+  works without the other panel being reachable.
+
+Even then, if the two panels are only cut off from *each other*, both end up accepting changes
+until they can see each other again - at which point the lower term steps down and its changes are
+gone. Manual promotion has none of that risk, which is why it is the default.
+
 ## Metrics
 
 Set `AWG_METRICS_TOKEN` and the panel exports Prometheus metrics at `/api/metrics`:
@@ -361,6 +443,19 @@ For a fresh panel you can instead point `AWG_IMPORT_LEGACY_STATE` at a mounted `
 | `AWG_PROBE_HANDSHAKE_TIMEOUT_SECONDS` | How long a probe waits for one node's handshake. Default 15. |
 | `AWG_PROBE_CHECK_URLS` | What probes fetch through the tunnel, comma-separated; any answer counts. Default `http://1.1.1.1/cdn-cgi/trace`, `http://connectivitycheck.gstatic.com/generate_204`. `none` checks the handshake alone. |
 | `AWG_PROBE_TRAFFIC_TIMEOUT_SECONDS` | How long each of those has to answer. Default 8. |
+| `AWG_PANEL_ROLE` | `active` or `standby`, and only on an empty database: the live role is stored, so a promotion survives a restart. Default `active`. |
+| `AWG_PANEL_URL` | This panel's own base URL, as the other panel reaches it. Required to enroll a standby and required on one - without it a superseded panel can never be told. |
+| `AWG_PANEL_PUBLIC_IP` | What the panel record is pointed at when this panel takes over. |
+| `AWG_PANEL_NAME` | How this panel is listed in the pair. Defaults to the machine name. |
+| `AWG_PANEL_PEER_URL` | On a standby: where to enroll. Afterwards the other panel's own URL arrives with every snapshot. |
+| `AWG_PANEL_ENROLLMENT_TOKEN` | The one-time token issued under Nodes -> Panel pair. Spent on first use. |
+| `AWG_PANEL_DNS_RECORD_NAME` | The record agents follow to reach the panel, moved on promotion. Unset leaves it to you; nodes stay fail-static meanwhile. |
+| `AWG_PANEL_SYNC_SECONDS` | How often a standby pulls. Default 30. |
+| `AWG_PANEL_FAILOVER_GRACE_SECONDS` | How long a standby must have failed to pull before it may take over. Must exceed `AWG_PANEL_SYNC_SECONDS`. Default 300. |
+| `AWG_PANEL_FAILOVER_COOLDOWN_MINUTES` | Minimum time between one role change here and the next. Default 15. |
+| `AWG_PANEL_WITNESS_URLS` | What a standby fetches to check its own uplink, comma-separated; any answer counts. The only witness a panel has, so `none` refuses automatic promotion rather than granting it blind. Defaults to the probe check URLs. |
+| `AWG_PANEL_WITNESS_TIMEOUT_SECONDS` | How long each of those has to answer. Default 8. |
+| `AWG_PANEL_STREAM_BATCH` | History rows per pull while a standby catches up. Default 5000. |
 | `AWG_NOTIFY_WEBHOOK_URL` | Where to POST notifications as JSON. |
 | `AWG_NOTIFY_TELEGRAM_BOT_TOKEN`, `AWG_NOTIFY_TELEGRAM_CHAT_ID` | Telegram bot and chat for notifications. |
 
@@ -518,6 +613,13 @@ bundled `amneziawg-go` need nothing beyond the new image.
 - Node revocation is a flag checked on every request, so it takes effect immediately. There is no
   revocation list to distribute.
 - Enrollment and share tokens are stored only as hashes.
+- A **standby panel** authenticates the same way and verifies what it is handed against the same
+  pinned signing key - but what it receives is not comparable to what a node or a probe receives.
+  A node gets public keys and addresses; a probe gets one client config. A standby gets the fleet
+  private key, the bundle signing key pair, every client private key and every admin password
+  hash, because that is what it takes to keep the fleet converging when the first panel is gone.
+  Enrolling one is handing over the panel, not a share of it: treat that machine exactly as you
+  treat the first, and `POST /api/fleet/rotate` if it is ever read.
 
 Assume that a hosting provider can read a node's disk. Treat any seized node as a compromise of
 the whole fleet, since every node carries the shared identity. When that happens, rotate.
@@ -657,6 +759,19 @@ actually needs it.
   those rounds are recorded as unreachable. Nothing acts on them - the grace period covers it and
   the monitor withholds the alerts - but the ribbon shows a notch that was the rotation, not the
   nodes.
+- A panel pair has only been exercised in the integration suite, where both panels run in one
+  process and talk over each other's in-memory servers. What that covers is the real protocol -
+  signed requests, signed payloads, the ETag gate, the term, the read-only guard, and an agent
+  accepting a bundle from the panel it did not enroll with - but it is not two machines, and the
+  container script does not bring up a second panel.
+- Automatic panel promotion is covered only by its policy tests, which are pure. Driving it end to
+  end needs a grace period that has really elapsed and a witness that answers, and a suite that
+  reached the internet to decide a test would be worse than the gap.
+- Both panels have to carry the same `AWG_USAGE_RETENTION_DAYS` and
+  `AWG_AVAILABILITY_RETENTION_DAYS`: each prunes its own copy of the history, so a standby set
+  lower drops rows it will not fetch again.
+- `/api/metrics` answers on either panel from that panel's own copy of the data, so scraping both
+  double-counts every series. Scrape one, or the panel record.
 - The predecessor single-server app is preserved at tag `v0.9-standalone` and has been removed
   from the tree.
 
@@ -736,7 +851,7 @@ docker compose -f compose.node.yaml build
 ```bash
 # На машине сборки или в CI. AGENT_VERSION — это версия, которую нода сообщает
 # панели; без неё агент представляется как 0.0.0-dev.
-# Панель на 1.9.0, образ ноды остаётся на 1.4.1: агент в этой версии не менялся.
+# Панель на 1.10.0, образ ноды остаётся на 1.4.1: агент в этой версии не менялся.
 # Пересобирайте образ ноды, когда меняется что-то в src/AwgEasy.Node,
 # src/AwgEasy.Contracts или docker/node.Dockerfile, а не когда уехала только панель.
 # Оба образа мультиарховые (amd64 и arm64 - проба на Raspberry Pi) и собираются на
@@ -746,7 +861,7 @@ docker compose -f compose.node.yaml build
 # Desktop работает на драйвере "docker", который двухархитектурную сборку не
 # выполняет вовсе, а оболочка с дефолтом, сброшенным назад на него, - обычное дело.
 docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/control.Dockerfile \
-    -t dihasi/awg-control:1.9.0 -t dihasi/awg-control:latest --push .
+    -t dihasi/awg-control:1.10.0 -t dihasi/awg-control:latest --push .
 docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/node.Dockerfile \
     --build-arg AGENT_VERSION=1.4.1 -t dihasi/awg-node:1.4.1 -t dihasi/awg-node:latest --push .
 ```
@@ -906,6 +1021,89 @@ egress; хендшейк не проходит вовсе — это адрес 
 хранения трафика намеренно: та — решение о том, держать ли запись о людях, и она ничего не говорит
 о том, можно ли панели помнить, какая из ваших же нод была заблокирована на прошлой неделе.
 
+## Вторая панель
+
+Всё выше защищает флот от потери ноды. Это — от потери самой панели.
+
+**Резервная панель** (standby) — тот же образ со своей базой, направленный на панель, которая у
+вас уже работает. Она реплицирует всё, что нужно флоту: идентичность флота, ключ подписи бандлов,
+каждого клиента с приватным ключом, группы и порядок, собственные настройки каждой ноды, пробы,
+учётные записи администраторов, share-ссылки и обе истории — и отказывает в любом изменении. Когда
+главной панели не стало, одно нажатие делает главной резервную, и **ни один клиентский конфиг не
+переиздаётся**: конфиг прибит к публичному ключу флота, а он есть у обеих панелей.
+
+```bash
+# На панели, которая уже работает, до того как что-то подключать:
+#   AWG_PANEL_URL=https://panel.example.com     как резервная до неё дотянется
+#   AWG_PANEL_PUBLIC_IP=203.0.113.1             куда указывает запись панели
+#   AWG_PANEL_DNS_RECORD_NAME=panel.example.com опционально: запись, за которой идут агенты
+```
+
+Дальше **Nodes -> Panel pair -> Enroll standby**. Панель отдаёт три переменные и одноразовый токен
+на 30 минут. Положите их в окружение второй машины рядом с тем же `AWG_ENDPOINT_HOST`, её
+собственными `AWG_PANEL_URL` и `AWG_PANEL_PUBLIC_IP`, и запустите:
+
+```bash
+AWG_PANEL_ROLE=standby
+AWG_PANEL_PEER_URL=https://panel.example.com
+AWG_PANEL_ENROLLMENT_TOKEN=<из панели>
+AWG_PANEL_URL=https://standby.example.com
+AWG_PANEL_PUBLIC_IP=203.0.113.9
+```
+
+Она подключится сама, вытянет флот и дальше тянет каждые 30 секунд. Обе панели показывают пару,
+term и то, насколько отстаёт реплика. Резервная рисует полосу поверх каждой страницы о том, что
+она только для чтения, — чтобы одну нельзя было принять за другую.
+
+**Подключение резервной панели отдаёт этой машине весь control plane** — приватный ключ флота,
+ключ подписи бандлов, приватные ключи всех клиентов и хеши паролей всех администраторов. Именно
+это и нужно, чтобы флот продолжал сходиться, когда первой панели нет. Ставьте её там, где
+доверяете не меньше, чем первой.
+
+### Переключение панелей
+
+Нажмите **Take over** на резервной. Она начинает принимать изменения на следующем term, переводит
+`AWG_PANEL_DNS_RECORD_NAME` на себя, если запись настроена, а вторая панель уходит в standby в тот
+момент, когда они снова увидят друг друга.
+
+**Term** — это то, что делает переключение безопасным под давлением. Это число, которое только
+растёт, по одному на переключение, и пара выясняет, кто главный, сравнением — без кворума и без
+арбитра. Вернувшаяся панель, которая всё ещё считает себя главной, один раз спрашивает соседа,
+видит term выше и тут же уходит в standby. Пока этот один запрос не прошёл, она продолжает
+принимать изменения, которых никто не увидит, — поэтому карточка просит проверить её, а не делает
+вид, что переключение мгновенное.
+
+Агенты идут за `AWG_PANEL_DNS_RECORD_NAME`. Если записи нет, они продолжают стучаться в старую
+панель, пока вы их не перенаправите, — и это стоит флоту *управления*, но никогда трафика: ноды
+fail-static, нода без связи с панелью переприменяет закешированный бандл и обслуживает клиентов
+сколько угодно долго. Панель говорит об этом после переключения, а не приписывает себе большего.
+
+### Автоматическое переключение
+
+Выключено, пока не вооружите, тем же переключателем на карточке, — и оно осторожнее нодового
+фейловера по причине, которую стоит знать заранее.
+
+За ноду отвечают пробы в других сетях: если три пробы до ноды не доходят, проблема в ноде. У
+панели такого свидетеля нет. Когда резервная не достаёт главную, она узнала ровно одно — что не
+достаёт её, — и не может отличить это от того, что у неё самой пропал канал. Ближайшее к
+доказательству — достаёт ли она вообще что-нибудь; для этого и нужен `AWG_PANEL_WITNESS_URLS`, и
+без него вооружить автоматику нельзя.
+
+Поэтому вооружённая резервная забирает флот только когда сходится всё сразу:
+
+- она не смогла синхронизироваться `AWG_PANEL_FAILOVER_GRACE_SECONDS` (по умолчанию 300 — десять
+  пропущенных опросов),
+- у неё уже есть состояние флота: панель, повышенная без него, опубликовала бы пустой флот, и
+  каждая нода послушно удалила бы все свои пиры,
+- она всё ещё достаёт хотя бы один witness-URL,
+- с её последней смены роли прошло больше `AWG_PANEL_FAILOVER_COOLDOWN_MINUTES`,
+- и её не поставили на **hold** — это переключатель на самой резервной и единственный орган
+  управления, который работает без связи со второй панелью.
+
+И даже тогда: если панели отрезаны только *друг от друга*, обе будут принимать изменения, пока не
+увидятся снова, — и тогда та, у которой term ниже, уйдёт в standby, а её изменения пропадут.
+У ручного переключения этого риска нет, поэтому оно и по умолчанию.
+
 ## Метрики
 
 Задайте `AWG_METRICS_TOKEN`, и панель отдаёт метрики Prometheus на `/api/metrics`:
@@ -1012,6 +1210,19 @@ docker rm -f awg-node && rm -rf /etc/awg-node/*
 | `AWG_PROBE_HANDSHAKE_TIMEOUT_SECONDS` | Сколько проба ждёт хендшейк одной ноды. По умолчанию 15. |
 | `AWG_PROBE_CHECK_URLS` | Что пробы открывают через туннель, через запятую; засчитывается любой ответ. По умолчанию `http://1.1.1.1/cdn-cgi/trace`, `http://connectivitycheck.gstatic.com/generate_204`. `none` — проверять только хендшейк. |
 | `AWG_PROBE_TRAFFIC_TIMEOUT_SECONDS` | Сколько ждать ответа от каждого из них. По умолчанию 8. |
+| `AWG_PANEL_ROLE` | `active` или `standby`, и только на пустой базе: текущая роль хранится, поэтому повышение переживает перезапуск. По умолчанию `active`. |
+| `AWG_PANEL_URL` | Базовый URL этой панели в том виде, в каком до неё дотягивается вторая. Нужен, чтобы подключить резервную, и нужен на ней самой — без него смещённой панели никто не сможет об этом сообщить. |
+| `AWG_PANEL_PUBLIC_IP` | Куда переводится запись панели, когда эта панель забирает флот. |
+| `AWG_PANEL_NAME` | Как эта панель называется в паре. По умолчанию имя машины. |
+| `AWG_PANEL_PEER_URL` | На резервной: куда подключаться. Дальше URL второй панели приходит с каждым снапшотом. |
+| `AWG_PANEL_ENROLLMENT_TOKEN` | Одноразовый токен из Nodes -> Panel pair. Тратится при первом использовании. |
+| `AWG_PANEL_DNS_RECORD_NAME` | Запись, за которой агенты идут к панели; переводится при повышении. Без неё перевод остаётся на вас, а ноды тем временем остаются fail-static. |
+| `AWG_PANEL_SYNC_SECONDS` | Как часто резервная тянет состояние. По умолчанию 30. |
+| `AWG_PANEL_FAILOVER_GRACE_SECONDS` | Сколько резервная должна не тянуть, прежде чем ей будет можно забрать флот. Должно быть больше `AWG_PANEL_SYNC_SECONDS`. По умолчанию 300. |
+| `AWG_PANEL_FAILOVER_COOLDOWN_MINUTES` | Минимальная пауза между сменами роли здесь. По умолчанию 15. |
+| `AWG_PANEL_WITNESS_URLS` | Что резервная открывает, чтобы проверить свой канал, через запятую; засчитывается любой ответ. Единственный свидетель, который есть у панели, поэтому `none` запрещает автоматику, а не разрешает её наугад. По умолчанию — те же URL, что у проб. |
+| `AWG_PANEL_WITNESS_TIMEOUT_SECONDS` | Сколько ждать ответа от каждого. По умолчанию 8. |
+| `AWG_PANEL_STREAM_BATCH` | Сколько строк истории за один запрос, пока резервная догоняет. По умолчанию 5000. |
 | `AWG_NOTIFY_WEBHOOK_URL` | Куда отправлять уведомления JSON-запросом POST. |
 | `AWG_NOTIFY_TELEGRAM_BOT_TOKEN`, `AWG_NOTIFY_TELEGRAM_CHAT_ID` | Бот и чат Telegram для уведомлений. |
 
@@ -1174,6 +1385,14 @@ userspace, если проверка не прошла. Нодам на встр
 - Отзыв ноды — флаг, проверяемый на каждом запросе, поэтому он действует немедленно. Никаких
   списков отзыва распространять не нужно.
 - Токены регистрации и share-ссылок хранятся только в виде хешей.
+- **Резервная панель** аутентифицируется так же и проверяет всё, что ей прислали, тем же
+  прибитым ключом подписи — но то, что она получает, несравнимо с тем, что получает нода или
+  проба. Нода получает публичные ключи и адреса, проба — один клиентский конфиг. Резервная
+  панель — приватный ключ флота, пару ключей подписи бандлов, приватные ключи всех
+  клиентов и хеши паролей всех администраторов: иначе она не сможет держать флот в сходимости,
+  когда первой панели не стало. Подключить её — значит отдать панель целиком, а не часть её:
+  относитесь к той машине так же, как к первой, и делайте `POST /api/fleet/rotate`, если её
+  когда-нибудь прочитали.
 
 Исходите из того, что хостер может прочитать диск ноды. Считайте изъятую ноду компрометацией
 всего флота, поскольку общая идентичность есть на каждой. Если это случилось — проводите ротацию.
@@ -1308,5 +1527,18 @@ Cloudflare остаётся единственным DNS-провайдером 
   перегенерируют конфиг только на следующем круге, так что до этого handshake нигде не проходит.
   Никаких действий из этого не следует — grace это покрывает, а алерты монитор придерживает, — но
   на полосе остаётся зарубка, которая была ротацией, а не нодами.
+- Пара панелей проверена только в интеграционных тестах, где обе панели живут в одном процессе
+  и говорят друг с другом через in-memory серверы. То, что там проверяется, — настоящий протокол:
+  подписанные запросы, подписанные пейлоады, ETag, term, запрет записи и агент, который принимает
+  бандл от панели, на которой не регистрировался, — но это не две машины, и скрипт с контейнерами
+  вторую панель не поднимает.
+- Автоматическое повышение панели покрыто только тестами самой политики — она чистая функция.
+  Чтобы прогнать его целиком, нужен истёкший grace и отвечающий witness, а тесты, лезущие в интернет
+  за вердиктом, были бы хуже самого пробела.
+- На обеих панелях должны совпадать `AWG_USAGE_RETENTION_DAYS` и `AWG_AVAILABILITY_RETENTION_DAYS`:
+  каждая чистит свою копию истории, и резервная с меньшим значением удалит строки, которые больше не
+  запросит.
+- `/api/metrics` отвечает на любой из панелей из своей копии данных, поэтому скрейп сразу двух
+  удваивает каждый ряд. Скрейпьте одну или запись панели.
 - Предшественник — одиночное приложение — сохранён под тегом `v0.9-standalone` и удалён из
   дерева.

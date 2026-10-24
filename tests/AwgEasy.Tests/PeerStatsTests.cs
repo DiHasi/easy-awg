@@ -107,7 +107,8 @@ public sealed class PeerStatsTests : IDisposable
         Notifications: new NotificationOptions(null, null, null),
         Usage: new UsageOptions(UsageOptions.DefaultRetentionDays),
         Availability: new AvailabilityOptions(AvailabilityOptions.DefaultRetentionDays),
-        Metrics: new MetricsOptions(null));
+        Metrics: new MetricsOptions(null),
+        Panel: TestPanelOptions.Default);
 
     public void Dispose()
     {

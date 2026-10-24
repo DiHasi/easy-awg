@@ -18,7 +18,11 @@ public sealed record AgentAuthResult(bool Succeeded, NodeRecord? Node, string? F
 /// means revoking a node is a single UPDATE that takes effect on the very next request - no CRL,
 /// no OCSP, no distribution delay.
 /// </summary>
-public sealed class AgentAuthenticator(NodeRepository nodes, ProbeRepository probes, ILogger<AgentAuthenticator> logger)
+public sealed class AgentAuthenticator(
+    NodeRepository nodes,
+    ProbeRepository probes,
+    PanelRepository panels,
+    ILogger<AgentAuthenticator> logger)
 {
     // Nonces are only remembered for as long as a timestamp stays valid, so this cannot grow
     // without bound.
@@ -51,6 +55,24 @@ public sealed class AgentAuthenticator(NodeRepository nodes, ProbeRepository pro
         });
 
         return failure is null ? probe : null;
+    }
+
+    /// <summary>
+    /// The same check for the other panel of a pair. A panel signs exactly as an agent does and
+    /// is looked up in its own table, so a panel id can never pass as a node - which matters more
+    /// here than in either of the other two directions: what the panel endpoints hand back is the
+    /// fleet private key and every client private key, where a bundle carries neither.
+    /// </summary>
+    public async Task<PanelRecord?> AuthenticatePanelAsync(HttpContext context)
+    {
+        PanelRecord? panel = null;
+        var failure = await VerifyAsync(context, id =>
+        {
+            panel = panels.Find(id);
+            return panel is null ? null : (panel.AgentPublicKey, panel.Revoked);
+        });
+
+        return failure is null ? panel : null;
     }
 
     private async Task<string?> VerifyAsync(HttpContext context, Func<string, (string PublicKey, bool Revoked)?> lookup)

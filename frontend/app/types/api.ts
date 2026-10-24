@@ -435,3 +435,78 @@ export type ImportResult = {
   revision: number
   warnings: string[]
 }
+
+/** How one panel of a pair reads at a glance. A short vocabulary on purpose. */
+export type PanelState = 'active' | 'replicating' | 'never_synced' | 'silent' | 'revoked'
+
+export type Panel = {
+  id: string
+  name: string
+  hostname?: string | null
+  /** Where the other panel reaches this one. Null means the pair cannot watch it. */
+  url?: string | null
+  publicIp?: string | null
+  version?: string | null
+  role: 'active' | 'standby'
+  term: number
+  /** True for the panel answering the request. */
+  isSelf: boolean
+  isActive: boolean
+  revoked: boolean
+  enrolledAt: string
+  /** When the configuration it holds was published, or null if it has never applied any. */
+  snapshotAt?: string | null
+  lastSeenAt?: string | null
+  lastError?: string | null
+  /** How far behind its configuration is, in seconds. Null when it holds none. */
+  lagSeconds?: number | null
+  state: PanelState
+  stateReason: string
+}
+
+export type PanelFailoverAction = 'none' | 'wait' | 'hold' | 'recommend' | 'refused' | 'promote'
+
+/**
+ * The pair as the panel answering sees it. Everything here is about *this* panel except the
+ * list: which role it is in, how its replication is going, and what the last round concluded.
+ */
+export type PanelPair = {
+  role: 'active' | 'standby'
+  panelId: string
+  name: string
+  /** Monotonic, one per promotion. The whole of the fencing: the higher term wins. */
+  term: number
+  activePanelId?: string | null
+  promotedAt?: string | null
+  mode: 'manual' | 'automatic'
+  /** The operator's brake. A held standby never promotes itself, however armed. */
+  held: boolean
+  enrolled: boolean
+  /** False means promotion is refused: a panel with no fleet state would publish an empty one. */
+  hasFleetState: boolean
+  syncedAt?: string | null
+  snapshotAt?: string | null
+  syncError?: string | null
+  syncIntervalSeconds: number
+  graceSeconds: number
+  cooldownSeconds: number
+  witnessConfigured: boolean
+  /** Whether this panel could reach anything outside the pair, or null if it had no reason to ask. */
+  witnessOnline?: boolean | null
+  provider: string
+  providerConfigured: boolean
+  recordName?: string | null
+  url?: string | null
+  publicIp?: string | null
+  evaluatedAt?: string | null
+  action?: PanelFailoverAction | null
+  message?: string | null
+  panels: Panel[]
+  warning?: string | null
+}
+
+export type PanelSwitch = {
+  term: number
+  warning?: string | null
+  pair: PanelPair
+}

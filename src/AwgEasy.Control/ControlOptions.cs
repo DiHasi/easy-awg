@@ -18,7 +18,8 @@ public sealed record ControlOptions(
     NotificationOptions Notifications,
     UsageOptions Usage,
     AvailabilityOptions Availability,
-    MetricsOptions Metrics)
+    MetricsOptions Metrics,
+    PanelOptions Panel)
 {
     public static ControlOptions FromEnvironment()
         => new(
@@ -38,7 +39,8 @@ public sealed record ControlOptions(
             NotificationOptions.FromEnvironment(Value),
             UsageOptions.FromEnvironment(),
             AvailabilityOptions.FromEnvironment(),
-            MetricsOptions.FromEnvironment(Value));
+            MetricsOptions.FromEnvironment(Value),
+            PanelOptions.FromEnvironment(Value, ReadInt));
 
     /// <summary>
     /// Settings that have no safe default. AWG_ENDPOINT_HOST in particular is written into every
@@ -46,10 +48,15 @@ public sealed record ControlOptions(
     /// refusing to start is better than guessing.
     /// </summary>
     public string? Validate()
-        => string.IsNullOrWhiteSpace(DefaultEndpointHost)
-            ? "AWG_ENDPOINT_HOST is not set. It is the public hostname or IP clients connect to, "
-              + "and it goes into every client config. Set it and restart."
-            : null;
+    {
+        if (string.IsNullOrWhiteSpace(DefaultEndpointHost))
+        {
+            return "AWG_ENDPOINT_HOST is not set. It is the public hostname or IP clients connect to, "
+                + "and it goes into every client config. Set it and restart.";
+        }
+
+        return Panel.Validate();
+    }
 
     private static string? Value(string key)
     {
@@ -256,4 +263,117 @@ public sealed record MetricsOptions(string? Token)
     public bool IsEnabled => !string.IsNullOrWhiteSpace(Token);
 
     public static MetricsOptions FromEnvironment(Func<string, string?> value) => new(value("AWG_METRICS_TOKEN"));
+}
+
+/// <summary>
+/// How this panel takes part in a pair of panels: whether it is the one the fleet answers to or a
+/// replica of it, where its peer is, and how reluctant it is to take over.
+///
+/// The configured role is a seed, not the live one. Which role this panel is actually in lives in
+/// the database, in the one table a snapshot never replaces - a promotion has to survive a restart,
+/// and an operator who promoted a standby in an emergency should not have it demote itself back
+/// because the container was recreated with the old environment.
+/// </summary>
+/// <param name="Role">What this panel starts as on an empty database: active or standby.</param>
+/// <param name="Name">How this panel is listed in the pair. Defaults to the machine name.</param>
+/// <param name="Url">
+/// The base URL other panels reach this one at. Required for a standby and to enrol one: the pair
+/// watches itself over this, and a panel nobody can reach cannot be told that it has been
+/// superseded - which is the whole of the fencing.
+/// </param>
+/// <param name="PublicIp">
+/// What the panel record should point at for this panel. Explicit rather than discovered: a panel
+/// behind a proxy or a CDN has no address it can find out for itself, and pointing the fleet's
+/// control plane at the wrong one is not a mistake that announces itself.
+/// </param>
+/// <param name="PeerUrl">Where to enrol, for a standby that has not enrolled yet. Afterwards the
+/// active panel's URL arrives with every snapshot, so this is only the bootstrap.</param>
+/// <param name="DnsRecordName">
+/// The record agents follow to reach the panel, moved on promotion through the same provider the
+/// node record uses. Unset leaves it to the operator, exactly as an unconfigured node record is.
+/// </param>
+/// <param name="SyncInterval">How often a standby pulls.</param>
+/// <param name="Grace">
+/// How long a standby must have failed to pull before it may promote itself. Longer than
+/// <paramref name="SyncInterval"/> by construction: one missed poll is a hiccup, not an outage.
+/// </param>
+/// <param name="Cooldown">The minimum time between one promotion here and the next.</param>
+/// <param name="WitnessUrls">
+/// What a standby fetches to find out whether it still has a working uplink. This is the only
+/// thing standing between an armed standby and a promotion made because its own network broke:
+/// unlike a node, a panel has no probe to ask. Empty means automatic promotion is refused.
+/// </param>
+public sealed record PanelOptions(
+    string Role,
+    string? Name,
+    string? Url,
+    string? PublicIp,
+    string? PeerUrl,
+    string? EnrollmentToken,
+    string? DnsRecordName,
+    TimeSpan SyncInterval,
+    TimeSpan Grace,
+    TimeSpan Cooldown,
+    IReadOnlyList<string> WitnessUrls,
+    TimeSpan WitnessTimeout,
+    int StreamBatchSize)
+{
+    /// <summary>Plain HTTP and an address literal first, for the same reason the probe's checks
+    /// are: nothing to resolve and no certificate to trust, so the only thing that can stop the
+    /// answer is the uplink itself.</summary>
+    public static readonly string[] DefaultWitnessUrls = FailoverOptions.DefaultProbeCheckUrls;
+
+    public bool StartsAsStandby => Role == PanelRoles.Standby;
+
+    public static PanelOptions FromEnvironment(Func<string, string?> value, Func<string, int, int> readInt)
+        => new(
+            (value("AWG_PANEL_ROLE") ?? PanelRoles.Active).ToLowerInvariant(),
+            value("AWG_PANEL_NAME"),
+            value("AWG_PANEL_URL")?.TrimEnd('/'),
+            value("AWG_PANEL_PUBLIC_IP"),
+            value("AWG_PANEL_PEER_URL")?.TrimEnd('/'),
+            value("AWG_PANEL_ENROLLMENT_TOKEN"),
+            value("AWG_PANEL_DNS_RECORD_NAME"),
+            TimeSpan.FromSeconds(readInt("AWG_PANEL_SYNC_SECONDS", 30)),
+            // Five minutes against a 30-second pull: ten missed polls. A panel being restarted,
+            // redeployed or briefly unreachable must not cost a promotion.
+            TimeSpan.FromSeconds(readInt("AWG_PANEL_FAILOVER_GRACE_SECONDS", 300)),
+            TimeSpan.FromMinutes(readInt("AWG_PANEL_FAILOVER_COOLDOWN_MINUTES", 15)),
+            ReadWitnessUrls(value("AWG_PANEL_WITNESS_URLS")),
+            TimeSpan.FromSeconds(readInt("AWG_PANEL_WITNESS_TIMEOUT_SECONDS", 8)),
+            // One poll of history has to fit in one response, and the rows are small. Generous
+            // because a standby that has just been enrolled is catching up on months of them.
+            readInt("AWG_PANEL_STREAM_BATCH", 5000));
+
+    public string? Validate()
+    {
+        if (!PanelRoles.IsKnown(Role))
+        {
+            return $"AWG_PANEL_ROLE is '{Role}'. It must be 'active' or 'standby'.";
+        }
+
+        if (StartsAsStandby && string.IsNullOrWhiteSpace(Url))
+        {
+            return "AWG_PANEL_URL is not set, and a standby panel needs it: it is the address the active "
+                + "panel reaches this one at to tell it which of the two is in charge. Set it to this "
+                + "panel's own base URL and restart.";
+        }
+
+        // A grace period at or below the pull interval turns one slow poll into a promotion, and a
+        // promotion is the one thing here that cannot be undone quietly.
+        return Grace <= SyncInterval
+            ? $"AWG_PANEL_FAILOVER_GRACE_SECONDS ({(int)Grace.TotalSeconds}) must be greater than "
+              + $"AWG_PANEL_SYNC_SECONDS ({(int)SyncInterval.TotalSeconds}), or a single missed pull "
+              + "would be enough for a standby to take over."
+            : null;
+    }
+
+    /// <summary>Unset uses the defaults. "none" switches the witness off, which refuses automatic
+    /// promotion rather than granting it without evidence.</summary>
+    private static string[] ReadWitnessUrls(string? raw)
+        => raw is null
+            ? DefaultWitnessUrls
+            : string.Equals(raw, "none", StringComparison.OrdinalIgnoreCase)
+                ? []
+                : raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 }

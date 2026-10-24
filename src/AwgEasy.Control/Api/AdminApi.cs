@@ -35,5 +35,6 @@ public static class AdminApi
         admin.MapDnsFailover();
         admin.MapFailover();
         admin.MapProbes();
+        admin.MapPanel();
     }
 }

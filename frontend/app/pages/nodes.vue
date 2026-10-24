@@ -200,6 +200,8 @@ async function copyRecord() {
 
     <FailoverCard />
 
+    <PanelsCard />
+
     <ProbesCard />
 
     <EnrollNodeModal v-model:open="enrollOpen" />

@@ -115,6 +115,26 @@ public sealed class StubHostAddressResolver : IHostAddressResolver
 /// </summary>
 public sealed class ControlPlaneFixture : WebApplicationFactory<ControlPlaneEntryPoint>, IAsyncLifetime
 {
+    private readonly PanelOptions _panel;
+
+    // Where this panel's replication client sends its requests. A standby in the suite talks to
+    // the other fixture's in-memory server rather than over a socket, which is what makes a
+    // two-panel test a test of the real protocol and not of a mock of it.
+    private readonly Func<HttpMessageHandler>? _peerHandler;
+
+    public ControlPlaneFixture()
+        : this(TestPanelOptions.Default)
+    {
+    }
+
+    /// <summary>Internal because xUnit allows a class fixture exactly one public constructor, and
+    /// the parameterless one is what the vast majority of the suite uses.</summary>
+    internal ControlPlaneFixture(PanelOptions panel, Func<HttpMessageHandler>? peerHandler = null)
+    {
+        _panel = panel;
+        _peerHandler = peerHandler;
+    }
+
     public const string AdminUser = "admin";
     public const string AdminPassword = "correct-horse-battery-staple";
 
@@ -170,7 +190,8 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<ControlPlaneEntr
                 Availability: new AvailabilityOptions(AvailabilityOptions.DefaultRetentionDays),
                 // A token, so the scrape endpoint is exercised as it ships rather than only in
                 // its disabled state.
-                Metrics: new MetricsOptions(MetricsToken)));
+                Metrics: new MetricsOptions(MetricsToken),
+                Panel: _panel));
 
             services.AddSingleton<INotificationChannel>(Notifications);
 
@@ -182,6 +203,12 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<ControlPlaneEntr
 
             services.RemoveAll<IHostAddressResolver>();
             services.AddSingleton<IHostAddressResolver>(Resolver);
+
+            if (_peerHandler is { } handler)
+            {
+                services.AddHttpClient<PanelReplicationClient>()
+                    .ConfigurePrimaryHttpMessageHandler(handler);
+            }
         });
 
         return base.CreateHost(builder);

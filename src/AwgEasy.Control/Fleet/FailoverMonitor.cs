@@ -23,6 +23,7 @@ public sealed class FailoverMonitor(
     ProbeRepository probes,
     AvailabilityRepository availability,
     FleetService fleet,
+    PanelContext panel,
     ControlOptions options,
     Notifier notifier,
     EventLog events,
@@ -73,6 +74,21 @@ public sealed class FailoverMonitor(
         await _gate.WaitAsync(cancellationToken);
         try
         {
+            // A standby must never move the record. It has no probes reporting to it and no
+            // status reports arriving, so its evidence is whatever the last stream carried - and
+            // acting on that would mean two panels pointing one record at two nodes. It is the
+            // same reason address allocation belongs to one panel: a decision the fleet follows
+            // has exactly one place it is made.
+            if (!panel.IsActive)
+            {
+                var standby = new FailoverDecision(
+                    FailoverAction.None,
+                    "This panel is a standby, so it does not decide where clients go.");
+
+                LastRound = new FailoverRound(DateTimeOffset.UtcNow, fleetRepository.FindFailoverMode(), standby, new Dictionary<string, NodeAssessment>(StringComparer.Ordinal));
+                return LastRound;
+            }
+
             var now = DateTimeOffset.UtcNow;
             var fleetNodes = nodes.List();
             var health = Assess(fleetNodes, now);

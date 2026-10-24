@@ -7,8 +7,12 @@
 const route = useRoute()
 const { user, logout } = useSession()
 const { fleet, serving, appliedCount, errorMessage, refresh } = useFleetState()
+const { pair, isStandby, blank, refresh: refreshPanel } = usePanelState()
 
-usePolling(refresh, 10000)
+// One timer for both. Which panel this is belongs in the frame rather than on a page: an operator
+// who does not know which of two identical panels they are looking at will try to make the change
+// on the wrong one, and a standby refuses it with a message they will read as a bug.
+usePolling(() => Promise.all([refresh(), refreshPanel()]), 10000)
 
 const links = [
   { to: '/', label: 'Overview', icon: 'i-lucide-network' },
@@ -93,7 +97,35 @@ useHead({ title: computed(() => `${current.value.label} · AWG Easy`) })
     </header>
 
     <div
-      v-if="errorMessage"
+      v-if="isStandby"
+      role="status"
+      class="border-b border-warning/30 bg-warning/10"
+    >
+      <p class="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2 text-sm text-warning lg:px-6">
+        <UIcon
+          name="i-lucide-layers"
+          class="size-4 shrink-0"
+        />
+        <span class="font-medium">Standby panel</span>
+        <span class="text-warning/90">
+          <template v-if="blank">
+            It has not replicated the fleet yet, so there is nothing to show here.
+          </template>
+          <template v-else>
+            Read-only - it replicates the panel in charge, last {{ relativeTime(pair?.syncedAt) }}. Make changes there.
+          </template>
+        </span>
+        <NuxtLink
+          to="/nodes"
+          class="ms-auto shrink-0 font-medium underline decoration-warning/40 hover:decoration-warning"
+        >
+          Panel pair
+        </NuxtLink>
+      </p>
+    </div>
+
+    <div
+      v-if="errorMessage && !blank"
       role="alert"
       class="border-b border-error/30 bg-error/10"
     >

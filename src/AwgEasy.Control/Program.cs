@@ -73,6 +73,29 @@ builder.Services.AddHostedService(provider => provider.GetRequiredService<Failov
 // them never carry a delete of their own.
 builder.Services.AddHostedService<HistoryRetentionService>();
 builder.Services.AddSingleton<AgentAuthenticator>();
+
+// The panel pair. The live role lives in the database rather than in this process, so the context
+// is a singleton that every request and both halves of the loop read the same answer from.
+builder.Services.AddSingleton<PanelLocalStore>();
+builder.Services.AddSingleton<PanelContext>();
+builder.Services.AddSingleton<PanelRepository>();
+builder.Services.AddSingleton<PanelSnapshotRepository>();
+// One loop for both roles, handed to the host as the same instance so the API reads the rounds it
+// actually ran - the same reason FailoverMonitor is registered this way.
+builder.Services.AddSingleton<PanelPairService>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<PanelPairService>());
+builder.Services.AddScoped<PanelPairDescriber>();
+// Scoped for the same reason DnsFailoverService is: it reaches the DNS provider, and a singleton
+// would pin that provider's resolved address for the life of the process.
+builder.Services.AddScoped<PanelPromotionService>();
+builder.Services.AddHttpClient<PanelReplicationClient>(client =>
+{
+    // Generous: a cold standby's first stream carries months of history, and a pull that times
+    // out halfway is a pull that has to start again.
+    client.Timeout = TimeSpan.FromSeconds(60);
+});
+builder.Services.AddHttpClient(HttpPanelWitness.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddSingleton<IPanelWitness, HttpPanelWitness>();
 builder.Services.AddSingleton<LegacyStateImporter>();
 // Scoped, not a singleton: the Cloudflare updater is a typed HttpClient, and holding one for the
 // life of the process would pin its handler - and with it the resolved address of the API - forever.
@@ -105,9 +128,15 @@ app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
 
+// After authentication so a refusal can still be read by a signed-in operator, and before the
+// endpoints so a standby cannot reach one that writes. Everything a standby does and does not
+// answer is in that one file, on purpose.
+app.UsePanelWriteGuard();
+
 app.MapAdminApi();
 app.MapAgentApi();
 app.MapProbeAgentApi();
+app.MapPanelReplicationApi();
 
 // The Nuxt panel is a client-side app served from the same origin; unknown paths fall through
 // to its shell so routes like /nodes resolve on the client.
@@ -132,7 +161,26 @@ static void Bootstrap(WebApplication app)
     }
 
     scope.ServiceProvider.GetRequiredService<Database>().Migrate();
-    scope.ServiceProvider.GetRequiredService<FleetService>().EnsureInitialized();
+
+    // Reads the local row, creating it with this panel's own key pair on first run. Before the
+    // fleet, because it is what decides whether this panel may create one.
+    var panel = scope.ServiceProvider.GetRequiredService<PanelContext>();
+
+    if (panel.IsActive)
+    {
+        scope.ServiceProvider.GetRequiredService<FleetService>().EnsureInitialized();
+    }
+    else
+    {
+        // A standby must not invent an identity. Agents pin the signing key they were enrolled
+        // with, so a second identity would be refused by every one of them - and the first
+        // snapshot is about to overwrite it anyway. It serves nothing until it has synced, and
+        // says so rather than drawing an empty fleet.
+        logger.LogInformation(
+            "Starting as a standby panel ({PanelId}). It replicates the fleet from the panel in charge and refuses "
+            + "every write until it is promoted.",
+            panel.PanelId);
+    }
 
     var accounts = scope.ServiceProvider.GetRequiredService<AdminAccounts>();
     if (!accounts.AnyExists())
@@ -152,7 +200,9 @@ static void Bootstrap(WebApplication app)
     }
 
     // One-shot adoption of an existing single-server deployment, pointed at its state.json.
-    if (!string.IsNullOrWhiteSpace(options.LegacyStateImportPath) && File.Exists(options.LegacyStateImportPath))
+    // Never on a standby: importing there would write a fleet the next snapshot replaces, and for
+    // the length of that window the two panels would disagree about who the clients are.
+    if (panel.IsActive && !string.IsNullOrWhiteSpace(options.LegacyStateImportPath) && File.Exists(options.LegacyStateImportPath))
     {
         var importer = scope.ServiceProvider.GetRequiredService<LegacyStateImporter>();
         var (result, error) = importer.Import(File.ReadAllText(options.LegacyStateImportPath), replaceExistingClients: false);

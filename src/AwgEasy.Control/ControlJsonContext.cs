@@ -60,6 +60,22 @@ namespace AwgEasy.Control;
 [JsonSerializable(typeof(EnrollResponse))]
 [JsonSerializable(typeof(NodeStatusReport))]
 [JsonSerializable(typeof(NodeStatusAck))]
+[JsonSerializable(typeof(PanelPairResponse))]
+[JsonSerializable(typeof(PanelResponse))]
+[JsonSerializable(typeof(PanelResponse[]))]
+[JsonSerializable(typeof(CreatePanelRequest))]
+[JsonSerializable(typeof(UpdatePanelFailoverRequest))]
+[JsonSerializable(typeof(PanelHoldRequest))]
+[JsonSerializable(typeof(PanelSwitchResponse))]
+// The panel-to-panel wire. Both ends go through this context, which is what makes a signature
+// over the payload bytes mean the same thing on both sides.
+[JsonSerializable(typeof(SignedPanelPayload))]
+[JsonSerializable(typeof(PanelSnapshot))]
+[JsonSerializable(typeof(PanelStream))]
+[JsonSerializable(typeof(PanelStreamCursors))]
+[JsonSerializable(typeof(PanelStatusReport))]
+[JsonSerializable(typeof(PanelHello))]
+[JsonSerializable(typeof(PanelEnrollResponse))]
 [JsonSerializable(typeof(LegacyState))]
 [JsonSerializable(typeof(LegacyBackup))]
 internal sealed partial class ControlJsonContext : JsonSerializerContext;

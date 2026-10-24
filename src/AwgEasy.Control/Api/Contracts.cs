@@ -452,3 +452,161 @@ public sealed record HealthResponse(string Status);
 /// saved, and a key nobody saved should leave no trace.
 /// </summary>
 public sealed record GeneratedKeyResponse(string Key);
+
+/// <summary>How one panel of a pair reads at a glance. A deliberately short vocabulary: an
+/// operator deciding whether to switch has to be able to hold all of it in their head.</summary>
+public static class PanelStates
+{
+    /// <summary>The panel the fleet answers to.</summary>
+    public const string Active = "active";
+
+    /// <summary>A standby that is in touch and holds the fleet state.</summary>
+    public const string Replicating = "replicating";
+
+    /// <summary>Enrolled, in touch, and has never applied a snapshot - so it cannot take over.</summary>
+    public const string NeverSynced = "never_synced";
+
+    /// <summary>Has not been heard from for longer than the grace period.</summary>
+    public const string Silent = "silent";
+
+    /// <summary>Cut off on purpose. It receives nothing and may not promote itself.</summary>
+    public const string Revoked = "revoked";
+}
+
+/// <param name="IsSelf">True for the panel answering the request, so the page can say "this one"
+/// without the caller having to compare ids.</param>
+/// <param name="LagSeconds">How far behind this panel's applied snapshot is, or null when it has
+/// never applied one. The number an operator actually wants before switching.</param>
+public sealed record PanelResponse(
+    string Id,
+    string Name,
+    string? Hostname,
+    string? Url,
+    string? PublicIp,
+    string? Version,
+    string Role,
+    long Term,
+    bool IsSelf,
+    bool IsActive,
+    bool Revoked,
+    DateTimeOffset EnrolledAt,
+    DateTimeOffset? SnapshotAt,
+    DateTimeOffset? LastSeenAt,
+    string? LastError,
+    int? LagSeconds,
+    string State,
+    string StateReason)
+{
+    public static PanelResponse From(
+        PanelRecord panel,
+        string selfId,
+        string? activePanelId,
+        DateTimeOffset? selfSnapshotAt,
+        TimeSpan grace,
+        DateTimeOffset now)
+    {
+        var isSelf = string.Equals(panel.Id, selfId, StringComparison.Ordinal);
+
+        // The panel answering knows its own applied snapshot exactly; for its peer it only knows
+        // what the peer last reported, which is the honest difference between the two columns.
+        var snapshotAt = isSelf ? selfSnapshotAt ?? panel.SnapshotAt : panel.SnapshotAt;
+        var isActive = string.Equals(panel.Id, activePanelId, StringComparison.Ordinal);
+        var silent = panel.LastSeenAt is null || now - panel.LastSeenAt > grace;
+
+        var state = panel.Revoked ? PanelStates.Revoked
+            : isActive ? PanelStates.Active
+            : silent ? PanelStates.Silent
+            : snapshotAt is null ? PanelStates.NeverSynced
+            : PanelStates.Replicating;
+
+        return new PanelResponse(
+            panel.Id,
+            panel.Name,
+            panel.Hostname,
+            panel.Url,
+            panel.PublicIp,
+            panel.AgentVersion,
+            panel.Role,
+            panel.Term,
+            isSelf,
+            isActive,
+            panel.Revoked,
+            panel.EnrolledAt,
+            snapshotAt,
+            panel.LastSeenAt,
+            panel.LastError,
+            snapshotAt is null ? null : (int)Math.Max(0, Math.Round((now - snapshotAt.Value).TotalSeconds)),
+            state,
+            Reason(state, panel, snapshotAt, now));
+    }
+
+    private static string Reason(string state, PanelRecord panel, DateTimeOffset? snapshotAt, DateTimeOffset now) => state switch
+    {
+        PanelStates.Revoked => "Cut off on purpose: it receives no configuration and cannot take over.",
+        PanelStates.Active => $"In charge of the fleet at term {panel.Term}.",
+        PanelStates.Silent => panel.LastSeenAt is { } seen
+            ? $"Nothing heard from it for {PanelFailoverPolicy.Describe(now - seen)}."
+            : "Enrolled, but it has never reported in.",
+        PanelStates.NeverSynced => "In touch, but it has not applied a snapshot yet, so it holds no fleet state and cannot take over.",
+        _ => snapshotAt is { } applied
+            ? $"Replicating; its configuration is {PanelFailoverPolicy.Describe(now - applied)} behind."
+            : "Replicating."
+    };
+}
+
+/// <summary>
+/// The pair as the panel answering sees it: which role it is in, how its replication is going,
+/// and every panel it knows about.
+/// </summary>
+/// <param name="Role">This panel's live role - read from its database, never from its environment.</param>
+/// <param name="HasFleetState">
+/// Whether this panel has ever applied a snapshot. False on a standby means promotion is refused
+/// outright: a panel with no fleet state would publish an empty one, and every node would
+/// converge onto it and drop every peer it serves.
+/// </param>
+/// <param name="Held">The operator's brake. A held standby never promotes itself, however armed.</param>
+/// <param name="WitnessOnline">Whether this panel could reach anything outside the pair, or null
+/// while it has had no reason to check.</param>
+/// <param name="RecordName">The record agents follow to reach the panel, or null when there is
+/// none and the operator points them by hand.</param>
+public sealed record PanelPairResponse(
+    string Role,
+    string PanelId,
+    string Name,
+    long Term,
+    string? ActivePanelId,
+    DateTimeOffset? PromotedAt,
+    string Mode,
+    bool Held,
+    bool Enrolled,
+    bool HasFleetState,
+    DateTimeOffset? SyncedAt,
+    DateTimeOffset? SnapshotAt,
+    string? SyncError,
+    int SyncIntervalSeconds,
+    int GraceSeconds,
+    int CooldownSeconds,
+    bool WitnessConfigured,
+    bool? WitnessOnline,
+    string Provider,
+    bool ProviderConfigured,
+    string? RecordName,
+    string? Url,
+    string? PublicIp,
+    DateTimeOffset? EvaluatedAt,
+    string? Action,
+    string? Message,
+    PanelResponse[] Panels,
+    string? Warning);
+
+/// <summary>What a standby panel is to be enrolled as. Only a name: everything else about a panel
+/// is in its own environment, because a panel is not configured from here.</summary>
+public sealed record CreatePanelRequest(string Name);
+
+public sealed record UpdatePanelFailoverRequest(string Mode);
+
+/// <summary>The brake, and the one write a standby accepts about itself.</summary>
+public sealed record PanelHoldRequest(bool Held);
+
+/// <summary>What a promotion or a demotion did, beside the pair it left behind.</summary>
+public sealed record PanelSwitchResponse(long Term, string? Warning, PanelPairResponse Pair);

@@ -116,6 +116,17 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
         // applied_revision is at or above zero.
         EnsureColumn(connection, "fleet", "identity_revision", "INTEGER NOT NULL DEFAULT 0");
 
+        // The panel pair. A fleet that has never had a second panel has no term and no active
+        // panel: zero and NULL are the honest start, and the panel that is already serving adopts
+        // term 1 and its own id the first time a standby is enrolled.
+        EnsureColumn(connection, "fleet", "panel_term", "INTEGER NOT NULL DEFAULT 0");
+        EnsureColumn(connection, "fleet", "active_panel_id", "TEXT NULL");
+        EnsureColumn(connection, "fleet", "panel_promoted_at", "TEXT NULL");
+        // Off until armed, like node failover and for a sharper reason: a standby has no probe to
+        // ask, so arming it is accepting that a network split can leave two panels believing they
+        // are in charge.
+        EnsureColumn(connection, "fleet", "panel_failover_mode", "TEXT NOT NULL DEFAULT 'manual'");
+
         // When it changed, which the monitor needs for a different reason: for up to one probe
         // round after a rotation the probes are still carrying the previous config, so nodes that
         // have already converged read as blocked through no fault of their own.
@@ -127,6 +138,18 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
         using (var index = connection.CreateCommand())
         {
             index.CommandText = "CREATE INDEX IF NOT EXISTS ix_clients_group ON clients (group_id)";
+            index.ExecuteNonQuery();
+        }
+
+        // The incremental half of panel replication reads each history table in `updated_at`
+        // order from a cursor, which is a full scan of ninety days of rows without these.
+        using (var index = connection.CreateCommand())
+        {
+            index.CommandText = """
+                CREATE INDEX IF NOT EXISTS ix_client_usage_updated ON client_usage (updated_at);
+                CREATE INDEX IF NOT EXISTS ix_node_availability_updated ON node_availability (updated_at);
+                CREATE INDEX IF NOT EXISTS ix_probe_availability_updated ON probe_availability (updated_at);
+                """;
             index.ExecuteNonQuery();
         }
 
@@ -456,6 +479,77 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
         -- The latest result per probe and node, not a history. last_reachable_at and
         -- failing_since survive the rows that replace them: they are what says how long a node
         -- has been failing, which a single latest result cannot.
+        -- The panels in the pair, as the fleet knows them: one row per panel, this one included.
+        -- Replicated like everything else here, so a promoted standby already knows who its peer
+        -- is and does not have to be told again.
+        --
+        -- `role`, `term`, `url`, `public_ip`, `agent_version`, `snapshot_at`, `last_seen_at` and
+        -- `last_error` are what the other panel last reported about itself, not configuration:
+        -- they arrive on the live stream rather than in the snapshot, because a snapshot that
+        -- changed every time a peer said hello would be re-pulled whole every poll.
+        CREATE TABLE IF NOT EXISTS panels (
+            id               TEXT PRIMARY KEY,
+            name             TEXT    NOT NULL,
+            hostname         TEXT    NULL,
+            agent_public_key TEXT    NOT NULL,
+            url              TEXT    NULL,
+            public_ip        TEXT    NULL,
+            agent_version    TEXT    NULL,
+            role             TEXT    NOT NULL DEFAULT 'standby',
+            term             INTEGER NOT NULL DEFAULT 0,
+            snapshot_at      TEXT    NULL,
+            last_seen_at     TEXT    NULL,
+            last_error       TEXT    NULL,
+            revoked          INTEGER NOT NULL DEFAULT 0,
+            enrolled_at      TEXT    NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_panels_agent_key ON panels (agent_public_key);
+
+        -- What is true of *this* panel and nobody else: which role it is in, the key pair it
+        -- signs peer requests with, the signing key it pinned, and how far its replication has
+        -- got. The one table a snapshot never touches.
+        --
+        -- It has to be outside the replicated set in both directions. A standby that replicated
+        -- the active's role row would read itself as active the moment it synced; and a promotion
+        -- that lived in the replicated set would be undone by the next snapshot from a panel that
+        -- has not heard about it yet. Which is also why the role is here and not in the
+        -- environment: an operator who promotes a standby at three in the morning must not have
+        -- the container recreate itself back into a standby.
+        CREATE TABLE IF NOT EXISTS panel_local (
+            id                    INTEGER PRIMARY KEY CHECK (id = 1),
+            role                  TEXT    NOT NULL,
+            panel_id              TEXT    NOT NULL,
+            agent_private_key     TEXT    NOT NULL,
+            agent_public_key      TEXT    NOT NULL,
+            -- Pinned at enrollment and checked on every snapshot afterwards, exactly as an agent
+            -- pins it: a standby holds the whole fleet, so what it accepts as the fleet's own
+            -- state must be provably from the panel that issued its identity.
+            pinned_signing_key    TEXT    NULL,
+            pinned_signing_key_id TEXT    NULL,
+            peer_url              TEXT    NULL,
+            promoted_term         INTEGER NOT NULL DEFAULT 0,
+            promoted_at           TEXT    NULL,
+            -- The last pull that succeeded, on this panel's own clock. What the grace period is
+            -- measured against, so a peer with a wandering clock cannot hold a standby back.
+            synced_at             TEXT    NULL,
+            -- The stamp the active put on the snapshot last applied here. Monotonic: a snapshot
+            -- older than this is refused, which is what stops a demoted panel from feeding a
+            -- standby the state it had before it lost.
+            snapshot_at           TEXT    NULL,
+            sync_error            TEXT    NULL,
+            -- The ETag of the snapshot last applied here, sent back on the next pull so an
+            -- unchanged fleet costs one cheap request instead of a full transfer of itself.
+            snapshot_etag         TEXT    NULL,
+            -- The operator's brake, reachable on a read-only panel: an armed standby that is
+            -- held never promotes itself, whatever the fleet says.
+            hold                  INTEGER NOT NULL DEFAULT 0,
+            usage_cursor          TEXT    NULL,
+            node_availability_cursor  TEXT NULL,
+            probe_availability_cursor TEXT NULL,
+            created_at            TEXT    NOT NULL,
+            updated_at            TEXT    NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS probe_results (
             probe_id          TEXT    NOT NULL,
             node_id           TEXT    NOT NULL,

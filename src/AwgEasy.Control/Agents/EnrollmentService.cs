@@ -16,7 +16,10 @@ public sealed class EnrollmentService(
     Database database,
     NodeRepository nodes,
     ProbeService probeService,
+    PanelRepository panels,
+    PanelContext panelContext,
     FleetService fleet,
+    ControlOptions options,
     EventLog events,
     ILogger<EnrollmentService> logger)
 {
@@ -24,6 +27,15 @@ public sealed class EnrollmentService(
 
     public const string NodeToken = "node";
     public const string ProbeToken = "probe";
+
+    /// <summary>
+    /// A standby panel. Kept apart from the other two by more than tidiness: a node token hands
+    /// over the fleet identity, a probe token hands over one client key, and this one hands over
+    /// the entire panel - every client private key, every admin password hash and the bundle
+    /// signing key. An install command pasted into the wrong place must not be able to turn one
+    /// into another, which is what <see cref="ReadToken"/> enforces.
+    /// </summary>
+    public const string PanelToken = "panel";
 
     /// <param name="overrides">
     /// Per-node settings the node is to be born with, carried on the token rather than applied
@@ -61,11 +73,14 @@ public sealed class EnrollmentService(
         events.Record($"{kind}.token_issued", $"Enrollment token issued for {kind} '{nodeName}'.");
 
         var baseUrl = controlUrl.TrimEnd('/');
-        var install = kind == ProbeToken
-            ? ProbeInstallCommand(baseUrl, token)
+        var install = kind switch
+        {
+            ProbeToken => ProbeInstallCommand(baseUrl, token),
+            PanelToken => PanelInstallHint(baseUrl, token),
             // The agent runs with host networking and takes its listen port from the bundle, so
             // the command needs nothing but where to enroll.
-            : $"curl -fsSL {baseUrl}/install.sh | sh -s -- --url {baseUrl} --token {token}";
+            _ => $"curl -fsSL {baseUrl}/install.sh | sh -s -- --url {baseUrl} --token {token}"
+        };
 
         return new EnrollmentTokenResponse(token, nodeName, expiresAt, install);
     }
@@ -79,6 +94,20 @@ public sealed class EnrollmentService(
         => "docker run -d --name awg-probe --restart unless-stopped --cap-add NET_ADMIN --device /dev/net/tun:/dev/net/tun "
             + $"-e AWG_ROLE=probe -e AWG_CONTROL_URL={baseUrl} -e AWG_ENROLLMENT_TOKEN={token} "
             + "-v awg-probe-state:/etc/awg-probe dihasi/awg-node:latest";
+
+    /// <summary>
+    /// What to put in the standby panel's own environment. Not a one-liner like the other two:
+    /// a panel is the same image as this one with a database of its own, so what is handed over
+    /// is the three variables that point it here - and the warning that comes with them.
+    /// </summary>
+    private static string PanelInstallHint(string baseUrl, string token)
+        => $"""
+            AWG_PANEL_ROLE=standby
+            AWG_PANEL_PEER_URL={baseUrl}
+            AWG_PANEL_ENROLLMENT_TOKEN={token}
+            AWG_PANEL_URL=https://standby.example.com
+            AWG_PANEL_PUBLIC_IP=203.0.113.10
+            """;
 
     public (EnrollResponse? Response, ApiError Error) Enroll(EnrollRequest request)
     {
@@ -193,6 +222,103 @@ public sealed class EnrollmentService(
         logger.LogInformation("Probe {ProbeName} ({ProbeId}) enrolled from {Hostname}.", probeName, probe.Id, request.Hostname);
 
         return (new EnrollResponse(probe.Id, current.SigningPublicKey, current.SigningKeyId), ApiError.Empty);
+    }
+
+    /// <summary>
+    /// Adopts a standby panel: registers it, and answers with the fleet signing key for it to pin.
+    ///
+    /// The same token flow and the same kind of key as a node or a probe, and deliberately so -
+    /// but what this one is handed is not comparable. A node gets public keys and addresses; a
+    /// probe gets one client config. A panel gets the fleet private key, the bundle signing key
+    /// pair, every client private key and every admin password hash, because that is what it takes
+    /// to keep the fleet converging when the panel that was in charge is gone. Enrolling one is
+    /// handing over the panel, not a share of it.
+    /// </summary>
+    public (PanelEnrollResponse? Response, ApiError Error) EnrollPanel(EnrollRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.EnrollmentToken) || string.IsNullOrWhiteSpace(request.AgentPublicKey))
+        {
+            return (null, new ApiError("enrollment_invalid", "Enrollment token and panel public key are required."));
+        }
+
+        try
+        {
+            using var _ = BundleSigning.ImportPublicKey(request.AgentPublicKey);
+        }
+        catch (Exception exception) when (exception is CryptographicException or FormatException)
+        {
+            return (null, new ApiError("enrollment_invalid", "Panel public key is not a valid P-256 SubjectPublicKeyInfo."));
+        }
+
+        if (panels.FindByAgentKey(request.AgentPublicKey) is { } registered)
+        {
+            return (null, new ApiError(
+                "enrollment_key_registered",
+                $"This panel is already enrolled as '{registered.Name}'. Delete it here first, then enroll again."));
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var (panelName, _, tokenError) = ReadToken(request, PanelToken, now);
+        if (panelName is null)
+        {
+            return (null, tokenError);
+        }
+
+        var self = panelContext.State;
+
+        // The first standby is what turns one panel into a pair, so this is where the panel that
+        // has been serving all along writes down that it is the one in charge. Adopted at term 1
+        // rather than promoted: nothing failed over, and the log should not say it did.
+        var selfRow = panels.Find(self.PanelId);
+        if (selfRow is null)
+        {
+            panels.Insert(new PanelRecord(
+                self.PanelId,
+                options.Panel.Name ?? Environment.MachineName,
+                Environment.MachineName,
+                self.AgentPublicKey,
+                Revoked: false,
+                EnrolledAt: now,
+                Url: options.Panel.Url,
+                PublicIp: options.Panel.PublicIp,
+                AgentVersion: PanelVersion.Current,
+                Role: PanelRoles.Active));
+        }
+
+        var term = panels.AdoptAsActive(self.PanelId, now);
+
+        var panel = new PanelRecord(
+            Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture),
+            panelName,
+            request.Hostname,
+            request.AgentPublicKey,
+            Revoked: false,
+            EnrolledAt: now,
+            AgentVersion: request.AgentVersion,
+            Role: PanelRoles.Standby,
+            Term: term);
+
+        panels.Insert(panel);
+        Consume(request.EnrollmentToken, panel.Id, now);
+
+        var current = fleet.Current;
+        events.Record("panel.enrolled", $"Standby panel '{panelName}' enrolled from {request.Hostname}.");
+        logger.LogWarning(
+            "Standby panel {PanelName} ({PanelId}) enrolled from {Hostname}. It now replicates the fleet identity, "
+            + "every client private key and every admin credential.",
+            panelName,
+            panel.Id,
+            request.Hostname);
+
+        return (
+            new PanelEnrollResponse(
+                panel.Id,
+                current.SigningPublicKey,
+                current.SigningKeyId,
+                selfRow?.Name ?? options.Panel.Name ?? Environment.MachineName,
+                term,
+                options.Panel.Url),
+            ApiError.Empty);
     }
 
     /// <summary>

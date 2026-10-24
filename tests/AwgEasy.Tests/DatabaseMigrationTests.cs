@@ -165,6 +165,57 @@ public sealed class DatabaseMigrationTests : IDisposable
         Assert.Equal(0, new ClientRepository(database).CountStaleConfigs(fleet.Generation));
     }
 
+    /// <summary>
+    /// A panel that predates the pair opens as a lone panel, not as a broken half of one. The
+    /// term starts at zero and no panel is in charge, because a fleet with one panel has nothing
+    /// to fence against - the first standby enrollment is what makes it a pair, and it adopts the
+    /// panel already serving rather than staging a failover that never happened.
+    /// </summary>
+    [Fact]
+    public void A_panel_upgraded_into_the_pair_starts_as_a_lone_panel()
+    {
+        WriteFleetWithoutTunnelMtu();
+
+        var database = new Database(Options(), NullLogger<Database>.Instance);
+        database.Migrate();
+
+        var pair = new PanelRepository(database).FindPairState();
+
+        Assert.Equal(0, pair.Term);
+        Assert.Null(pair.ActivePanelId);
+        Assert.Equal(PanelFailoverModes.Manual, pair.FailoverMode);
+        Assert.Empty(new PanelRepository(database).List());
+    }
+
+    /// <summary>
+    /// The local row is created with this panel's own key pair, and it is the one place the role
+    /// lives: a promotion has to survive a restart, so it cannot be the environment that decides.
+    /// </summary>
+    [Fact]
+    public void The_local_panel_row_is_created_with_a_key_pair_of_its_own()
+    {
+        WriteFleetWithoutTunnelMtu();
+
+        var database = new Database(Options(), NullLogger<Database>.Instance);
+        database.Migrate();
+
+        var store = new PanelLocalStore(database);
+        var state = store.Ensure(PanelRoles.Active, peerUrl: null);
+
+        Assert.Equal(PanelRoles.Active, state.Role);
+        Assert.NotEmpty(state.PanelId);
+        Assert.False(state.IsEnrolled);
+        Assert.False(state.HasFleetState);
+
+        // Stable across restarts: the identity a peer authenticates must not change because the
+        // process did.
+        Assert.Equal(state.PanelId, store.Ensure(PanelRoles.Standby, peerUrl: null).PanelId);
+        Assert.Equal(PanelRoles.Active, store.Ensure(PanelRoles.Standby, peerUrl: null).Role);
+
+        using var key = AwgEasy.Contracts.BundleSigning.ImportPrivateKey(state.AgentPrivateKey);
+        Assert.Equal(state.AgentPublicKey, AwgEasy.Contracts.BundleSigning.ExportPublicKey(key));
+    }
+
     /// <summary>A share link as a panel that predates the generation check wrote it.</summary>
     private void WriteShare(string tokenHash, string clientId)
     {
@@ -243,7 +294,8 @@ public sealed class DatabaseMigrationTests : IDisposable
         Notifications: new NotificationOptions(null, null, null),
         Usage: new UsageOptions(UsageOptions.DefaultRetentionDays),
         Availability: new AvailabilityOptions(AvailabilityOptions.DefaultRetentionDays),
-        Metrics: new MetricsOptions(null));
+        Metrics: new MetricsOptions(null),
+        Panel: TestPanelOptions.Default);
 
     public void Dispose()
     {

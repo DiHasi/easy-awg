@@ -65,6 +65,35 @@ services:
       # How many days of per-peer traffic history the panel keeps for the Traffic page. 0 records
       # none at all; the live counters come from the nodes and keep working either way.
       AWG_USAGE_RETENTION_DAYS: "${AWG_USAGE_RETENTION_DAYS:-}"
+      # The panel pair. Leave every one of these unset for a single panel: nothing below changes
+      # how a lone panel behaves, and the pair stays out of the way until a standby is enrolled.
+      #
+      # On the panel in charge, set AWG_PANEL_URL (and AWG_PANEL_PUBLIC_IP if a record is moved) -
+      # a standby cannot be enrolled without the first, because a pair that cannot reach itself
+      # cannot tell which of the two is in charge. On the standby, also set AWG_PANEL_ROLE=standby,
+      # AWG_PANEL_PEER_URL and the one-time AWG_PANEL_ENROLLMENT_TOKEN from the panel.
+      AWG_PANEL_ROLE: "${AWG_PANEL_ROLE:-active}"
+      AWG_PANEL_NAME: "${AWG_PANEL_NAME:-}"
+      AWG_PANEL_URL: "${AWG_PANEL_URL:-}"
+      AWG_PANEL_PUBLIC_IP: "${AWG_PANEL_PUBLIC_IP:-}"
+      AWG_PANEL_PEER_URL: "${AWG_PANEL_PEER_URL:-}"
+      AWG_PANEL_ENROLLMENT_TOKEN: "${AWG_PANEL_ENROLLMENT_TOKEN:-}"
+      # The record your agents follow to reach the panel, moved on promotion through the same
+      # provider the node record uses. Unset leaves it to you; nodes are fail-static, so they keep
+      # serving traffic while they cannot reach a panel.
+      AWG_PANEL_DNS_RECORD_NAME: "${AWG_PANEL_DNS_RECORD_NAME:-}"
+      AWG_PANEL_SYNC_SECONDS: "${AWG_PANEL_SYNC_SECONDS:-}"
+      # How long a standby must have failed to pull before it may take over. Must stay above
+      # AWG_PANEL_SYNC_SECONDS - the panel refuses to start otherwise - or one slow poll would be
+      # enough.
+      AWG_PANEL_FAILOVER_GRACE_SECONDS: "${AWG_PANEL_FAILOVER_GRACE_SECONDS:-}"
+      AWG_PANEL_FAILOVER_COOLDOWN_MINUTES: "${AWG_PANEL_FAILOVER_COOLDOWN_MINUTES:-}"
+      # What a standby fetches to find out whether its own uplink still works. Unlike a node, a
+      # panel has no probe to ask, so this is the only thing separating "the other panel is gone"
+      # from "my network broke". "none" switches it off, which refuses automatic promotion.
+      AWG_PANEL_WITNESS_URLS: "${AWG_PANEL_WITNESS_URLS:-}"
+      AWG_PANEL_WITNESS_TIMEOUT_SECONDS: "${AWG_PANEL_WITNESS_TIMEOUT_SECONDS:-}"
+      AWG_PANEL_STREAM_BATCH: "${AWG_PANEL_STREAM_BATCH:-}"
     volumes:
       - awg-control-state:/etc/awg-control
 

@@ -25,6 +25,7 @@ the legacy import path, that tag is where its `state.json` format is defined.
 src/AwgEasy.Contracts/   Wire contract shared by both sides. Changing it changes the fleet.
 src/AwgEasy.Node/        Agent on each VPN server, and the probe (AWG_ROLE=probe). AOT-published.
 src/AwgEasy.Control/     Panel: database, admin API, agent API, serves the frontend.
+src/AwgEasy.Control/Ha/  The panel pair: replication, the term, promotion. Panel to panel only.
 frontend/                Nuxt 4 + Nuxt UI, generated to static files, served by Control.
 tests/AwgEasy.Tests/     xUnit. Unit tests plus integration tests hosting the real Control.
 docker/                  node.Dockerfile, control.Dockerfile
@@ -37,7 +38,7 @@ compose.e2e.yaml         What that script brings up. Not a deployment; the other
 
 ```bash
 dotnet build Awg-easy.sln          # whole solution
-dotnet test Awg-easy.sln           # 339 tests, all must pass
+dotnet test Awg-easy.sln           # 376 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
 cd frontend && pnpm run test       # vitest, in a Nuxt environment
@@ -261,6 +262,101 @@ recording them, so the rotation does not page an operator about the fleet they a
 and a block that is still there afterwards is still announced. Probe rounds inside that window do
 land in `probe_availability` as failures; that is a known gap, not a decision.
 
+**The panel is a pair, and which half this one is lives in the database.** A standby is a second
+Control with a database of its own that replicates the first and refuses every write. Its role is
+in `panel_local`, the one table a snapshot never replaces, and never in the environment: a
+promotion has to survive a restart, or an operator who promoted the standby at three in the
+morning finds the container has put it back. `AWG_PANEL_ROLE` seeds that row on an empty database
+and is ignored afterwards. The role has to stay out of the replicated set in the other direction
+too - a standby that replicated the active's role would read itself as active the moment it first
+synced, and a promotion that lived there would be undone by the next snapshot from a panel that
+has not heard about it yet.
+
+**A standby replicates what the fleet runs on and what the panel observed, and not the event
+log.** Two payloads, apart because they change on different clocks. The snapshot is the
+configuration - identity, clients with their private keys, groups, arrangement,
+`config_generation`, each node's own settings, probes, admins, enrollment tokens, share links,
+counter baselines - pulled whole and gated by an ETag, so an unchanged fleet costs one request.
+The stream is the evidence: the columns the agents report, `peer_stats`, `probe_results` and the
+panel rows, replaced wholesale, plus `client_usage`, `node_availability` and `probe_availability`
+read from a cursor so a cold standby catches up over several polls rather than in one enormous
+response. The split follows the same line the rest of the panel already draws, and it is why a
+node's `status` is not in the snapshot: an ETag that moved every twenty seconds would transfer the
+whole fleet on every poll. `events` is deliberately in neither. It is each panel's own account of
+what was done on it, its key is a local autoincrement that two writers cannot share without
+renumbering one of them, and a panel that takes over has its own story to tell from the moment it
+did - which the promotion writes into it.
+
+**Rows travel as rows.** The obfuscation profile crosses as the JSON the column holds, not as a
+reparsed object, so what a standby stores is byte for byte what the active stores. A fleet's wire
+format must not be able to drift because two panels serialized it differently - the same reason
+`ContractsJsonContext` is mandatory on both sides of a bundle.
+
+**The term is the whole of the fencing, and it is arithmetic rather than a judgement.**
+`fleet.panel_term` is monotonic and moves once per promotion, in the same statement that names the
+panel holding it. The pair watches itself: every round the panel in charge sends one signed hello
+to each peer, and a peer answering at a higher term means this panel has been superseded, so it
+steps down at once - no quorum, no arbitration, last promotion wins. That is also why
+`AWG_PANEL_URL` is required before a standby can be enrolled: a panel nobody can reach can never
+be told. Two panels at the same term is the one case the term cannot settle, and nothing is done
+automatically - the operator is told which two to look at, because picking a winner by coin toss
+is worse than saying so.
+
+**A panel with no fleet state is never promoted.** `POST /api/panel/promote` refuses with
+`panel_never_synced`, and `PanelFailoverPolicy` refuses the same thing however armed and however
+long the silence. A panel promoted without a snapshot has an empty clients table, and the first
+thing it would do is serve every node a bundle with no peers in it - which every node would
+apply, because that is what a node is for. The whole fleet would stop serving traffic within one
+poll interval and the panel would report it as a successful switch. It is the one refusal here
+with no override.
+
+**A standby is read-only, and the rule lives in one place.** `PanelWriteGuard` is the whole of it,
+for the same reason `AdminApi` keeps the authorization boundary in one short method: a rule spread
+across forty endpoints is one that will be forgotten the next time an endpoint is added. It
+refuses every write to the fleet - addresses are allocated by one panel only, because they must be
+unique fleet-wide, and two panels allocating out of one subnet is the fleet breaking silently -
+the agent and probe APIs entirely, and, although they are GETs, handing out a client config or
+resolving a share link, because rendering one stamps `config_generation` and a stamp written on a
+standby never reaches the panel in charge. It answers 503 rather than 403: the caller is allowed
+to ask, just not here, and 503 is what lets a node treat it as transient and stay fail-static
+instead of giving up on its identity.
+
+**Automatic panel promotion is weaker than node failover, and the difference is the witness.** A
+node has probes in other networks to vouch for it. When a standby cannot reach the panel in charge
+it has learned exactly one thing - that it cannot reach it - and is in no position to say which of
+the two is the one that is cut off. So the only evidence available is whether its own uplink still
+carries packets (`AWG_PANEL_WITNESS_URLS`, checked only once the grace period has elapsed, so a
+healthy pair makes no such requests); arming is refused without one; and the grace period must
+exceed the pull interval or the panel will not start. Even then this reduces the chance of being
+wrong rather than removing it, and the term is what makes being wrong survivable. There is also a
+local brake, `panel_local.hold`, reachable on a read-only panel precisely because a brake that
+needs the other panel to be reachable is not a brake.
+
+**Promotion does not wait for the record, which is the opposite of what node activation does.**
+`DnsFailoverService` refuses to mark a node active when the record did not move, because "active"
+there means "this is where client traffic goes", and a panel that claimed otherwise would be lying
+about the one fact an operator checks under pressure. Here it means "this panel is in charge of the
+fleet", which is true the moment the term moves - and a panel that refused to take over because a
+DNS API was unreachable would be useless in exactly the situation it exists for. So it takes over,
+and says plainly what still has to be done by hand. That is safe because a superseded panel
+refuses every agent call and nodes are fail-static: a record that has not caught up costs the
+fleet its management for a while, never its data plane.
+
+**Everything a panel accepts from another panel is signed, bound, expiring, and refused when it is
+behind.** Signed with the fleet signing key and verified against the one pinned at enrollment -
+the same arrangement an agent has, and another reason the signing key is never rotated.
+`PanelGuard` adds the binding, the expiry and the schema check; the term check is separate and is
+the one that matters for a pair, because a panel that lost a promotion still holds the signing key
+and can still produce payloads that verify perfectly, carrying the fleet as it was before it lost.
+The snapshot's ETag is taken over the payload with its stamps cleared - hashing a stamped envelope
+would make every poll a change, and every poll a full transfer.
+
+**A history cursor is cut on a whole timestamp.** `updated_at` is not unique: one accrual writes a
+row per peer with the same stamp. A batch that stopped inside such a group would either lose the
+rest of it, if the cursor advanced, or never get past it, if it did not. So the active takes every
+row up to and including the stamp of the row that would have been last, and the standby resumes
+strictly after it.
+
 **Automatic failover is reluctant by design.** It is off until armed, cannot be armed without a
 DNS provider, and runs the provider's `CheckAsync` before it is armed. It waits out the grace
 period, respects the cooldown after any switch, only picks a node that is healthy right now, and
@@ -477,3 +573,16 @@ never assert on a specific allocated address — assert on what the API returned
 - Automatic failover cannot be exercised end to end in `e2e.sh`: arming it requires a DNS provider,
   and there is none in CI. The script asserts the recommendation the manual path produces instead,
   which goes through the same policy.
+- A panel pair has only been exercised in the integration suite, where both panels are hosted in
+  one process and talk over each other's in-memory servers. What that covers is the real protocol
+  - signed requests, signed payloads, the ETag gate, the term, the write guard, and an agent
+  accepting a bundle from the panel it did not enroll with - but it is not two machines, and
+  `e2e.sh` does not bring up a second panel.
+- Automatic panel promotion is covered only through `PanelFailoverPolicy`, which is pure. Driving
+  it end to end needs a grace period that has actually elapsed and a witness that answers, and a
+  suite that reached the internet to decide a test would be worse than the gap.
+- Each panel prunes its own copy of the two histories, so `AWG_USAGE_RETENTION_DAYS` and
+  `AWG_AVAILABILITY_RETENTION_DAYS` have to match on both. A standby set lower drops rows its
+  cursor has already passed and will not fetch again.
+- `/api/metrics` answers on either panel, from that panel's own copy of the data, so scraping both
+  double-counts every series. Scrape one, or the panel record.

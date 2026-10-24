@@ -2,14 +2,15 @@
 import type { EnrollmentToken } from '~/types/api'
 
 /**
- * Issues a one-time enrollment token and shows the install command for a new node or probe. The
- * two tokens are not interchangeable - the panel refuses one used for the other - so the kind is
- * fixed by where the dialog was opened.
+ * Issues a one-time enrollment token and shows what to run for a new node, probe or standby
+ * panel. The three tokens are not interchangeable - the panel refuses one used for another - so
+ * the kind is fixed by where the dialog was opened, and for the panel kind that is the point:
+ * what it hands over is the whole control plane, not a share of it.
  */
 const open = defineModel<boolean>('open', { default: false })
 
 const props = withDefaults(defineProps<{
-  kind?: 'node' | 'probe'
+  kind?: 'node' | 'probe' | 'panel'
 }>(), {
   kind: 'node'
 })
@@ -18,21 +19,35 @@ const emit = defineEmits<{
   issued: []
 }>()
 
-const wording = computed(() => props.kind === 'probe'
-  ? {
+const wording = computed(() => {
+  if (props.kind === 'probe') {
+    return {
       title: 'Add a probe',
       description: 'Run it where your clients are - ideally inside the network that does the blocking. It checks each node with a real handshake and reports back.',
       label: 'Probe name',
       placeholder: 'moscow-home',
       run: 'Run this on a host where clients are (needs Docker)'
     }
-  : {
-      title: 'Enroll a node',
-      description: 'Name the node, then run the generated command on that server. The agent enrolls itself and pulls the fleet configuration.',
-      label: 'Node name',
-      placeholder: 'helsinki-1',
-      run: 'Run this on the new server'
-    })
+  }
+
+  if (props.kind === 'panel') {
+    return {
+      title: 'Enroll a standby panel',
+      description: 'A second copy of this panel. It replicates everything, refuses every change, and can take the fleet over when this one is gone.',
+      label: 'Panel name',
+      placeholder: 'panel-frankfurt',
+      run: 'Put these in the standby panel environment, then start it'
+    }
+  }
+
+  return {
+    title: 'Enroll a node',
+    description: 'Name the node, then run the generated command on that server. The agent enrolls itself and pulls the fleet configuration.',
+    label: 'Node name',
+    placeholder: 'helsinki-1',
+    run: 'Run this on the new server'
+  }
+})
 
 const api = useControlApi()
 const toast = useToast()
@@ -67,12 +82,14 @@ async function issue() {
   try {
     token.value = props.kind === 'probe'
       ? await api.post<EnrollmentToken>('/probes/tokens', { name: trimmed })
-      : await api.post<EnrollmentToken>('/nodes/tokens', {
-          name: trimmed,
-          endpointHost: endpointHost.value?.trim() || null,
-          egressInterface: egressInterface.value?.trim() || null,
-          mtu: mtu.value ?? null
-        })
+      : props.kind === 'panel'
+        ? await api.post<EnrollmentToken>('/panels/tokens', { name: trimmed })
+        : await api.post<EnrollmentToken>('/nodes/tokens', {
+            name: trimmed,
+            endpointHost: endpointHost.value?.trim() || null,
+            egressInterface: egressInterface.value?.trim() || null,
+            mtu: mtu.value ?? null
+          })
     name.value = ''
   } catch (error) {
     toast.add({ title: 'Could not issue a token', description: describeError(error, ''), color: 'error', icon: 'i-lucide-circle-alert' })
@@ -113,6 +130,20 @@ function reset() {
         v-if="!token"
         class="flex flex-col gap-4"
       >
+        <UAlert
+          v-if="kind === 'panel'"
+          color="warning"
+          variant="subtle"
+          icon="i-lucide-shield-alert"
+          title="This hands over the whole panel"
+        >
+          <template #description>
+            A standby holds the fleet private key, the bundle signing key, every client private key
+            and every admin credential - that is what it takes to keep the fleet converging when
+            this panel is gone. Put it somewhere you trust as much as this machine.
+          </template>
+        </UAlert>
+
         <UFormField :label="wording.label">
           <UInput
             v-model="name"
@@ -188,9 +219,23 @@ function reset() {
           title="Shown once"
           :description="`The token is not stored in readable form. It expires ${formatUtc(token.expiresAt)}.`"
         />
+        <UAlert
+          v-if="kind === 'panel'"
+          color="neutral"
+          variant="subtle"
+          icon="i-lucide-info"
+          title="Set the two addresses to real ones"
+        >
+          <template #description>
+            <code class="font-mono">AWG_PANEL_URL</code> is how this panel reaches the standby - without
+            it the pair cannot tell which of the two is in charge.
+            <code class="font-mono">AWG_PANEL_PUBLIC_IP</code> is what the panel record is pointed at when
+            the standby takes over.
+          </template>
+        </UAlert>
         <UFormField :label="wording.run">
           <div class="rounded-md border border-default bg-elevated p-3">
-            <code class="block break-all font-mono text-xs text-default">{{ token.installCommand }}</code>
+            <code class="block whitespace-pre-wrap break-all font-mono text-xs text-default">{{ token.installCommand }}</code>
           </div>
         </UFormField>
         <UButton
@@ -200,7 +245,7 @@ function reset() {
           block
           @click="copy"
         >
-          Copy command
+          {{ kind === 'panel' ? 'Copy settings' : 'Copy command' }}
         </UButton>
       </div>
     </template>
