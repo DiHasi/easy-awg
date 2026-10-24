@@ -1,4 +1,4 @@
-import type { PanelPair, PanelState } from '~/types/api'
+import type { PanelFailoverAction, PanelPair, PanelState } from '~/types/api'
 import type { Tone } from '~/composables/useNodeState'
 
 /**
@@ -54,4 +54,40 @@ export function describePanel(state: PanelState): { word: string, tone: Tone, ic
     default:
       return { word: 'Replicating', tone: 'standby', icon: 'i-lucide-refresh-cw' }
   }
+}
+
+/**
+ * What a standby concluded about taking over. One word per decision the policy can reach.
+ */
+const standbyVerdicts: Record<PanelFailoverAction, { word: string, tone: Tone, icon: string }> = {
+  none: { word: 'Nothing to do', tone: 'success', icon: 'i-lucide-check' },
+  wait: { word: 'Out of touch', tone: 'warning', icon: 'i-lucide-hourglass' },
+  hold: { word: 'Holding after a switch', tone: 'warning', icon: 'i-lucide-pause' },
+  recommend: { word: 'Take over by hand', tone: 'warning', icon: 'i-lucide-arrow-right-left' },
+  refused: { word: 'Will not take over', tone: 'error', icon: 'i-lucide-octagon-alert' },
+  promote: { word: 'Took over', tone: 'live', icon: 'i-lucide-crown' }
+}
+
+/**
+ * What a round concluded, in words that fit the panel that concluded it.
+ *
+ * The action alone is not enough, because the panel in charge borrows the promotion policy's
+ * vocabulary to report on something else entirely. Its rounds watch the pair rather than weigh a
+ * promotion, so `refused` there does not mean "I will not take over" - it means this panel cannot
+ * see its peer, or both claim to be in charge. Reading the standby's word out on an active panel
+ * tells an operator the opposite of what happened.
+ */
+export function describeRound(
+  action: PanelFailoverAction,
+  role: 'active' | 'standby'
+): { word: string, tone: Tone, icon: string } {
+  // `promote` is the one verdict that means the same thing in both roles: the round that took
+  // over reports itself as active, and "Took over" is exactly right.
+  if (role === 'active' && action !== 'promote') {
+    return action === 'none'
+      ? { word: 'Pair healthy', tone: 'success', icon: 'i-lucide-check' }
+      : { word: 'Pair degraded', tone: 'error', icon: 'i-lucide-unplug' }
+  }
+
+  return standbyVerdicts[action]
 }

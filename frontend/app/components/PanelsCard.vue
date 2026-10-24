@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { DropdownMenuItem } from '@nuxt/ui'
-import type { Panel, PanelFailoverAction, PanelSwitch } from '~/types/api'
-import type { Tone } from '~/composables/useNodeState'
+import type { Panel, PanelSwitch } from '~/types/api'
 
 /**
  * The panel pair: which of the two is in charge, how far behind the other is, and the two acts
@@ -31,16 +30,15 @@ const armed = computed(() => pair.value?.mode === 'automatic')
 // risk is and offers the one action that changes it.
 const alone = computed(() => panels.value.length <= 1 && pair.value?.role === 'active')
 
-const verdicts: Record<PanelFailoverAction, { word: string, tone: Tone, icon: string }> = {
-  none: { word: 'Nothing to do', tone: 'success', icon: 'i-lucide-check' },
-  wait: { word: 'Out of touch', tone: 'warning', icon: 'i-lucide-hourglass' },
-  hold: { word: 'Holding after a switch', tone: 'warning', icon: 'i-lucide-pause' },
-  recommend: { word: 'Take over by hand', tone: 'warning', icon: 'i-lucide-arrow-right-left' },
-  refused: { word: 'Will not take over', tone: 'error', icon: 'i-lucide-octagon-alert' },
-  promote: { word: 'Took over', tone: 'live', icon: 'i-lucide-crown' }
-}
+const verdict = computed(() => pair.value?.action
+  ? describeRound(pair.value.action, pair.value.role)
+  : null)
 
-const verdict = computed(() => pair.value?.action ? verdicts[pair.value.action] : null)
+// Two panels on different builds is what this column exists to reveal: a standby a release behind
+// is refused the snapshot and told to upgrade, and the version is where an operator looks next.
+// Revoked panels are left out - whatever they are running stopped mattering when they were cut off.
+const mixedVersions = computed(() => new Set(
+  panels.value.filter(panel => !panel.revoked && panel.version).map(panel => panel.version)).size > 1)
 
 function duration(seconds: number) {
   return seconds < 120 ? `${seconds} s` : `${Math.round(seconds / 60)} min`
@@ -442,6 +440,14 @@ async function act(call: () => Promise<unknown>, title: string) {
               </dt>
               <dd class="font-mono text-default">
                 {{ panel.lagSeconds === null || panel.lagSeconds === undefined ? '—' : duration(panel.lagSeconds) }}
+              </dd>
+            </div>
+            <div class="hidden lg:block">
+              <dt class="text-dimmed">
+                Version
+              </dt>
+              <dd :class="mixedVersions ? 'font-mono text-warning' : 'font-mono text-default'">
+                {{ panel.version ?? '—' }}
               </dd>
             </div>
             <div class="hidden sm:block">
