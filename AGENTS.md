@@ -32,6 +32,7 @@ docker/                  node.Dockerfile, control.Dockerfile
 scripts/install.sh       Node enrollment one-liner, served by Control at /install.sh
 scripts/e2e.sh           The pair actually running: panel, two nodes, a probe, in containers
 compose.e2e.yaml         What that script brings up. Not a deployment; the other three are
+docs/                    Operator documentation, en/ and ru/ in step. README.md is the overview
 ```
 
 ## Commands
@@ -52,7 +53,8 @@ dotnet publish src/AwgEasy.Node -c Release -r linux-x64   # the only check of th
 Run `pnpm run typecheck` after touching anything the frontend consumes. It catches null/undefined
 drift between the API and the forms that plain linting does not.
 
-`.github/workflows/ci.yml` runs all of the above except `e2e.sh` on every push and pull request,
+`.github/workflows/ci.yml` runs all of the above except `e2e.sh` on every pull request and on every
+push to `main`,
 plus a `dotnet list package --vulnerable` gate. `e2e.sh` has a workflow of its own
 (`.github/workflows/e2e.yml`): nightly, on request, and on a pull request that touches the images,
 the agent or the contract. It is kept out of the main run because it builds both images, which is
@@ -522,6 +524,12 @@ signed; it covers a hash of the body. Node revocation is a flag checked per requ
 ## Conventions
 
 - Code, comments and commit messages are in English. The maintainer communicates in Russian.
+- `README.md` is an overview and stays one: the operator documentation lives in `docs/`, as
+  `docs/en/<page>.md` and `docs/ru/<page>.md`. The two languages are the same pages under the same
+  file names, and a change to one is made to the other in the same commit - the language switch at
+  the top of every page promises a reader that the other side says the same thing. Panel labels
+  (`Nodes → Enroll node`, `Settings → Tunnel MTU`) stay in English in both, because that is what
+  is on the screen.
 - Comments explain **why**, not what. Match the surrounding density; do not narrate obvious code.
 - Endpoints return `ApiError { code, message }` on failure; codes are snake_case and stable.
 - Timestamps are stored in SQLite as ISO-8601 round-trip strings so the file stays inspectable.
