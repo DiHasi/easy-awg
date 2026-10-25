@@ -150,6 +150,28 @@ public sealed class PanelLocalStore(Database database)
             ("$keyId", signingKeyId),
             ("$peerUrl", peerUrl));
 
+    /// <summary>
+    /// Pins the fleet signing key this panel already holds, if nothing is pinned yet.
+    ///
+    /// The panel that created the fleet never enrolls into anything, so it has no pinned key - and
+    /// without one it can never accept a snapshot, which means it can never become a standby. It
+    /// does not need to be told the key by a peer: the key is in its own fleet row, it is the same
+    /// key the other panel signs with, and the signing key pair is the one thing a rotation
+    /// deliberately leaves alone. COALESCE so this can never overwrite a key pinned at enrollment,
+    /// which is the only one that proves anything about where the state came from.
+    /// </summary>
+    public void PinOwnSigningKey(string signingPublicKey, string signingKeyId)
+        => Update(
+            """
+            UPDATE panel_local
+               SET pinned_signing_key    = COALESCE(pinned_signing_key, $key),
+                   pinned_signing_key_id = COALESCE(pinned_signing_key_id, $keyId),
+                   updated_at            = $now
+             WHERE id = 1
+            """,
+            ("$key", signingPublicKey),
+            ("$keyId", signingKeyId));
+
     /// <param name="term">The term this panel is active at, or the term it last saw when stepping
     /// down. Recorded either way: it is what a returning panel compares against.</param>
     public void SetRole(string role, long term, DateTimeOffset at)

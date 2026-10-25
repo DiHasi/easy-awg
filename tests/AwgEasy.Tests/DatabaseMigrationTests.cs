@@ -248,6 +248,69 @@ public sealed class DatabaseMigrationTests : IDisposable
         Assert.Equal("https://a.example.com", panel.Url);
     }
 
+    /// <summary>
+    /// And only when it is actually named. A standby is named by the operator in the enroll
+    /// dialog, so rewriting the column from a fallback would throw away the only name anybody
+    /// chose - which is exactly what happened in the field: 'panel-secondary' became a container
+    /// id on the first round after the rename was added.
+    /// </summary>
+    [Fact]
+    public void A_panel_with_no_name_configured_keeps_the_one_it_was_given()
+    {
+        WriteFleetWithoutTunnelMtu();
+
+        var database = new Database(Options(), NullLogger<Database>.Instance);
+        database.Migrate();
+
+        var panels = new PanelRepository(database);
+        var now = DateTimeOffset.UtcNow;
+        panels.Insert(new PanelRecord(
+            "peer",
+            Name: "panel-secondary",
+            Hostname: null,
+            AgentPublicKey: "pub",
+            Revoked: false,
+            EnrolledAt: now,
+            Role: PanelRoles.Standby));
+
+        panels.RecordSelf("peer", name: null, PanelRoles.Standby, 2, "https://b.example.com", null, now, now);
+
+        var panel = panels.Find("peer")!;
+        Assert.Equal("panel-secondary", panel.Name);
+        Assert.Equal(2, panel.Term);
+    }
+
+    /// <summary>
+    /// The panel that created the fleet never enrolls into anything, so it holds no pinned signing
+    /// key - and without one it can never accept a snapshot, which means it can never become a
+    /// standby. It does not need a peer to tell it the key: the key is in its own fleet row.
+    /// </summary>
+    [Fact]
+    public void The_panel_that_created_the_fleet_can_pin_its_own_signing_key()
+    {
+        WriteFleetWithoutTunnelMtu();
+
+        var database = new Database(Options(), NullLogger<Database>.Instance);
+        database.Migrate();
+
+        var store = new PanelLocalStore(database);
+        var state = store.Ensure(PanelRoles.Active, peerUrl: null);
+        Assert.False(state.IsEnrolled);
+
+        var fleet = new FleetRepository(database).Find()!;
+        store.PinOwnSigningKey(fleet.SigningPublicKey, fleet.SigningKeyId);
+
+        var pinned = store.Find()!;
+        Assert.True(pinned.IsEnrolled);
+        Assert.Equal(fleet.SigningPublicKey, pinned.PinnedSigningKey);
+        Assert.Equal(fleet.SigningKeyId, pinned.PinnedSigningKeyId);
+
+        // Never overwrites one pinned at enrollment: that is the only key that proves anything
+        // about where the state came from.
+        store.PinOwnSigningKey("something-else", "deadbeef");
+        Assert.Equal(fleet.SigningPublicKey, store.Find()!.PinnedSigningKey);
+    }
+
     /// <summary>A share link as a panel that predates the generation check wrote it.</summary>
     private void WriteShare(string tokenHash, string clientId)
     {

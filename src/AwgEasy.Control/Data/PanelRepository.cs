@@ -140,9 +140,15 @@ public sealed class PanelRepository(Database database)
 
     /// <summary>What this panel reports about itself, so its own row reads the same on both sides
     /// of the pair rather than only on the replica that told it.</summary>
+    /// <param name="name">
+    /// What AWG_PANEL_NAME says, or null when it says nothing. Null leaves the stored name alone:
+    /// a standby is named by the operator in the enroll dialog, and overwriting that with a
+    /// fallback would throw away the only name anybody chose - on a container the fallback is the
+    /// container id, and a new one every time it is recreated.
+    /// </param>
     public void RecordSelf(
         string id,
-        string name,
+        string? name,
         string role,
         long term,
         string? url,
@@ -154,7 +160,7 @@ public sealed class PanelRepository(Database database)
         using var command = connection.Sql(
             """
             UPDATE panels
-               SET name          = $name,
+               SET name          = COALESCE($name, name),
                    url           = COALESCE($url, url),
                    public_ip     = COALESCE($publicIp, public_ip),
                    agent_version = $version,
@@ -165,10 +171,9 @@ public sealed class PanelRepository(Database database)
              WHERE id = $id
             """,
             ("$id", id),
-            // Rewritten every round rather than only at enrollment: the row is created from
-            // AWG_PANEL_NAME, and without this a panel that was first enrolled under a container
-            // id could never be renamed - it cannot revoke or delete itself, and nothing else
-            // touches the column.
+            // Rewritten every round when it is set, so AWG_PANEL_NAME is the source of truth
+            // and a restart is enough to fix a name - a panel cannot revoke or delete itself, and
+            // nothing else touches the column. Unset leaves what is there.
             ("$name", name),
             ("$url", url),
             ("$publicIp", publicIp),

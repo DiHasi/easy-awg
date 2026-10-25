@@ -18,6 +18,7 @@ public sealed class EnrollmentService(
     ProbeService probeService,
     PanelRepository panels,
     PanelContext panelContext,
+    PanelLocalStore panelStore,
     FleetService fleet,
     ControlOptions options,
     EventLog events,
@@ -302,6 +303,14 @@ public sealed class EnrollmentService(
         Consume(request.EnrollmentToken, panel.Id, now);
 
         var current = fleet.Current;
+
+        // This panel created the fleet, so it never enrolled into anything and holds no pinned
+        // signing key - and without one it could never accept a snapshot, which means it could
+        // never become a standby. Pinned from its own fleet row, because this is the moment it
+        // stops being the only panel there is. The key is the same one the other panel will sign
+        // with: the signing key pair is what a rotation deliberately leaves alone.
+        panelStore.PinOwnSigningKey(current.SigningPublicKey, current.SigningKeyId);
+
         events.Record("panel.enrolled", $"Standby panel '{panelName}' enrolled from {request.Hostname}.");
         logger.LogWarning(
             "Standby panel {PanelName} ({PanelId}) enrolled from {Hostname}. It now replicates the fleet identity, "

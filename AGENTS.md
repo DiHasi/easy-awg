@@ -39,7 +39,7 @@ docs/                    Operator documentation, en/ and ru/ in step. README.md 
 
 ```bash
 dotnet build Awg-easy.sln          # whole solution
-dotnet test Awg-easy.sln           # 384 tests, all must pass
+dotnet test Awg-easy.sln           # 388 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
 cd frontend && pnpm run test       # vitest, in a Nuxt environment
@@ -303,6 +303,30 @@ steps down at once - no quorum, no arbitration, last promotion wins. That is als
 be told. Two panels at the same term is the one case the term cannot settle, and nothing is done
 automatically - the operator is told which two to look at, because picking a winner by coin toss
 is worse than saying so.
+
+**The panel that created the fleet pins its own signing key.** Everything a panel accepts from a
+peer is verified against a key pinned at enrollment - but the first panel never enrolls into
+anything, so it has none, and a standby without one can never accept a snapshot. That made
+stepping down a one-way door: the first panel of every pair could be superseded and then never
+replicate, never catch up and never come back. `PinOwnSigningKey` takes the key out of its own
+fleet row, which is the very key the other panel signs with, because the signing key pair is what
+a rotation deliberately leaves alone. It is pinned when the pair is formed and, for a pair formed
+before this existed, on the way down - and it never overwrites a key pinned at enrollment, which
+is the only one that proves anything about where the state came from.
+
+**Whoever answers a hello has to be the panel that was asked.** `hello.PanelId` is checked against
+the peer the request was addressed to, because the configuration that breaks the pair is the one
+an operator reaches for first: giving a panel the moving record as its own `AWG_PANEL_URL`. After
+a switch that name resolves to whichever panel is in charge, so the hello comes back from the
+calling panel itself - carrying its own id and its own term, which clears the term comparison, the
+split-brain check and everything else, and writes a reassuring lie into the peer's row. Each panel
+needs a name of its own that never moves; the record agents follow is a different name.
+
+**A panel renames itself only when it is told a name.** `RecordSelf` writes `name` through a
+COALESCE, so `AWG_PANEL_NAME` renames and its absence leaves the stored name alone. The fallback
+to the machine name belongs to creating the row and nowhere else: a standby is named by the
+operator in the enroll dialog, and in a container the fallback is the container id - a new one
+every time it is recreated. Rewriting the column from it threw away the only name anybody chose.
 
 **A panel with no fleet state is never promoted.** `POST /api/panel/promote` refuses with
 `panel_never_synced`, and `PanelFailoverPolicy` refuses the same thing however armed and however

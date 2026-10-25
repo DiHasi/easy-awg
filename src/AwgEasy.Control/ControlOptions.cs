@@ -326,10 +326,11 @@ public sealed record PanelOptions(
     public bool StartsAsStandby => Role == PanelRoles.Standby;
 
     /// <summary>
-    /// How this panel is listed in the pair. The machine name is a poor fallback in a container -
-    /// it is the container id, and a new one every time the container is recreated - so setting
-    /// AWG_PANEL_NAME is worth doing, and the panel rewrites its own row from this on every round
-    /// rather than freezing whatever it happened to be called the day the pair was formed.
+    /// What to call this panel when its row is first created and nothing else is known. The
+    /// machine name is a poor name in a container - it is the container id, and a new one every
+    /// time the container is recreated - so it is only ever a last resort. Renaming an existing
+    /// row goes through <see cref="Name"/> directly: a fallback must never overwrite a name
+    /// somebody chose.
     /// </summary>
     public string DisplayName => Name ?? Environment.MachineName;
 

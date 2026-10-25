@@ -34,6 +34,7 @@ public sealed class PanelPromotionService(
     PanelContext context,
     PanelLocalStore store,
     PanelRepository panels,
+    FleetRepository fleet,
     IDnsRecordUpdater updater,
     ControlOptions options,
     EventLog events,
@@ -87,7 +88,7 @@ public sealed class PanelPromotionService(
         store.SetRole(PanelRoles.Active, term, now);
         store.ClearSyncState();
         context.Reload();
-        panels.RecordSelf(state.PanelId, options.Panel.DisplayName, PanelRoles.Active, term, options.Panel.Url, options.Panel.PublicIp, state.SnapshotAt, now);
+        panels.RecordSelf(state.PanelId, options.Panel.Name, PanelRoles.Active, term, options.Panel.Url, options.Panel.PublicIp, state.SnapshotAt, now);
 
         var warning = await PointRecordAsync(cancellationToken);
         var message = $"This panel took charge at term {term}: {reason}."
@@ -150,6 +151,15 @@ public sealed class PanelPromotionService(
         var now = DateTimeOffset.UtcNow;
         var term = observedTerm ?? panels.FindPairState().Term;
 
+        // A panel that created the fleet has no pinned signing key, and a pair formed before that
+        // was fixed still has none - so without this it would step down into a standby that can
+        // never accept a snapshot and can never come back. Its own fleet row holds the key the
+        // other panel signs with; nothing already pinned is touched.
+        if (!state.IsEnrolled && fleet.Find() is { } current)
+        {
+            store.PinOwnSigningKey(current.SigningPublicKey, current.SigningKeyId);
+        }
+
         if (observedTerm is { } superseding && observedPanelId is { } winner)
         {
             panels.AcknowledgeActive(winner, superseding, now);
@@ -157,7 +167,7 @@ public sealed class PanelPromotionService(
 
         store.SetRole(PanelRoles.Standby, term, now);
         context.Reload();
-        panels.RecordSelf(state.PanelId, options.Panel.DisplayName, PanelRoles.Standby, term, options.Panel.Url, options.Panel.PublicIp, state.SnapshotAt, now);
+        panels.RecordSelf(state.PanelId, options.Panel.Name, PanelRoles.Standby, term, options.Panel.Url, options.Panel.PublicIp, state.SnapshotAt, now);
 
         var message = $"This panel stepped down to standby at term {term}: {reason}.";
         events.Record("panel.demoted", message, actor: actor);

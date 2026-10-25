@@ -169,7 +169,7 @@ public sealed class PanelPairService(
             pair = pair with { Term = panels.AdoptAsActive(state.PanelId, now), ActivePanelId = state.PanelId };
         }
 
-        panels.RecordSelf(state.PanelId, options.Panel.DisplayName, PanelRoles.Active, pair.Term, options.Panel.Url, options.Panel.PublicIp, state.SnapshotAt, now);
+        panels.RecordSelf(state.PanelId, options.Panel.Name, PanelRoles.Active, pair.Term, options.Panel.Url, options.Panel.PublicIp, state.SnapshotAt, now);
 
         var peers = panels.List()
             .Where(panel => panel.Id != state.PanelId && !panel.Revoked)
@@ -195,6 +195,23 @@ public sealed class PanelPairService(
             if (hello is null)
             {
                 unreachable.Add($"{peer.Name}: {error?.Message ?? "no answer"}");
+                continue;
+            }
+
+            // Whoever answered has to be the panel that was asked. Nothing here had checked
+            // that, and the configuration that breaks it is the one an operator reaches for
+            // first: giving a panel the moving record as its own AWG_PANEL_URL. After a switch
+            // that name resolves to whichever panel is in charge, so the hello comes back from
+            // this very panel - carrying its own id and its own term, which clears every test
+            // below and writes a reassuring lie into the peer's row. A pair that cannot address
+            // its halves separately has no fencing at all, so it is said out loud.
+            if (!string.Equals(hello.PanelId, peer.Id, StringComparison.Ordinal))
+            {
+                unreachable.Add(string.Equals(hello.PanelId, state.PanelId, StringComparison.Ordinal)
+                    ? $"{url} reaches this panel, not {peer.Name} - give each panel an AWG_PANEL_URL of its own "
+                      + "that never moves, rather than the record agents follow"
+                    : $"{url} answered as '{hello.Name}', which is not {peer.Name}");
+
                 continue;
             }
 
@@ -379,7 +396,7 @@ public sealed class PanelPairService(
         // The standby's own row, so its pages name the right role and term before the next
         // snapshot replaces the table with the active's copy of it.
         var applied = context.State;
-        panels.RecordSelf(state.PanelId, options.Panel.DisplayName, PanelRoles.Standby, live.Term, options.Panel.Url, options.Panel.PublicIp, applied.SnapshotAt, now);
+        panels.RecordSelf(state.PanelId, options.Panel.Name, PanelRoles.Standby, live.Term, options.Panel.Url, options.Panel.PublicIp, applied.SnapshotAt, now);
 
         await client.ReportStatusAsync(
             peerUrl,

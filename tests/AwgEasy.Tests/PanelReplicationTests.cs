@@ -237,6 +237,69 @@ public sealed class PanelReplicationTests
     }
 
     /// <summary>
+    /// The panel that created the fleet never enrolled into anything, so it held no pinned signing
+    /// key - and a standby without one can never accept a snapshot. That made stepping down a
+    /// one-way door: the first panel of every pair could be superseded and then never replicate,
+    /// never catch up and never come back. It pins its own fleet signing key instead, which is the
+    /// same key the other panel signs with.
+    /// </summary>
+    [Fact]
+    public async Task The_panel_that_created_the_fleet_can_replicate_once_it_has_stepped_down()
+    {
+        await using var pair = await PanelPair.CreateAsync();
+        await pair.SyncAsync();
+        await pair.PromoteStandbyAsync();
+
+        // One round to find the higher term and step down.
+        (await pair.ActiveAdmin.PostAsync("/api/panel/sync", null)).EnsureSuccessStatusCode();
+
+        // And the next one replicates from the panel that superseded it.
+        using var response = await pair.ActiveAdmin.PostAsync("/api/panel/sync", null);
+        response.EnsureSuccessStatusCode();
+        var state = (await response.Content.ReadFromJsonAsync<PanelPairResponse>())!;
+
+        Assert.Equal(PanelRoles.Standby, state.Role);
+        Assert.True(state.Enrolled);
+        Assert.True(state.HasFleetState);
+        Assert.Null(state.SyncError);
+    }
+
+    /// <summary>
+    /// Whoever answers a hello has to be the panel that was asked. The configuration that breaks
+    /// this is the one an operator reaches for first - giving a panel the moving record as its own
+    /// AWG_PANEL_URL - and then the hello comes back from the wrong panel carrying a term that
+    /// clears every check, writing a reassuring lie into the peer's row.
+    /// </summary>
+    [Fact]
+    public async Task A_peer_url_that_reaches_the_wrong_panel_is_reported_rather_than_believed()
+    {
+        await using var pair = await PanelPair.CreateAsync();
+        await pair.SyncAsync();
+
+        using var key = BundleSigning.CreateKey();
+        var panels = pair.Active.Services.GetRequiredService<PanelRepository>();
+        panels.Insert(new PanelRecord(
+            "ghost",
+            Name: "panel-ghost",
+            Hostname: null,
+            AgentPublicKey: BundleSigning.ExportPublicKey(key),
+            Revoked: false,
+            EnrolledAt: DateTimeOffset.UtcNow,
+            // Reaches the standby, not the panel this row names.
+            Url: "http://panel-b.test"));
+
+        using var response = await pair.ActiveAdmin.PostAsync("/api/panel/sync", null);
+        response.EnsureSuccessStatusCode();
+        var state = (await response.Content.ReadFromJsonAsync<PanelPairResponse>())!;
+
+        Assert.Equal("refused", state.Action);
+        Assert.Contains("is not panel-ghost", state.Message!, StringComparison.Ordinal);
+
+        // And nothing was written into its row on the strength of somebody else's answer.
+        Assert.Null(panels.Find("ghost")!.LastSeenAt);
+    }
+
+    /// <summary>
     /// What the whole feature is for. An agent pinned the panel in charge's bundle signing key at
     /// enrollment; after the other panel takes over, the bundle it serves has to verify against
     /// that same pinned key and carry the same fleet identity - otherwise the node refuses it and
