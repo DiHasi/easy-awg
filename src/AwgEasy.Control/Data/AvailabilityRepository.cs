@@ -303,19 +303,51 @@ public sealed class AvailabilityRepository(Database database)
 
     /// <summary>A node that leaves the fleet takes its own history, and what probes said about it,
     /// along - the same rule as its latest probe results.</summary>
-    public void ForgetNode(string nodeId)
+    public void ForgetNode(string nodeId) => Clear(nodeId);
+
+    /// <summary>
+    /// Drops what was recorded, for one node or for the whole fleet, and says how many rows went.
+    ///
+    /// It exists because the record can be wrong about the fleet rather than merely old, and a
+    /// panel that goes on showing a block that did not happen is worse than one that admits it
+    /// remembers nothing. A probe whose own uplink was cut records the nodes it simply could not
+    /// get to as unreachable; a node rebuilt under its old row carries the blocks of the host it no
+    /// longer is; and a rotation performed before <see cref="RotationSettling"/> existed left a
+    /// fleet-wide block that was the panel's own doing. That last one is no longer made - the round
+    /// inside the settling window is not recorded at all - but a record already holding one has no
+    /// other way out.
+    ///
+    /// None of that can be mended sample by sample - a bucket holds counts, not the rounds behind
+    /// them - so the only honest repair is to stop claiming it. Deleted rather than hidden for the
+    /// same reason: a bucket kept out of sight is still a number every share would have to decide
+    /// whether to divide by, and that distinction is already carrying "no evidence" versus "not
+    /// healthy".
+    ///
+    /// Panel bookkeeping throughout, like the traffic history: nothing here reaches a node, so no
+    /// revision moves and no node re-applies anything.
+    /// </summary>
+    /// <param name="nodeId">The one node to forget, or null for every node and every probe row.</param>
+    /// <returns>How many rows were dropped.</returns>
+    public int Clear(string? nodeId = null)
     {
         using var connection = database.Open();
         using var transaction = connection.BeginTransaction();
 
+        var dropped = 0;
         foreach (var table in (string[])["node_availability", "probe_availability"])
         {
-            using var delete = connection.Sql($"DELETE FROM {table} WHERE node_id = $nodeId", ("$nodeId", nodeId));
+            // Both tables inside the one transaction: dropping the node rows and then failing on
+            // the probe rows would leave the page still naming a block in half the vocabulary.
+            using var delete = nodeId is null
+                ? connection.Sql($"DELETE FROM {table}")
+                : connection.Sql($"DELETE FROM {table} WHERE node_id = $nodeId", ("$nodeId", nodeId));
+
             delete.Transaction = transaction;
-            delete.ExecuteNonQuery();
+            dropped += delete.ExecuteNonQuery();
         }
 
         transaction.Commit();
+        return dropped;
     }
 
     /// <summary>A deleted probe stops being a vantage point, so its column disappears with it.</summary>

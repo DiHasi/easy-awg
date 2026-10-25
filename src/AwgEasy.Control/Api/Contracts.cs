@@ -433,6 +433,16 @@ public sealed record AvailabilitySummaryResponse(
     int RetentionDays,
     DateTimeOffset? RecordingSince);
 
+/// <summary>
+/// What a cleared availability history left behind.
+/// </summary>
+/// <param name="NodeId">The node that was cleared, or null when the whole fleet was.</param>
+/// <param name="Dropped">
+/// Rows dropped, across both tables. Worth returning rather than a bare 204: it is the only
+/// confirmation an operator gets that the numbers they were looking at are the ones that went.
+/// </param>
+public sealed record AvailabilityResetResponse(string? NodeId, int Dropped);
+
 public sealed record ImportResultResponse(int ClientsImported, long Revision, string[] Warnings);
 
 public sealed record ClientShareResponse(string Token, string ClientName, DateTimeOffset ExpiresAt, string Url);

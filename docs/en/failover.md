@@ -100,11 +100,35 @@ how a flapping node comes to look fine. An hour the panel recorded nothing in - 
 or had only just been installed - is drawn as a gap and counts towards nothing: "no evidence" and
 "not healthy" are different answers, and a share is only ever taken over the checks that ran.
 
+The minute after a [rotation](security.md) is left out for the same reason. For up to one probe
+round afterwards every probe is still speaking the previous wire format, so no handshake completes
+anywhere and the fleet would otherwise be recorded as blocked while nothing was wrong with any of
+it. The cards still show what the probes see during that minute - the grace period is what keeps
+anything from being done about it - but the history keeps no block the panel caused itself, and
+records nothing in its place: a window filtered down to the checks that went well would claim an
+uptime the evidence does not support.
+
 Below the rows, the same window **per probe**. This is the only place the panel can say *where* a
 node is blocked: a node no probe reaches and a node only the office probe reaches are different
 problems with different fixes. The handshake count beside it separates the two kinds of block -
 handshakes that complete with no traffic behind them are DPI or broken egress, handshakes that
 never complete are the address or the port.
+
+### Clearing it
+
+When the record is wrong rather than merely old, **Clear** in the card's header drops all of it, and
+the menu on a node's row drops that node's alone. A rotation no longer leaves a mark, but other
+reasons outlive it: a probe whose own uplink was down records the nodes it could not reach as
+unreachable, a node rebuilt under its old row carries the blocks of the host it no longer is, and a
+rotation made before this version left a fleet-wide notch that is still in the record. What a
+bucket holds is a count, not the checks behind it, so there is nothing to correct in place - only
+the claim to withdraw.
+
+It touches the panel's record and nothing else: no node hears about it, the fleet revision does not
+move, every client keeps its config, and the states on the cards are judged from current evidence
+either way. Recording starts again on the next check. On a pair it clears the panel you are on - a
+standby replicates the history forwards from a cursor and keeps what it already holds, so if you
+promote it later, clear it again there.
 
 It is recorded from the failover rounds, so the numbers are the same verdicts the cards show, from
 the same evaluator. `AWG_AVAILABILITY_RETENTION_DAYS` decides how long it is kept, and `0` records

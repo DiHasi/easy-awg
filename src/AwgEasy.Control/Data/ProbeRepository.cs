@@ -3,7 +3,7 @@ using Microsoft.Data.Sqlite;
 
 namespace AwgEasy.Control;
 
-public sealed class ProbeRepository(Database database, ControlOptions options)
+public sealed class ProbeRepository(Database database, FleetRepository fleet, ControlOptions options)
 {
     public IReadOnlyList<ProbeRecord> List()
     {
@@ -86,6 +86,15 @@ public sealed class ProbeRepository(Database database, ControlOptions options)
     /// </summary>
     public void RecordRound(string probeId, string? agentVersion, IEnumerable<ProbeResult> results, DateTimeOffset seenAt)
     {
+        // Whether this round is evidence at all, asked once for the round rather than per result.
+        // Inside the window after a rotation it is not: this probe is still speaking the previous
+        // wire format, so what it reports is the rotation and not the nodes. The latest results
+        // below are still stored - the page shows what the probes actually see, and the failover
+        // grace period is what keeps anything from being done about it - but the history does not
+        // keep a block that was the panel's own doing.
+        var records = options.Availability.Records
+            && !RotationSettling.IsSettling(fleet.Find()?.IdentityRotatedAt, seenAt, options.Failover);
+
         using var connection = database.Open();
         using var transaction = connection.BeginTransaction();
 
@@ -101,7 +110,7 @@ public sealed class ProbeRepository(Database database, ControlOptions options)
 
         foreach (var result in results)
         {
-            if (options.Availability.Records)
+            if (records)
             {
                 // Inside this transaction, like the traffic history: a round is reported once, and
                 // the row below is about to overwrite the only other trace it leaves.

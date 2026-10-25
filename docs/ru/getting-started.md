@@ -49,7 +49,7 @@ docker compose -f compose.node.yaml build
 # На машине сборки или в CI. AGENT_VERSION — это версия, которую нода сообщает
 # панели, а PANEL_VERSION — та, которую одна панель пары сообщает второй;
 # без них соответствующая сторона представляется как 0.0.0-dev.
-# Панель на 1.11.2, образ ноды остаётся на 1.4.3: ничего в src/AwgEasy.Node или
+# Панель на 1.12.0, образ ноды остаётся на 1.4.3: ничего в src/AwgEasy.Node или
 # src/AwgEasy.Contracts в этом релизе не менялось. Пересобирайте образ ноды, когда
 # меняется что-то в src/AwgEasy.Node, src/AwgEasy.Contracts или docker/node.Dockerfile, а не
 # когда уехала только панель.
@@ -60,7 +60,7 @@ docker compose -f compose.node.yaml build
 # Desktop работает на драйвере "docker", который двухархитектурную сборку не
 # выполняет вовсе, а оболочка с дефолтом, сброшенным назад на него, - обычное дело.
 docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/control.Dockerfile \
-    --build-arg PANEL_VERSION=1.11.2 -t dihasi/awg-control:1.11.2 -t dihasi/awg-control:latest --push .
+    --build-arg PANEL_VERSION=1.12.0 -t dihasi/awg-control:1.12.0 -t dihasi/awg-control:latest --push .
 docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/node.Dockerfile \
     --build-arg AGENT_VERSION=1.4.3 -t dihasi/awg-node:1.4.3 -t dihasi/awg-node:latest --push .
 ```

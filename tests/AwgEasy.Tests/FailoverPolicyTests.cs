@@ -479,3 +479,32 @@ public class ProbeCheckUrlOptionsTests
     public void Switches_the_traffic_check_off_only_when_told_to()
         => Assert.Empty(FailoverOptions.FromEnvironment(_ => "none", (_, fallback) => fallback).ProbeCheckUrls);
 }
+
+/// <summary>
+/// The window after a rotation in which nothing a probe reports is evidence about a node. It is
+/// arithmetic on two settings, and three places read it - the alerts, the node samples and the
+/// probe samples - so the boundary is worth pinning down here rather than in each of them.
+/// </summary>
+public class RotationSettlingTests
+{
+    [Fact]
+    public void A_fleet_that_was_never_rotated_is_not_settling()
+        => Assert.False(RotationSettling.IsSettling(null, Fleet.Now, Fleet.Options));
+
+    [Fact]
+    public void The_window_is_one_probe_round_plus_the_handshake_a_round_may_still_be_waiting_on()
+    {
+        // 60s + 15s with these settings: long enough for every probe to have fetched its next
+        // assignment, and for one that started just before the rotation to have given up.
+        var window = Fleet.Options.ProbeInterval + Fleet.Options.ProbeHandshakeTimeout;
+        var rotated = Fleet.Now - window;
+
+        Assert.True(RotationSettling.IsSettling(rotated, Fleet.Now, Fleet.Options));
+        Assert.False(RotationSettling.IsSettling(rotated, Fleet.Now.AddMilliseconds(1), Fleet.Options));
+    }
+
+    /// <summary>A rotation that has only just happened is the case this exists for.</summary>
+    [Fact]
+    public void A_rotation_a_moment_ago_is_settling()
+        => Assert.True(RotationSettling.IsSettling(Fleet.Now.AddSeconds(-1), Fleet.Now, Fleet.Options));
+}

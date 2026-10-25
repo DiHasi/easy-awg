@@ -30,11 +30,6 @@ actually needs it.
 - Automatic failover cannot be exercised end to end in CI: arming it requires a DNS provider, and
   there is none there. The script asserts the recommendation the manual path produces instead,
   which goes through the same policy.
-- A rotation leaves one probe round's worth of failures in the availability history. Probes
-  re-render their config only on their next round, so until then none completes a handshake and
-  those rounds are recorded as unreachable. Nothing acts on them - the grace period covers it and
-  the monitor withholds the alerts - but the ribbon shows a notch that was the rotation, not the
-  nodes.
 - A panel pair has only been exercised in the integration suite, where both panels run in one
   process and talk over each other's in-memory servers. What that covers is the real protocol -
   signed requests, signed payloads, the ETag gate, the term, the read-only guard, and an agent
@@ -45,7 +40,9 @@ actually needs it.
   reached the internet to decide a test would be worse than the gap.
 - Both panels have to carry the same `AWG_USAGE_RETENTION_DAYS` and
   `AWG_AVAILABILITY_RETENTION_DAYS`: each prunes its own copy of the history, so a standby set
-  lower drops rows it will not fetch again.
+  lower drops rows it will not fetch again. Clearing the availability history is local for the
+  same reason - the standby replicates it forwards from a cursor and keeps the rows it already
+  has, so a promoted standby brings them back and has to be cleared in its turn.
 - `/api/metrics` answers on either panel from that panel's own copy of the data, so scraping both
   double-counts every series. Scrape one, or the panel record.
 - The predecessor single-server app is preserved at tag `v0.9-standalone` and has been removed

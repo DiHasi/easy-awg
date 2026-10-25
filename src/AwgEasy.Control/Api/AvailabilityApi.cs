@@ -1,3 +1,5 @@
+using AwgEasy.Contracts;
+
 namespace AwgEasy.Control;
 
 /// <summary>
@@ -74,6 +76,52 @@ public static class AvailabilityApi
                 perProbe,
                 options.Availability.RetentionDays,
                 availability.FirstRecordedAt()));
+        });
+
+        // Clearing the record, for one node or for the fleet. A POST beside the GET that reads it,
+        // because the page showing a wrong number is where an operator reaches for this, and a
+        // bucket holds counts rather than the rounds behind them - there is nothing to correct in
+        // place, and no amount of waiting takes a block that never happened back out.
+        //
+        // Panel bookkeeping, like the traffic history: no revision moves and nothing reaches a
+        // node. The states on the cards are judged from current evidence either way, so clearing
+        // the history costs the panel nothing it needs in order to act.
+        admin.MapPost("/nodes/availability/reset", (
+            AvailabilityRepository availability,
+            EventLog events,
+            HttpContext context) =>
+        {
+            var dropped = availability.Clear();
+            events.Record(
+                "availability.reset",
+                $"Availability history cleared for the whole fleet ({dropped} rows).",
+                actor: context.User.Identity?.Name);
+
+            return Results.Ok(new AvailabilityResetResponse(null, dropped));
+        });
+
+        admin.MapPost("/nodes/{id}/availability/reset", (
+            string id,
+            AvailabilityRepository availability,
+            NodeRepository nodes,
+            EventLog events,
+            HttpContext context) =>
+        {
+            // Checked rather than quietly dropping nothing: an id that is gone means the operator
+            // is looking at a page older than the fleet, and a cheerful "0 rows" would hide that.
+            if (nodes.Find(id) is not { } node)
+            {
+                return Results.NotFound(new ApiError("node_not_found", "Node was not found."));
+            }
+
+            var dropped = availability.Clear(id);
+            events.Record(
+                "availability.reset",
+                $"Availability history cleared for {node.Name} ({dropped} rows).",
+                actor: context.User.Identity?.Name,
+                nodeId: id);
+
+            return Results.Ok(new AvailabilityResetResponse(id, dropped));
         });
     }
 

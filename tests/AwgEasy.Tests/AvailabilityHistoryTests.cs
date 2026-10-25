@@ -26,7 +26,7 @@ public sealed class AvailabilityHistoryTests : IDisposable
         _database = new Database(options, NullLogger<Database>.Instance);
         _database.Migrate();
         _nodes = new NodeRepository(_database, options);
-        _probes = new ProbeRepository(_database, options);
+        _probes = new ProbeRepository(_database, new FleetRepository(_database), options);
         _availability = new AvailabilityRepository(_database);
     }
 

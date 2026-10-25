@@ -92,8 +92,15 @@ public sealed class FailoverMonitor(
             var now = DateTimeOffset.UtcNow;
             var fleetNodes = nodes.List();
             var health = Assess(fleetNodes, now);
+            var current = fleet.Current;
 
-            if (options.Availability.Records)
+            // What this round saw right after a rotation was the rotation: every probe is still
+            // carrying the previous config, so the fleet reads as blocked whatever state it is
+            // really in. Nothing is written in its place - a bucket with no samples in it already
+            // says "no evidence", which is the panel's honest position for that minute.
+            var settling = RotationSettling.IsSettling(current.IdentityRotatedAt, now, options.Failover);
+
+            if (options.Availability.Records && !settling)
             {
                 // This round is the sample: the state of every node, as judged here, credited to
                 // the hour it was judged in. Written from the monitor rather than from the
@@ -101,9 +108,7 @@ public sealed class FailoverMonitor(
                 availability.Accrue(health.Values, now);
             }
 
-            var current = fleet.Current;
-
-            await ReportTransitionsAsync(fleetNodes, health, current, now, cancellationToken);
+            await ReportTransitionsAsync(fleetNodes, health, settling, now, cancellationToken);
 
             var (activeNodeId, activeSince) = fleetRepository.FindActiveNode();
             var mode = fleetRepository.FindFailoverMode();
@@ -216,7 +221,7 @@ public sealed class FailoverMonitor(
     private async Task ReportTransitionsAsync(
         IReadOnlyList<NodeRecord> fleetNodes,
         IReadOnlyDictionary<string, NodeAssessment> health,
-        FleetRecord current,
+        bool settling,
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
@@ -226,14 +231,9 @@ public sealed class FailoverMonitor(
             return;
         }
 
-        // Right after a rotation every probe is still carrying the previous config, so until each
-        // has fetched its next assignment no handshake completes anywhere and the whole fleet
-        // reads as blocked. Announcing that would page an operator about the rotation they are
-        // standing over, for nodes that are fine. The failing state is not recorded either, so if
-        // it is still there once the probes have caught up it is announced then, as news.
-        var settling = current.IdentityRotatedAt is { } rotatedAt
-            && now - rotatedAt <= options.Failover.ProbeInterval + options.Failover.ProbeHandshakeTimeout;
-
+        // Inside the settling window an alert would page an operator about the rotation they are
+        // standing over, for nodes that are fine. The failing state is not remembered either, so
+        // if it is still there once the probes have caught up it is announced then, as news.
         foreach (var node in fleetNodes)
         {
             var assessment = health[node.Id];

@@ -39,7 +39,7 @@ docs/                    Operator documentation, en/ and ru/ in step. README.md 
 
 ```bash
 dotnet build Awg-easy.sln          # whole solution
-dotnet test Awg-easy.sln           # 388 tests, all must pass
+dotnet test Awg-easy.sln           # 401 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
 cd frontend && pnpm run test       # vitest, in a Nuxt environment
@@ -258,11 +258,16 @@ for up to one `AWG_PROBE_INTERVAL_SECONDS` after a rotation every probe is still
 previous wire format with the previous preshared key: no handshake completes anywhere and the whole
 fleet reads as `blocked`, including the nodes that have already converged. The default 120s grace
 against a 60s probe interval covers it, so nothing switches - but `AWG_FAILOVER_GRACE_SECONDS` must
-stay above `AWG_PROBE_INTERVAL_SECONDS` or a rotation becomes a reason to fail over. `FailoverMonitor`
-also withholds newly-failing transitions for one probe round after `identity_rotated_at`, without
-recording them, so the rotation does not page an operator about the fleet they are standing over
-and a block that is still there afterwards is still announced. Probe rounds inside that window do
-land in `probe_availability` as failures; that is a known gap, not a decision.
+stay above `AWG_PROBE_INTERVAL_SECONDS` or a rotation becomes a reason to fail over. `RotationSettling.IsSettling`
+is that window, and it is one rule with three readers: `FailoverMonitor` withholds newly-failing
+transitions inside it, without recording them, so the rotation does not page an operator about the
+fleet they are standing over and a block still there afterwards is still announced; the node sample
+for that round is not written; and `ProbeRepository.RecordRound` does not accrue the probe round
+either. A minute the panel itself made unobservable is therefore recorded as no evidence rather
+than as a fleet-wide block - and nothing is written in place of it, because a window filtered down
+to the rounds that came out well would claim an uptime the evidence does not support. The latest
+probe results are still stored: the page shows what probes actually see, and the grace period above
+is what keeps anything from being done about it.
 
 **The panel is a pair, and which half this one is lives in the database.** A standby is a second
 Control with a database of its own that replicates the first and refuses every write. Its role is
@@ -436,6 +441,18 @@ only place the panel can say *where* a node is blocked. Retention is a knob of i
 `AWG_AVAILABILITY_RETENTION_DAYS`: `AWG_USAGE_RETENTION_DAYS` is a decision about holding a record
 of people, and it has nothing to say about whether the panel may remember which of the operator's
 own nodes was blocked last week.
+
+**Clearing the availability history is an operator act, and it has to be, because the record can be
+wrong rather than merely old.** `AvailabilityRepository.Clear` drops one node's rows or every row,
+and `POST /nodes/availability/reset` and `POST /nodes/{id}/availability/reset` are the only way in.
+The standing reason is the grace period above: for one probe round after a rotation no handshake
+completes anywhere, so the whole fleet is recorded as blocked while nothing was wrong with any of
+it, and a bucket holds counts rather than the rounds behind them - there is nothing to correct in
+place. Deleting rather than hiding, for the same reason the zero-sample bucket exists: a row kept
+out of sight is still a number every share would have to decide whether to divide by. It is panel
+bookkeeping like the rest of the history, so it bumps no revision, reaches no node, and leaves the
+live states alone - they are judged from current evidence, which is why clearing costs the panel
+nothing it needs in order to act.
 
 **The accrual sits where the evidence is produced.** A node's sample is written by
 `FailoverMonitor` in the round that assessed it, so `NodeHealthEvaluator` stays a pure function of
@@ -616,5 +633,10 @@ never assert on a specific allocated address — assert on what the API returned
 - Each panel prunes its own copy of the two histories, so `AWG_USAGE_RETENTION_DAYS` and
   `AWG_AVAILABILITY_RETENTION_DAYS` have to match on both. A standby set lower drops rows its
   cursor has already passed and will not fetch again.
+- Clearing the availability history is local to the panel it is run on, for the same reason: the
+  stream carries rows forwards from a cursor and has no way to say that a row is gone, so a standby
+  keeps what it already replicated and brings it back if it is promoted. A standby cannot be
+  cleared while it is one - `PanelWriteGuard` refuses the write - so the repair there is to clear
+  it again once it is in charge.
 - `/api/metrics` answers on either panel, from that panel's own copy of the data, so scraping both
   double-counts every series. Scrape one, or the panel record.

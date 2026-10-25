@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import type { AvailabilitySummary, UsageWindowKey } from '~/types/api'
+import type { DropdownMenuItem } from '@nuxt/ui'
+import type { AvailabilityReset, AvailabilitySummary, NodeAvailability, UsageWindowKey } from '~/types/api'
 
 /**
  * How the fleet has stood, rather than how it stands.
@@ -14,6 +15,8 @@ import type { AvailabilitySummary, UsageWindowKey } from '~/types/api'
  * failover rounds that write it.
  */
 const api = useControlApi()
+const toast = useToast()
+const confirm = useConfirm()
 const { nodes } = useFleetState()
 
 const windows: { value: UsageWindowKey, label: string }[] = [
@@ -27,6 +30,7 @@ const span = ref<UsageWindowKey>('24h')
 const history = ref<AvailabilitySummary | null>(null)
 const loading = ref(true)
 const errorMessage = ref<string | null>(null)
+const clearing = ref<string | null>(null)
 
 async function load() {
   try {
@@ -73,6 +77,64 @@ function share(value?: number | null) {
   return value === null || value === undefined ? '—' : formatShare(value, 1)
 }
 
+/**
+ * Clears what was recorded, for one node or for the whole fleet.
+ *
+ * Here because this page is where a number that is not true gets read, and the reason is usually
+ * one the record cannot correct by itself: a probe whose own uplink was down records the nodes it
+ * merely could not reach as unreachable, and a rotation made before the panel started leaving that
+ * round out wrote a block across the whole fleet. What a bucket holds is a count, so there is
+ * nothing to edit - only the whole claim to withdraw.
+ *
+ * It touches nothing but the panel's own record: the states on the cards above are judged from
+ * current evidence, no node hears about it, and the next check starts the history again.
+ */
+async function clearHistory(node?: NodeAvailability) {
+  const confirmed = await confirm({
+    title: node ? `Clear the history for ${node.name}?` : 'Clear the whole availability history?',
+    description: node
+      ? `Drops every hour recorded about ${node.name}, and what each probe saw of it. The node keeps running and its state above is unaffected; recording starts again on the next check.`
+      : 'Drops every hour recorded about every node, and what each probe saw of them. The fleet keeps running and the states above are unaffected; recording starts again on the next check.',
+    confirmLabel: 'Clear',
+    danger: true
+  })
+
+  if (!confirmed) {
+    return
+  }
+
+  clearing.value = node?.nodeId ?? 'fleet'
+  try {
+    const path = node ? `/nodes/${node.nodeId}/availability/reset` : '/nodes/availability/reset'
+    const result = await api.post<AvailabilityReset>(path)
+    await load()
+    toast.add({
+      title: node ? `History cleared for ${node.name}` : 'Availability history cleared',
+      description: `${result.dropped} ${result.dropped === 1 ? 'row' : 'rows'} dropped. Recording starts again on the next check.`,
+      icon: 'i-lucide-check',
+      color: 'success'
+    })
+  } catch (error) {
+    toast.add({
+      title: 'Could not clear the history',
+      description: describeError(error, ''),
+      color: 'error',
+      icon: 'i-lucide-circle-alert'
+    })
+  } finally {
+    clearing.value = null
+  }
+}
+
+function menu(node: NodeAvailability): DropdownMenuItem[][] {
+  return [[{
+    label: 'Clear the history for this node',
+    icon: 'i-lucide-eraser',
+    color: 'error',
+    onSelect: () => clearHistory(node)
+  }]]
+}
+
 // Slower than the node cards poll at: a bucket only moves as fast as the failover rounds that
 // write it, and the oldest of them is an hour wide.
 usePolling(load, 60000)
@@ -87,20 +149,35 @@ usePolling(load, 60000)
       : 'Reading how the fleet has stood'"
   >
     <template #actions>
-      <div class="max-w-full overflow-x-auto">
-        <UFieldGroup>
-          <UButton
-            v-for="option in windows"
-            :key="option.value"
-            size="sm"
-            color="neutral"
-            :variant="span === option.value ? 'solid' : 'outline'"
-            :aria-pressed="span === option.value"
-            @click="span = option.value"
-          >
-            {{ option.label }}
-          </UButton>
-        </UFieldGroup>
+      <div class="flex items-center gap-2">
+        <div class="max-w-full overflow-x-auto">
+          <UFieldGroup>
+            <UButton
+              v-for="option in windows"
+              :key="option.value"
+              size="sm"
+              color="neutral"
+              :variant="span === option.value ? 'solid' : 'outline'"
+              :aria-pressed="span === option.value"
+              @click="span = option.value"
+            >
+              {{ option.label }}
+            </UButton>
+          </UFieldGroup>
+        </div>
+
+        <!-- Next to the thing it acts on: it clears the record this card draws, and nothing else. -->
+        <UButton
+          size="sm"
+          color="neutral"
+          variant="ghost"
+          icon="i-lucide-eraser"
+          :loading="clearing === 'fleet'"
+          :disabled="clearing !== null || rows.length === 0"
+          @click="clearHistory()"
+        >
+          Clear
+        </UButton>
       </div>
     </template>
 
@@ -169,27 +246,44 @@ usePolling(load, 60000)
             />
           </div>
 
-          <dl class="flex shrink-0 items-baseline gap-4 sm:w-44 sm:justify-end">
-            <div>
-              <dt class="sr-only">
-                Healthy
-              </dt>
-              <dd
-                class="tabular font-mono text-sm font-semibold"
-                :class="uptimeTone(row.uptime)"
-              >
-                {{ share(row.uptime) }}
-              </dd>
-            </div>
-            <div>
-              <dt class="sr-only">
-                Samples
-              </dt>
-              <dd class="tabular font-mono text-[11px] text-dimmed">
-                {{ row.samples }} checks
-              </dd>
-            </div>
-          </dl>
+          <div class="flex shrink-0 items-center gap-1 sm:justify-end">
+            <dl class="flex shrink-0 items-baseline gap-4 sm:w-44 sm:justify-end">
+              <div>
+                <dt class="sr-only">
+                  Healthy
+                </dt>
+                <dd
+                  class="tabular font-mono text-sm font-semibold"
+                  :class="uptimeTone(row.uptime)"
+                >
+                  {{ share(row.uptime) }}
+                </dd>
+              </div>
+              <div>
+                <dt class="sr-only">
+                  Samples
+                </dt>
+                <dd class="tabular font-mono text-[11px] text-dimmed">
+                  {{ row.samples }} checks
+                </dd>
+              </div>
+            </dl>
+
+            <UDropdownMenu
+              :items="menu(row)"
+              :content="{ align: 'end' }"
+            >
+              <UButton
+                icon="i-lucide-ellipsis-vertical"
+                color="neutral"
+                variant="ghost"
+                size="sm"
+                :loading="clearing === row.nodeId"
+                :disabled="clearing !== null"
+                :aria-label="`History actions for ${row.name}`"
+              />
+            </UDropdownMenu>
+          </div>
         </div>
       </div>
 

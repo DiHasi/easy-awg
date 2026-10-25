@@ -388,6 +388,12 @@ export type AvailabilitySummary = {
   recordingSince?: string | null
 }
 
+/** What clearing the availability history dropped. `nodeId` is null when the whole fleet went. */
+export type AvailabilityReset = {
+  nodeId?: string | null
+  dropped: number
+}
+
 export type DnsStatus = {
   provider: string
   providerConfigured: boolean
