@@ -25,6 +25,11 @@ services:
       # Creates the first admin on an empty database. Remove once the account exists.
       AWG_ADMIN_USER: "${AWG_ADMIN_USER:-}"
       AWG_ADMIN_PASSWORD: "${AWG_ADMIN_PASSWORD:-}"
+      # The read-only demo account, for showing somebody the panel without showing them the
+      # fleet: it reads every page an operator reads, with every name, address and key replaced
+      # on the way out, and is refused every write. Unset leaves it off.
+      AWG_DEMO_USER: "${AWG_DEMO_USER:-}"
+      AWG_DEMO_PASSWORD: "${AWG_DEMO_PASSWORD:-}"
       # One-shot adoption of an existing single-server deployment; point at its state.json.
       AWG_IMPORT_LEGACY_STATE: "${AWG_IMPORT_LEGACY_STATE:-}"
       # Manual failover. With a Cloudflare token the panel moves the record itself; without one it
@@ -65,6 +70,13 @@ services:
       # How many days of per-peer traffic history the panel keeps for the Traffic page. 0 records
       # none at all; the live counters come from the nodes and keep working either way.
       AWG_USAGE_RETENTION_DAYS: "${AWG_USAGE_RETENTION_DAYS:-}"
+      # The same, for how each node stood and what each probe saw of it. A knob of its own because
+      # the one above is a record about people and this one is about your own servers.
+      AWG_AVAILABILITY_RETENTION_DAYS: "${AWG_AVAILABILITY_RETENTION_DAYS:-}"
+      # A Prometheus scrape at /api/metrics, off until this is set, and the bearer token it then
+      # requires. It exports node states, lag, freshness and traffic per node, and nothing about
+      # a person.
+      AWG_METRICS_TOKEN: "${AWG_METRICS_TOKEN:-}"
       # The panel pair. Leave every one of these unset for a single panel: nothing below changes
       # how a lone panel behaves, and the pair stays out of the way until a standby is enrolled.
       #

@@ -17,6 +17,10 @@ AWG_DEMO_USER=demo
 AWG_DEMO_PASSWORD=<something long>
 ```
 
+Running under compose, those two lines go in the `.env` beside `compose.control.yaml`, which
+passes them through - and `docker compose up -d` rather than `restart`, because a restart does not
+re-read `.env`.
+
 The account is created on the next start of the panel in charge, and after that it is an ordinary
 admin row carrying one flag. That matters in three ways:
 
