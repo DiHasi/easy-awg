@@ -329,6 +329,7 @@ public sealed class AvailabilityHistoryTests : IDisposable
         BundleLifetime: TimeSpan.FromMinutes(15),
         BootstrapAdminUser: null,
         BootstrapAdminPassword: null,
+        Demo: DemoOptions.Disabled,
         LegacyStateImportPath: null,
         Dns: new DnsFailoverOptions(null, 60, null, null),
         Failover: new FailoverOptions(

@@ -110,6 +110,11 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             BackfillGeneration(connection, "client_shares", "generation");
         }
 
+        // The demo account's flag. Defaulting to 0 is the only honest start: every admin row that
+        // predates this column was created as a full one, and reading an unknown flag as "demo"
+        // would lock an existing operator out of their own panel.
+        EnsureColumn(connection, "admins", "is_demo", "INTEGER NOT NULL DEFAULT 0");
+
         // The revision the identity last changed at, which is what separates "behind by one added
         // peer" from "running the previous key pair". Zero is the honest start and needs no
         // backfill: a fleet that has never been rotated has no node behind its identity, and every
@@ -359,6 +364,11 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             username      TEXT NOT NULL COLLATE NOCASE,
             password_hash TEXT NOT NULL,
+            -- The demo account, which may read everything and change nothing. A column rather
+            -- than a name the code recognizes: an account's privileges have to survive a restart
+            -- and replicate to a standby, and "whichever admin is called demo" is a rule an
+            -- operator could undo by renaming a row.
+            is_demo       INTEGER NOT NULL DEFAULT 0,
             created_at    TEXT NOT NULL
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_admins_username ON admins (username COLLATE NOCASE);

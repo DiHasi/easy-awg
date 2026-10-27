@@ -96,7 +96,8 @@ public sealed class PanelSnapshotRepository(Database database)
             [..Query(connection, "SELECT * FROM admins ORDER BY id", reader => new PanelAdminRow(
                 reader.GetString("username"),
                 reader.GetString("password_hash"),
-                reader.GetTimestamp("created_at")))],
+                reader.GetTimestamp("created_at"),
+                reader.GetBoolean("is_demo")))],
             [..Query(connection, "SELECT * FROM enrollment_tokens ORDER BY created_at", reader => new PanelTokenRow(
                 reader.GetString("token_hash"),
                 reader.GetString("node_name"),
@@ -398,8 +399,15 @@ public sealed class PanelSnapshotRepository(Database database)
         if (snapshot.Admins.Length > 0)
         {
             ReplaceAll(connection, transaction, "admins", snapshot.Admins,
-                "INSERT INTO admins (username, password_hash, created_at) VALUES ($username, $hash, $createdAt)",
-                row => [("$username", row.Username), ("$hash", row.PasswordHash), ("$createdAt", row.CreatedAt.ToStorage())]);
+                "INSERT INTO admins (username, password_hash, is_demo, created_at) VALUES ($username, $hash, $demo, $createdAt)",
+                row =>
+                [
+                    ("$username", row.Username), ("$hash", row.PasswordHash),
+                    // Replicated like the password hash, because an account's privileges are part
+                    // of what the fleet runs on: a promoted standby that read the demo account as
+                    // a full one would hand it the fleet.
+                    ("$demo", row.IsDemo), ("$createdAt", row.CreatedAt.ToStorage())
+                ]);
         }
 
         ReplaceAll(connection, transaction, "enrollment_tokens", snapshot.Tokens,

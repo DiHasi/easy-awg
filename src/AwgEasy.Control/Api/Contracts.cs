@@ -457,6 +457,16 @@ public sealed record PublicShareResponse(DateTimeOffset ExpiresAt);
 public sealed record HealthResponse(string Status);
 
 /// <summary>
+/// Who is signed in, and under what.
+/// </summary>
+/// <param name="Demo">
+/// True for the read-only demo account. The panel refuses its writes whatever the page does, so
+/// this is not what enforces anything - it is what lets the frame say so, which is the difference
+/// between a panel that is read-only and a panel that merely appears broken.
+/// </param>
+public sealed record SessionResponse(string Username, bool Demo);
+
+/// <summary>
 /// A freshly generated AmneziaWG 3.x header protection key. Returned for the operator to paste
 /// into the profile rather than stored on the side: it only takes effect once the profile is
 /// saved, and a key nobody saved should leave no trace.

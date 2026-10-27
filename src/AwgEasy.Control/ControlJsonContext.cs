@@ -42,6 +42,7 @@ namespace AwgEasy.Control;
 [JsonSerializable(typeof(ClientShareResponse))]
 [JsonSerializable(typeof(PublicShareResponse))]
 [JsonSerializable(typeof(HealthResponse))]
+[JsonSerializable(typeof(SessionResponse))]
 [JsonSerializable(typeof(ApiError))]
 [JsonSerializable(typeof(GeneratedKeyResponse))]
 [JsonSerializable(typeof(UpdateNodeFailoverRequest))]

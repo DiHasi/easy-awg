@@ -61,6 +61,11 @@ builder.Services.AddSingleton<IAwgKeyGenerator, AwgToolKeyGenerator>();
 builder.Services.AddSingleton<FleetService>();
 builder.Services.AddSingleton<FleetRotationService>();
 builder.Services.AddSingleton<AdminAccounts>();
+// The read-only demo account. Both singletons: the pseudonym key is drawn once per process, which
+// is what keeps one peer reading as one person for as long as the panel is up, and the mask caches
+// what it builds from the tables.
+builder.Services.AddSingleton<DemoPseudonyms>();
+builder.Services.AddSingleton<DemoMask>();
 builder.Services.AddSingleton<EnrollmentService>();
 builder.Services.AddSingleton<ProbeRepository>();
 builder.Services.AddSingleton<ProbeService>();
@@ -133,6 +138,11 @@ app.UseAuthorization();
 // answer is in that one file, on purpose.
 app.UsePanelWriteGuard();
 
+// After it, for the same reasons and in the same shape: a demo session may read what a standby
+// may read, and changes nothing either. Second because the two refusals mean different things -
+// "ask the other panel" comes before "this account never will".
+app.UseDemoGuard();
+
 app.MapAdminApi();
 app.MapAgentApi();
 app.MapProbeAgentApi();
@@ -183,7 +193,7 @@ static void Bootstrap(WebApplication app)
     }
 
     var accounts = scope.ServiceProvider.GetRequiredService<AdminAccounts>();
-    if (!accounts.AnyExists())
+    if (!accounts.AnyOperatorExists())
     {
         if (!string.IsNullOrWhiteSpace(options.BootstrapAdminUser) && !string.IsNullOrWhiteSpace(options.BootstrapAdminPassword))
         {
@@ -197,6 +207,25 @@ static void Bootstrap(WebApplication app)
                 "No admin account exists and AWG_ADMIN_USER/AWG_ADMIN_PASSWORD are not set. "
                 + "The admin API will reject every request until an account is created.");
         }
+    }
+
+    // The demo account, which only the panel in charge creates: admin rows arrive at a standby in
+    // the snapshot, so one made here would be replaced by the next pull - and a standby refuses
+    // every write regardless of who is asking.
+    if (options.Demo.IsConfigured)
+    {
+        if (panel.IsActive)
+        {
+            EnsureDemoAccount(accounts, options, logger);
+        }
+    }
+    else if (!string.IsNullOrWhiteSpace(options.Demo.User) || !string.IsNullOrWhiteSpace(options.Demo.Password))
+    {
+        // Half-configured. Worth saying out loud: the symptom is an account that simply is not
+        // there, which looks like the feature not working rather than like a missing variable.
+        logger.LogWarning(
+            "The demo account needs both AWG_DEMO_USER and AWG_DEMO_PASSWORD, and only one is set. "
+            + "No demo account has been created.");
     }
 
     // One-shot adoption of an existing single-server deployment, pointed at its state.json.
@@ -214,6 +243,35 @@ static void Bootstrap(WebApplication app)
         {
             logger.LogInformation("Imported {Count} clients from legacy state at revision {Revision}.", result.ClientsImported, result.Revision);
         }
+    }
+}
+
+/// <summary>
+/// Creates the demo account if it is configured and not there yet.
+///
+/// Never touches an account that already exists. An operator who points AWG_DEMO_USER at a name
+/// that is already a full admin has a configuration mistake, and the two ways to resolve it for
+/// them are both worse than saying so: making their account read-only could lock them out of the
+/// panel, and leaving a full admin behind a password published next to a demo link is the failure
+/// this whole feature exists to avoid.
+/// </summary>
+static void EnsureDemoAccount(AdminAccounts accounts, ControlOptions options, ILogger logger)
+{
+    var username = options.Demo.User!;
+    if (!accounts.Exists(username))
+    {
+        accounts.Create(username, options.Demo.Password!, demo: true);
+        return;
+    }
+
+    if (!accounts.IsDemo(username))
+    {
+        logger.LogWarning(
+            "AWG_DEMO_USER is '{Username}', but an account with that name already exists and is a full "
+            + "admin. It has been left exactly as it is: nothing here will quietly take an operator's "
+            + "own account away, and nothing will hand a demo password a full one. Pick another name for "
+            + "the demo account, or delete that row.",
+            username);
     }
 }
 

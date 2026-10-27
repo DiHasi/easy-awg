@@ -16,6 +16,11 @@
 - Node revocation is a flag checked on every request, so it takes effect immediately. There is no
   revocation list to distribute.
 - Enrollment and share tokens are stored only as hashes.
+- The **demo account** is the one account that reads the fleet without being trusted with it: every
+  write is refused, and every name, address and key is replaced before it leaves the panel. What it
+  still reveals is the shape of the fleet - how many peers, how many nodes, where the blocks are -
+  so turning it on is a decision about publishing that, not only about hiding names. See
+  [The demo account](demo.md).
 - A **standby panel** authenticates the same way and verifies what it is handed against the same
   pinned signing key - but what it receives is not comparable to what a node or a probe receives.
   A node gets public keys and addresses; a probe gets one client config. A standby gets the fleet

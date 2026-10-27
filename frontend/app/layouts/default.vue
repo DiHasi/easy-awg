@@ -5,7 +5,7 @@
  * revision is still running the previous configuration.
  */
 const route = useRoute()
-const { user, logout } = useSession()
+const { user, isDemo, logout } = useSession()
 const { fleet, serving, appliedCount, errorMessage, refresh } = useFleetState()
 const { pair, isStandby, blank, refresh: refreshPanel } = usePanelState()
 
@@ -95,6 +95,24 @@ useHead({ title: computed(() => `${current.value.label} · AWG Easy`) })
         </div>
       </div>
     </header>
+
+    <div
+      v-if="isDemo"
+      role="status"
+      class="border-b border-info/30 bg-info/10"
+    >
+      <p class="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2 text-sm text-info lg:px-6">
+        <UIcon
+          name="i-lucide-eye"
+          class="size-4 shrink-0"
+        />
+        <span class="font-medium">Demo account</span>
+        <span class="text-info/90">
+          A real fleet, read-only. Every name, address and key on these pages is a stand-in - the
+          counts, the states and the history are the fleet's own.
+        </span>
+      </p>
+    </div>
 
     <div
       v-if="isStandby"

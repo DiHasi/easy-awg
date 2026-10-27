@@ -17,6 +17,24 @@ namespace AwgEasy.Tests;
 /// </summary>
 public sealed class PanelReplicationTests
 {
+    /// <summary>
+    /// An account's privileges are part of what the fleet runs on. A standby that replicated the
+    /// demo account as a full one would hand it the whole panel the moment it was promoted - and
+    /// the flag is optional on the wire, so that it actually crosses is worth asserting rather
+    /// than assuming.
+    /// </summary>
+    [Fact]
+    public async Task A_standby_replicates_the_demo_account_as_a_demo_account()
+    {
+        await using var pair = await PanelPair.CreateAsync();
+        await pair.SyncAsync();
+
+        var session = await (await pair.Standby.CreateDemoClientAsync()).GetFromJsonAsync<SessionResponse>("/api/auth/me");
+
+        Assert.Equal(ControlPlaneFixture.DemoUser, session!.Username);
+        Assert.True(session.Demo);
+    }
+
     [Fact]
     public async Task A_standby_replicates_the_fleet_identity_and_every_peer()
     {

@@ -4,6 +4,16 @@ export type ApiError = {
 }
 
 /**
+ * Who is signed in. `demo` is the read-only account: the panel refuses its writes whatever this
+ * app does, so the flag is not what enforces anything - it is what lets the shell say so, which
+ * is the difference between a panel that is read-only and a panel that looks broken.
+ */
+export type Session = {
+  username: string
+  demo: boolean
+}
+
+/**
  * Everything that may legally differ between the two ends of a tunnel. The 3.x range fields are
  * strings because a value may be either `140` or `120-160`; the API keeps them verbatim so the
  * panel never has to agree with awg on formatting.

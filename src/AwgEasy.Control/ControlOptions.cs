@@ -12,6 +12,7 @@ public sealed record ControlOptions(
     TimeSpan BundleLifetime,
     string? BootstrapAdminUser,
     string? BootstrapAdminPassword,
+    DemoOptions Demo,
     string? LegacyStateImportPath,
     DnsFailoverOptions Dns,
     FailoverOptions Failover,
@@ -33,6 +34,7 @@ public sealed record ControlOptions(
             TimeSpan.FromMinutes(ReadInt("AWG_BUNDLE_LIFETIME_MINUTES", 15)),
             Value("AWG_ADMIN_USER"),
             Value("AWG_ADMIN_PASSWORD"),
+            DemoOptions.FromEnvironment(Value),
             Value("AWG_IMPORT_LEGACY_STATE"),
             DnsFailoverOptions.FromEnvironment(Value, ReadInt),
             FailoverOptions.FromEnvironment(Value, ReadInt),
@@ -68,6 +70,33 @@ public sealed record ControlOptions(
         => int.TryParse(Environment.GetEnvironmentVariable(key), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) && value > 0
             ? value
             : fallback;
+}
+
+/// <summary>
+/// The read-only demo account, which is off until a username and a password are set.
+///
+/// Credentials live in the environment like the bootstrap admin's rather than being created
+/// through the panel, for the same reason: it is the account that exists before anybody can sign
+/// in to make one, and a demo panel is deployed by whoever sets the environment anyway. The
+/// account itself is an ordinary admin row carrying one flag, so it survives a restart, replicates
+/// to a standby, and cannot be conjured by setting an environment variable on a panel that already
+/// has one.
+/// </summary>
+/// <param name="User">The demo account's username. Null leaves the account uncreated.</param>
+/// <param name="Password">
+/// Its password. Deliberately required even though the account can change nothing: an unlisted
+/// panel that answers to a blank password is a panel anybody can enumerate the shape of, and what
+/// a demo session may read is still every state, every count and every graph of a real fleet.
+/// </param>
+public sealed record DemoOptions(string? User, string? Password)
+{
+    /// <summary>No demo account, which is how every panel starts.</summary>
+    public static readonly DemoOptions Disabled = new(null, null);
+
+    public bool IsConfigured => !string.IsNullOrWhiteSpace(User) && !string.IsNullOrWhiteSpace(Password);
+
+    public static DemoOptions FromEnvironment(Func<string, string?> value)
+        => new(value("AWG_DEMO_USER"), value("AWG_DEMO_PASSWORD"));
 }
 
 /// <summary>

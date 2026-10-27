@@ -364,6 +364,29 @@ public sealed class DatabaseMigrationTests : IDisposable
     private static string ShareHash(string token)
         => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
 
+    /// <summary>
+    /// A panel brought up with a demo account and no operator. Counting the demo row as an admin
+    /// would mean that adding AWG_ADMIN_USER afterwards never created the real one, leaving a
+    /// panel that nobody can administer and no obvious reason why.
+    /// </summary>
+    [Fact]
+    public void A_demo_account_is_not_somebody_who_can_administer_the_panel()
+    {
+        var database = new Database(Options(), NullLogger<Database>.Instance);
+        database.Migrate();
+
+        var events = new EventLog(database);
+        var accounts = new AdminAccounts(database, events, NullLogger<AdminAccounts>.Instance);
+
+        accounts.Create("demo", "look-dont-touch", demo: true);
+        Assert.False(accounts.AnyOperatorExists());
+        Assert.True(accounts.IsDemo("demo"));
+
+        accounts.Create("ops", "the-real-one");
+        Assert.True(accounts.AnyOperatorExists());
+        Assert.False(accounts.IsDemo("ops"));
+    }
+
     private ControlOptions Options() => new(
         DatabasePath: _path,
         DefaultSubnet: "10.8.0.0/24",
@@ -374,6 +397,7 @@ public sealed class DatabaseMigrationTests : IDisposable
         BundleLifetime: TimeSpan.FromMinutes(15),
         BootstrapAdminUser: null,
         BootstrapAdminPassword: null,
+        Demo: DemoOptions.Disabled,
         LegacyStateImportPath: null,
         Dns: new DnsFailoverOptions(RecordName: null, Ttl: 60, CloudflareApiToken: null, CloudflareZoneId: null),
         Failover: new FailoverOptions(

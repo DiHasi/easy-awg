@@ -231,7 +231,13 @@ public sealed record PanelProbeConfigRow(
 
 /// <summary>Admin accounts, as hashes. The row id is left behind: nothing references it, and
 /// reassigning it on the replica is cheaper than carrying an autoincrement between panels.</summary>
-public sealed record PanelAdminRow(string Username, string PasswordHash, DateTimeOffset CreatedAt);
+/// <param name="IsDemo">
+/// Whether this is the read-only demo account. Optional, with a default, so it needs no schema
+/// bump: an older standby ignores the property, and a newer one reading an older active's
+/// snapshot cannot lose a flag the active does not have - the column arrived with it. A pair is
+/// upgraded active-first, which is the order that makes that true.
+/// </param>
+public sealed record PanelAdminRow(string Username, string PasswordHash, DateTimeOffset CreatedAt, bool IsDemo = false);
 
 /// <summary>Enrollment tokens travel too, so a token issued moments before a switch is still good
 /// on the panel that took over.</summary>

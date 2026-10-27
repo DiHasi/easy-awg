@@ -1,27 +1,28 @@
+import type { Session } from '~/types/api'
+
 /**
  * Who is signed in. Kept in shared state so the header and the route guard agree without
  * each re-asking the server.
  */
 export function useSession() {
-  const user = useState<string | null>('awg-session-user', () => null)
+  const session = useState<Session | null>('awg-session', () => null)
   const checked = useState<boolean>('awg-session-checked', () => false)
   const api = useControlApi()
 
   async function refresh() {
     try {
-      const me = await api.get<{ status: string }>('/auth/me')
-      user.value = me.status
+      session.value = await api.get<Session>('/auth/me')
     } catch {
-      user.value = null
+      session.value = null
     } finally {
       checked.value = true
     }
 
-    return user.value
+    return session.value
   }
 
   async function ensure() {
-    return checked.value ? user.value : await refresh()
+    return checked.value ? session.value : await refresh()
   }
 
   async function login(username: string, password: string) {
@@ -33,11 +34,16 @@ export function useSession() {
     try {
       await api.post('/auth/logout')
     } finally {
-      user.value = null
+      session.value = null
       checked.value = true
       await navigateTo('/login')
     }
   }
 
-  return { user, checked, refresh, ensure, login, logout }
+  const user = computed(() => session.value?.username ?? null)
+
+  /** The read-only account. Every name, address and key it is shown is a stand-in. */
+  const isDemo = computed(() => session.value?.demo === true)
+
+  return { session, user, isDemo, checked, refresh, ensure, login, logout }
 }

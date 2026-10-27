@@ -26,6 +26,7 @@ src/AwgEasy.Contracts/   Wire contract shared by both sides. Changing it changes
 src/AwgEasy.Node/        Agent on each VPN server, and the probe (AWG_ROLE=probe). AOT-published.
 src/AwgEasy.Control/     Panel: database, admin API, agent API, serves the frontend.
 src/AwgEasy.Control/Ha/  The panel pair: replication, the term, promotion. Panel to panel only.
+src/AwgEasy.Control/Demo/ The read-only demo account: the mask, and what it refuses.
 frontend/                Nuxt 4 + Nuxt UI, generated to static files, served by Control.
 tests/AwgEasy.Tests/     xUnit. Unit tests plus integration tests hosting the real Control.
 docker/                  node.Dockerfile, control.Dockerfile
@@ -39,7 +40,7 @@ docs/                    Operator documentation, en/ and ru/ in step. README.md 
 
 ```bash
 dotnet build Awg-easy.sln          # whole solution
-dotnet test Awg-easy.sln           # 401 tests, all must pass
+dotnet test Awg-easy.sln           # 426 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
 cd frontend && pnpm run test       # vitest, in a Nuxt environment
@@ -352,6 +353,59 @@ standby never reaches the panel in charge. It answers 503 rather than 403: the c
 to ask, just not here, and 503 is what lets a node treat it as transient and stay fail-static
 instead of giving up on its identity.
 
+**The demo account reads the fleet without being trusted with it, and both halves of that are
+one place each.** `DemoGuard` is the refusal and `DemoMask` is the masking, for the same reason
+`PanelWriteGuard` is one file: a rule spread across forty endpoints is one that will be forgotten
+the next time an endpoint is added - and here what would be forgotten is not a refusal, which
+announces itself, but a leak, which does not. So the refusal is a rule about the method rather
+than a list of write endpoints, and the masking is a pass over the response body rather than a
+mapping per endpoint. Both are deliberately blunt: an endpoint added later is refused if it writes
+and masked if it reads, without being named anywhere. Do not "fix" that by moving either decision
+into the endpoints.
+
+**The mask is built from the panel's own tables, and that is what makes it total.** Every client,
+group, node, probe, panel and operator name, every address, every public key, the subnet and the
+endpoint host are mapped to a stand-in, and the map is applied to every string in a response
+whatever field it sits in - so a response shape nobody thought about still comes out masked. The
+field table (`publicIp`, `hostname`, `resolvedAddresses`, ...) is the second layer, for values the
+panel does not hold: whatever a resolver answered, an error string from a node. `Untouched` is the
+third and is not an oversight - ids, event kinds, status words and routing constants are not data
+about anybody, and substituting them breaks the panel without protecting anyone: an operator
+called `admin` must not have `admin.login` rewritten into a code no page knows, and a demo that
+showed a documentation address in `AllowedIPs` would be showing a config that routes nothing.
+
+**A stand-in is derived, not drawn.** Everything goes through an HMAC over a key drawn once per
+process, so one peer is one person on every page, in every graph and inside every sentence the
+panel wrote about it - a demo where each page invented its own names is noise, not a demo - and
+nobody holding the demo can run the derivation backwards. The key is never stored: nothing needs a
+pseudonym to outlive a restart, and a secret that is never written down cannot be read off a disk.
+Addresses and names land in the ranges reserved for documentation, because a plausible address
+drawn at random belongs to somebody and a demo must not invite a visitor to go and scan it.
+
+**The demo's own wire format is drawn, and it is the must-match half only.** S1-S4, H1-H4 and the
+header protection key are what makes this fleet's packets recognizable as this fleet's - the very
+thing `FleetRotationService` replaces - so publishing them to whoever is looking at a demo hands a
+censor the one piece they are short of. The may-differ half comes through untouched, because it
+differs per peer by design and therefore describes nobody. The stand-in keeps the fleet's shape: a
+padding that is unset stays unset and a single message type stays single, because that shape is
+what decides whether a node needs 3.x and the demo must not contradict the badge beside it.
+
+**The one response the mask does not rewrite is rendered masked instead.** A client config is not
+JSON, so `DemoMask.RenderConfig` hands `ClientConfigRenderer` a peer and a fleet that are already
+nobody's rather than scrubbing the output line by line. That is the stronger construction, and it
+is also why the demo path stamps nothing: rendering records that a peer was in a position to be
+handed its current config, and a visitor shown a stand-in was handed nothing - a stamp written for
+them would send an operator chasing somebody who is holding exactly what they were before.
+
+**The demo flag lives in the database and replicates.** `admins.is_demo`, carried in the snapshot
+beside the password hash, because an account's privileges are part of what the fleet runs on: a
+promoted standby that read the demo account as a full one would hand it the fleet. It is read per
+request rather than written into the session cookie, so an account made read-only is read-only on
+its next request rather than in twelve hours. `AWG_DEMO_USER` creates the account and never
+changes one that exists - making an operator's own account read-only could lock them out, and
+putting a full admin behind a password published next to a demo link is the failure the whole
+thing exists to avoid.
+
 **Automatic panel promotion is weaker than node failover, and the difference is the witness.** A
 node has probes in other networks to vouch for it. When a standby cannot reach the panel in charge
 it has learned exactly one thing - that it cannot reach it - and is in no position to say which of
@@ -611,6 +665,10 @@ never assert on a specific allocated address — assert on what the API returned
 - The pair has only been exercised in containers on one host, never across real servers. What
   `scripts/e2e.sh` covers there is real, though: agents applying bundles with awg-quick, a probe
   completing handshakes and fetching through the tunnel, and both kinds of block.
+- The demo account conceals who, not what. A visitor still learns how many peers there are, how
+  many nodes, how often they are blocked and in whose network, and how much traffic goes through
+  them. On a small fleet that is not nothing, and no amount of masking changes it - the answer for
+  somebody who cannot publish that is a seeded panel, not this.
 - The frontend's tests cover the formatters, the node state words and the availability ribbon.
   The composables that need a Nuxt app and a stubbed API - `usePeerArrangement`, `useNodeActions` -
   are still only exercised by hand.

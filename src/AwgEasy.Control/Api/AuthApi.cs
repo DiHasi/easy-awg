@@ -34,8 +34,11 @@ public static class AuthApi
             return Results.Ok(new HealthResponse("ok"));
         }).AllowAnonymous();
 
+        // The demo flag comes from the request rather than from a second lookup: the demo guard
+        // has already read the row by the time any endpoint runs, and it reads it per request so
+        // an account made read-only is read-only at once.
         api.MapGet("/auth/me", (HttpContext context) => context.User.Identity?.IsAuthenticated == true
-            ? Results.Ok(new HealthResponse(context.User.Identity.Name ?? "admin"))
+            ? Results.Ok(new SessionResponse(context.User.Identity.Name ?? "admin", context.IsDemo()))
             : Results.Unauthorized()).AllowAnonymous();
     }
 }

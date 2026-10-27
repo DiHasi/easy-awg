@@ -190,7 +190,12 @@ public static class ClientApi
             return Results.Ok(new ClientShareResponse(token, client.Name, DateTimeOffset.UtcNow.Add(ShareRepository.Lifetime), url));
         });
 
-        admin.MapGet("/clients/{id}/config", (string id, ClientRepository clients, FleetService fleet) =>
+        admin.MapGet("/clients/{id}/config", (
+            string id,
+            ClientRepository clients,
+            FleetService fleet,
+            DemoMask demo,
+            HttpContext context) =>
         {
             var client = clients.Find(id);
             if (client is null)
@@ -199,6 +204,18 @@ public static class ClientApi
             }
 
             var current = fleet.Current;
+
+            // A demo session gets a config of exactly this shape with nobody's material in it, and
+            // nothing is stamped: the stamp records that this peer was in a position to be handed
+            // its current config, and a visitor who was handed a stand-in was handed nothing. It
+            // is the one response the demo guard cannot mask on the way out, because it is not
+            // JSON - so it is built already masked instead.
+            if (context.IsDemo())
+            {
+                var (masked, maskedName) = demo.RenderConfig(current, client);
+                return Results.File(Encoding.UTF8.GetBytes(masked), ClientConfigRenderer.ContentType, maskedName);
+            }
+
             var config = ClientConfigRenderer.Render(current, client, current.EndpointHost);
             // Rendering is the only moment the panel can observe that this peer was in a position
             // to be handed its current config - it is what the QR code, the download and the share

@@ -142,6 +142,9 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<ControlPlaneEntr
     /// present something else to check that it is actually checked.</summary>
     public const string MetricsToken = "scrape-me-9f2b";
 
+    public const string DemoUser = "demo";
+    public const string DemoPassword = "look-dont-touch-4417";
+
     public RecordingDnsUpdater Dns { get; } = new();
 
     public StubHostAddressResolver Resolver { get; } = new();
@@ -170,6 +173,9 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<ControlPlaneEntr
                 BundleLifetime: TimeSpan.FromMinutes(15),
                 BootstrapAdminUser: AdminUser,
                 BootstrapAdminPassword: AdminPassword,
+                // Configured, so the read-only account is exercised as it ships rather than only
+                // in its absence.
+                Demo: new DemoOptions(DemoUser, DemoPassword),
                 LegacyStateImportPath: null,
                 Dns: new DnsFailoverOptions(RecordName: null, Ttl: 60, CloudflareApiToken: null, CloudflareZoneId: null),
                 // No grace and no cooldown, so a test decides when a round runs - through
@@ -219,6 +225,15 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<ControlPlaneEntr
     {
         var client = CreateClient();
         var response = await client.PostAsJsonAsync("/api/auth/login", new LoginRequest(AdminUser, AdminPassword));
+        response.EnsureSuccessStatusCode();
+        return client;
+    }
+
+    /// <summary>A client signed in as the read-only demo account.</summary>
+    public async Task<HttpClient> CreateDemoClientAsync()
+    {
+        var client = CreateClient();
+        var response = await client.PostAsJsonAsync("/api/auth/login", new LoginRequest(DemoUser, DemoPassword));
         response.EnsureSuccessStatusCode();
         return client;
     }

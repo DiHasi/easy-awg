@@ -167,6 +167,7 @@ public class CloudflareDnsUpdaterTests
             BundleLifetime: TimeSpan.FromMinutes(15),
             BootstrapAdminUser: null,
             BootstrapAdminPassword: null,
+            Demo: DemoOptions.Disabled,
             LegacyStateImportPath: null,
             Dns: new DnsFailoverOptions(null, 60, "token", Zone),
             Failover: FailoverOptions.FromEnvironment(_ => null, (_, fallback) => fallback),

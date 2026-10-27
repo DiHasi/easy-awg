@@ -15,6 +15,7 @@ each row points at the same content. A language switch sits at the top of every 
 | Surviving the loss of the panel itself | [A second panel](en/panel-pair.md) | [Вторая панель](ru/panel-pair.md) |
 | The AmneziaWG 3.x wire format and the tunnel MTU | [Obfuscation and MTU](en/obfuscation.md) | [Обфускация и MTU](ru/obfuscation.md) |
 | What is trusted with what, and how to rotate the fleet identity | [Security model](en/security.md) | [Модель безопасности](ru/security.md) |
+| Showing the panel to somebody without showing them the fleet | [The demo account](en/demo.md) | [Демо-аккаунт](ru/demo.md) |
 | Metrics, node recovery, migrating from a single server | [Operations](en/operations.md) | [Эксплуатация](ru/operations.md) |
 | Every environment variable, with its default | [Configuration reference](en/configuration.md) | [Справочник настроек](ru/configuration.md) |
 | Building, testing and running the whole pair | [Development](en/development.md) | [Разработка](ru/development.md) |

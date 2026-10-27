@@ -338,6 +338,7 @@ public sealed class UsageHistoryTests : IDisposable
         BundleLifetime: TimeSpan.FromMinutes(15),
         BootstrapAdminUser: null,
         BootstrapAdminPassword: null,
+        Demo: DemoOptions.Disabled,
         LegacyStateImportPath: null,
         Dns: new DnsFailoverOptions(RecordName: null, Ttl: 60, CloudflareApiToken: null, CloudflareZoneId: null),
         Failover: new FailoverOptions(
