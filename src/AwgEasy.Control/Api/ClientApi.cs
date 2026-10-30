@@ -73,6 +73,14 @@ public static class ClientApi
                 return Results.BadRequest(error);
             }
 
+            // Accepted even when no node offers it yet: a node that has not reported its
+            // addresses, or has not been given a plan, must not make the reason a config is being
+            // issued unexpressible. Such a peer leaves through the node default until one does.
+            if (!NodeEgressPlan.TryReadLabel(request.EgressLabel, out var egressLabel))
+            {
+                return Results.BadRequest(new ApiError("client_egress_label_invalid", NodeEgressPlan.LabelRule));
+            }
+
             var name = request.Name.Trim();
             if (clients.NameExists(name))
             {
@@ -98,7 +106,8 @@ public static class ClientApi
                 request.Obfuscation?.Normalize(),
                 now,
                 now,
-                request.GroupId);
+                request.GroupId,
+                EgressLabel: egressLabel);
 
             clients.Insert(client);
             fleet.BumpRevision($"client {name} created");
@@ -135,6 +144,46 @@ public static class ClientApi
 
             // A rename changes no peer material, so nodes do not need a new revision for it.
             events.Record("client.renamed", $"Client renamed to {name}.", actor: context.User.Identity?.Name);
+            return Results.Ok(ClientResponse.From(clients.Find(id)!, fleet.Current.Generation));
+        });
+
+        // Which of a node's addresses this peer leaves through. Unlike the rename above this
+        // does change what a node runs - the panel resolves the label into an address while it
+        // builds each bundle - so a change here moves the revision.
+        admin.MapPut("/clients/{id}/egress", (
+            string id,
+            UpdateClientEgressRequest request,
+            ClientRepository clients,
+            FleetService fleet,
+            EventLog events,
+            HttpContext context) =>
+        {
+            if (!NodeEgressPlan.TryReadLabel(request.Label, out var label))
+            {
+                return Results.BadRequest(new ApiError("client_egress_label_invalid", NodeEgressPlan.LabelRule));
+            }
+
+            if (clients.Find(id) is not { } existing)
+            {
+                return Results.NotFound(new ApiError("client_not_found", "Client was not found."));
+            }
+
+            if (!clients.SetEgressLabel(id, label, DateTimeOffset.UtcNow))
+            {
+                return Results.NotFound(new ApiError("client_not_found", "Client was not found."));
+            }
+
+            if (!string.Equals(existing.EgressLabel, label, StringComparison.Ordinal))
+            {
+                fleet.BumpRevision($"client {existing.Name} egress changed");
+                events.Record(
+                    "client.egress_changed",
+                    label is null
+                        ? $"Client {existing.Name} now leaves through the node default."
+                        : $"Client {existing.Name} now leaves through '{label}'.",
+                    actor: context.User.Identity?.Name);
+            }
+
             return Results.Ok(ClientResponse.From(clients.Find(id)!, fleet.Current.Generation));
         });
 

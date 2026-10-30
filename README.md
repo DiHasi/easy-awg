@@ -46,8 +46,8 @@ Once an operator arms it, it moves the DNS record on its own. The panel itself c
 
 > **Status:** the fleet architecture is in place, and so is everything built on top of it — probes,
 > blocked-vs-down detection, automatic failover, notifications, availability history, fleet
-> identity rotation and the panel pair. Failover stays a button you press until you arm it
-> yourself. See [Roadmap and known gaps](docs/en/roadmap.md).
+> identity rotation, per-peer egress addresses and the panel pair. Failover stays a button you
+> press until you arm it yourself. See [Roadmap and known gaps](docs/en/roadmap.md).
 
 ## Quick start
 

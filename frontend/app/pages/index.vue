@@ -35,6 +35,9 @@ const useObfuscation = ref(false)
 
 const editingClient = ref<Client | null>(null)
 const editName = ref('')
+const egressOpen = ref(false)
+const egressClient = ref<Client | null>(null)
+const egressLabel = ref('')
 const configClient = ref<Client | null>(null)
 const statsOpen = ref(false)
 const statsClient = ref<Client | null>(null)
@@ -62,6 +65,7 @@ const drag = useDragSort((dragged, target) => {
 const form = reactive({
   name: '',
   groupId: '',
+  egressLabel: '',
   jc: undefined as number | undefined,
   jmin: undefined as number | undefined,
   jmax: undefined as number | undefined,
@@ -95,10 +99,33 @@ const clientTuningFields = [
   { key: 'persistentKeepalive', label: 'PersistentKeepalive' }
 ] as const
 
-const groupChoices = computed(() => [
-  { label: 'No group', value: '' },
-  ...groups.value.map(group => ({ label: group.name, value: group.id }))
-])
+// No item for "no group", for the reason spelled out beside `egressChoices`: a select item with
+// an empty value throws instead of rendering. Unset is the placeholder.
+const groupChoices = computed(() => groups.value.map(group => ({ label: group.name, value: group.id })))
+
+/**
+ * What a peer can be sent through, which is whatever the nodes have been given names for. An
+ * empty list means no node offers one, and then the field is not shown at all: a name nothing
+ * resolves is a choice with no effect.
+ */
+const egressPicks = computed(() => egressChoices(serving.value))
+
+/** Which nodes stand behind the name being picked, since the rest fall back to their default. */
+const egressSpread = computed(() => egressCoverage(serving.value, egressLabel.value))
+
+/**
+ * Whether a peer's egress name means anything on the node traffic is going to right now. A name
+ * the active node has no address for is not an error - the peer works, and the name still applies
+ * on the nodes that do have one - but it is doing nothing today, which is worth seeing in the row.
+ */
+function egressHonoured(client: Client) {
+  if (!client.egressLabel) {
+    return true
+  }
+
+  const active = serving.value.find(node => node.isActive)
+  return !active || active.egressPlan.labels.some(entry => entry.label === client.egressLabel)
+}
 
 /**
  * Whether a peer is disabled is the panel's own record and known immediately; whether an enabled
@@ -205,6 +232,7 @@ async function refresh() {
 function resetForm() {
   form.name = ''
   form.groupId = ''
+  form.egressLabel = ''
   form.jc = undefined
   form.jmin = undefined
   form.jmax = undefined
@@ -275,6 +303,7 @@ async function createClient() {
     const client = await api.post<Client>('/clients', {
       name: form.name.trim(),
       groupId: form.groupId || null,
+      egressLabel: form.egressLabel || null,
       obfuscation: buildObfuscation()
     })
 
@@ -326,6 +355,33 @@ function markHandedOut(clientId: string) {
   clients.value = clients.value.map(client => client.id === clientId
     ? { ...client, configGeneration: client.fleetGeneration, configStale: false }
     : client)
+}
+
+function openEgress(client: Client) {
+  egressClient.value = client
+  egressLabel.value = client.egressLabel ?? ''
+  egressOpen.value = true
+}
+
+/** @param label Null puts the peer back on whatever the node it lands on leaves through. */
+async function saveEgress(label: string | null) {
+  const client = egressClient.value
+  if (!client) {
+    return
+  }
+
+  busyId.value = client.id
+
+  try {
+    const updated = await api.put<Client>(`/clients/${client.id}/egress`, { label })
+    clients.value = clients.value.map(item => item.id === updated.id ? updated : item)
+    egressOpen.value = false
+    succeed(updated.egressLabel ? `Leaving through ${updated.egressLabel}` : 'Leaving through the node default')
+  } catch (error) {
+    fail('Could not change the egress', error)
+  } finally {
+    busyId.value = null
+  }
 }
 
 function openEdit(client: Client) {
@@ -443,6 +499,9 @@ function menuFor(client: Client): DropdownMenuItem[][] {
     [
       { label: 'Traffic', icon: 'i-lucide-activity', onSelect: () => openStats(client) },
       { label: 'Rename', icon: 'i-lucide-pencil', onSelect: () => openEdit(client) },
+      ...(egressPicks.value.length > 0 || client.egressLabel
+        ? [{ label: 'Egress address', icon: 'i-lucide-arrow-up-right', onSelect: () => openEgress(client) }]
+        : []),
       {
         label: client.enabled ? 'Disable' : 'Enable',
         icon: client.enabled ? 'i-lucide-pause' : 'i-lucide-play',
@@ -498,6 +557,7 @@ usePolling(refresh, 10000)
         @remove="nodeActions.remove"
         @failover="nodeActions.editFailover"
         @settings="nodeActions.editSettings"
+        @egress="nodeActions.editEgress"
         @new-peer="openCreate()"
         @enroll="enrollOpen = true"
       />
@@ -680,6 +740,7 @@ usePolling(refresh, 10000)
             :arrangeable="arrangeable"
             :carried="drag.isDragged('peer', client.id)"
             :drop-before="drag.isDropBefore('peer', client.id, section.key)"
+            :egress-honoured="egressHonoured(client)"
             @grab="(event: PointerEvent) => drag.begin(event, 'peer', client.id, section.key)"
             @config="openConfig(client)"
             @stats="openStats(client)"
@@ -706,6 +767,19 @@ usePolling(refresh, 10000)
           </UFormField>
 
           <UFormField
+            v-if="egressPicks.length > 0"
+            label="Egress address"
+            description="Which of a node's addresses this peer leaves through. The nodes decide what each name means, so the choice survives a switch. Leave it unset for the node default."
+          >
+            <USelect
+              v-model="form.egressLabel"
+              :items="egressPicks"
+              placeholder="Node default"
+              class="w-full"
+            />
+          </UFormField>
+
+          <UFormField
             v-if="groups.length > 0"
             label="Group"
             description="Whose device this is. A group is the panel's own filing: nothing in the config depends on it."
@@ -713,6 +787,7 @@ usePolling(refresh, 10000)
             <USelect
               v-model="form.groupId"
               :items="groupChoices"
+              placeholder="No group"
               class="w-full"
             />
           </UFormField>
@@ -845,6 +920,74 @@ usePolling(refresh, 10000)
           >
             Save
           </UButton>
+        </div>
+      </template>
+    </UModal>
+
+    <UModal
+      v-model:open="egressOpen"
+      title="Egress address"
+      description="Which of a node's addresses this peer leaves through. A name, not an address: each node resolves it to one of its own, so the choice survives failover."
+    >
+      <template #body>
+        <div class="flex flex-col gap-3">
+          <UFormField label="Leaves through">
+            <USelect
+              v-model="egressLabel"
+              :items="egressPicks"
+              placeholder="Node default"
+              class="w-full"
+            />
+          </UFormField>
+
+          <p
+            v-if="egressSpread.offering.length > 0"
+            class="text-xs text-muted"
+          >
+            Offered by {{ egressSpread.offering.join(', ') }}.
+            <template v-if="egressSpread.missing.length > 0">
+              On {{ egressSpread.missing.join(', ') }} this peer leaves through that node's default
+              address instead.
+            </template>
+          </p>
+
+          <p class="text-xs text-muted">
+            The nodes re-apply their configuration; no config is reissued and nobody's tunnel
+            drops. Connections already open keep the address they were made with.
+          </p>
+        </div>
+      </template>
+      <template #footer>
+        <div class="flex w-full items-center gap-2">
+          <!-- Its own button rather than an entry in the list above: the list is names, and
+               "no name" is the absence of one. A peer that has been given one has to be able to
+               go back, which is the whole point of the default being a node's own business. -->
+          <UButton
+            v-if="egressClient?.egressLabel"
+            color="neutral"
+            variant="subtle"
+            icon="i-lucide-rotate-ccw"
+            :loading="busyId === egressClient?.id"
+            @click="saveEgress(null)"
+          >
+            Use node default
+          </UButton>
+          <div class="ml-auto flex gap-2">
+            <UButton
+              color="neutral"
+              variant="ghost"
+              @click="egressOpen = false"
+            >
+              Cancel
+            </UButton>
+            <UButton
+              :loading="busyId === egressClient?.id"
+              :disabled="!egressLabel"
+              @click="saveEgress(egressLabel)"
+            >
+              Save
+            </UButton>
+          </div>
         </div>
       </template>
     </UModal>

@@ -1,3 +1,4 @@
+using System.Globalization;
 using AwgEasy.Contracts;
 
 namespace AwgEasy.Control;
@@ -91,6 +92,55 @@ public static class NodeApi
             var health = monitor.Assess([node], DateTimeOffset.UtcNow);
             var current = fleet.Current;
             return Results.Ok(NodeResponse.From(node, current.Revision, current.IdentityRevision, failover.ActiveNodeId, health[node.Id]));
+        });
+
+        // Which source addresses this node hands out, and what they are called. Both halves are
+        // bundle-visible - the default travels in it, and a label decides which address a peer's
+        // rule names - so any change here moves the revision.
+        //
+        // Its own endpoint, and not offered at enrollment: an operator cannot label addresses
+        // nobody knows about yet, and which ones a node carries arrives with its first report.
+        admin.MapPut("/nodes/{id}/egress", (
+            string id,
+            UpdateNodeEgressRequest request,
+            NodeRepository nodes,
+            FleetService fleet,
+            DnsFailoverService failover,
+            FailoverMonitor monitor,
+            EventLog events,
+            HttpContext context) =>
+        {
+            if (!NodeEgressPlan.TryRead(request.DefaultAddress, request.Labels, out var plan, out var error))
+            {
+                return Results.BadRequest(error);
+            }
+
+            if (nodes.Find(id) is not { } existing)
+            {
+                return Results.NotFound(new ApiError("node_not_found", "Node was not found."));
+            }
+
+            var before = NodeEgressPlan.Read(existing.EgressPlan);
+            if (!nodes.SetEgressPlan(id, plan.Serialize()))
+            {
+                return Results.NotFound(new ApiError("node_not_found", "Node was not found."));
+            }
+
+            if (plan.ChangesBundle(before))
+            {
+                fleet.BumpRevision($"node {existing.Name} egress changed");
+                events.Record(
+                    "node.egress_changed",
+                    $"Egress addresses changed: default {Describe(plan.DefaultAddress, "kernel choice")}, "
+                    + $"{plan.Labels.Length.ToString(CultureInfo.InvariantCulture)} labelled.",
+                    actor: context.User.Identity?.Name,
+                    nodeId: id);
+            }
+
+            var updated = nodes.Find(id)!;
+            var state = monitor.Assess([updated], DateTimeOffset.UtcNow);
+            var fleetState = fleet.Current;
+            return Results.Ok(NodeResponse.From(updated, fleetState.Revision, fleetState.IdentityRevision, failover.ActiveNodeId, state[updated.Id]));
         });
 
         // Not a fleet change either: which node automatic failover prefers decides nothing any

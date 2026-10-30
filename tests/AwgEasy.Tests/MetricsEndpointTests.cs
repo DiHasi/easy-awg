@@ -140,4 +140,25 @@ public class MetricsEndpointTests(ControlPlaneFixture fixture) : FleetScenario(f
 
         Assert.DoesNotContain(node.PublicIp, await ScrapeAsync(), StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// And neither are the spare ones. A node that hands out several addresses has several a
+    /// blocker would want, and an exported label would put the operator's reason for each of them
+    /// into every copy of the scrape as well.
+    /// </summary>
+    [Fact]
+    public async Task A_nodes_other_egress_addresses_are_not_exported_either()
+    {
+        var admin = await AdminAsync();
+        var node = await NodeAsync(admin, "metrics-egress", "203.0.113.64");
+
+        (await admin.PutAsJsonAsync(
+            $"/api/nodes/{node.Id}/egress",
+            new UpdateNodeEgressRequest("203.0.113.64", [new EgressLabel("203.0.113.65", "clean")]))).EnsureSuccessStatusCode();
+
+        var scrape = await ScrapeAsync();
+
+        Assert.DoesNotContain("203.0.113.65", scrape, StringComparison.Ordinal);
+        Assert.DoesNotContain("clean", scrape, StringComparison.Ordinal);
+    }
 }

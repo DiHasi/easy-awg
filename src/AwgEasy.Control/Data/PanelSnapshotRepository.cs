@@ -66,7 +66,8 @@ public sealed class PanelSnapshotRepository(Database database)
                 reader.GetInt32("sort_order"),
                 reader.GetInt32("config_generation"),
                 reader.GetTimestamp("created_at"),
-                reader.GetTimestamp("updated_at")))],
+                reader.GetTimestamp("updated_at"),
+                reader.GetStringOrNull("egress_label")))],
             [..Query(connection, "SELECT * FROM client_groups ORDER BY id", reader => new PanelGroupRow(
                 reader.GetString("id"),
                 reader.GetString("name"),
@@ -84,7 +85,11 @@ public sealed class PanelSnapshotRepository(Database database)
                 reader.GetBoolean("revoked"),
                 reader.GetInt32("failover_priority"),
                 reader.GetBoolean("auto_failover"),
-                reader.GetTimestamp("enrolled_at")))],
+                reader.GetTimestamp("enrolled_at"),
+                // The operator's half of this node's egress, which is configuration. What the
+                // node reported about its own addresses is an observation and travels on the
+                // stream, beside public_ip and for the same reason.
+                reader.GetStringOrNull("egress_plan")))],
             [..Query(connection, "SELECT * FROM probes ORDER BY enrolled_at", reader => new PanelProbeConfigRow(
                 reader.GetString("id"),
                 reader.GetString("name"),
@@ -149,7 +154,8 @@ public sealed class PanelSnapshotRepository(Database database)
                 reader.GetStringOrNull("public_ip"),
                 reader.GetTimestampOrNull("last_seen_at"),
                 reader.GetStringOrNull("last_error"),
-                reader.GetTimestampOrNull("last_up_at")))],
+                reader.GetTimestampOrNull("last_up_at"),
+                reader.GetStringOrNull("egress_report")))],
             [..Query(connection, "SELECT id, agent_version, last_seen_at FROM probes", reader => new PanelProbeStateRow(
                 reader.GetString("id"),
                 reader.GetStringOrNull("agent_version"),
@@ -367,9 +373,9 @@ public sealed class PanelSnapshotRepository(Database database)
             """
             INSERT INTO clients (id, name, address, private_key, public_key, preshared_key, enabled,
                                  obfuscation_json, kind, group_id, sort_order, config_generation,
-                                 created_at, updated_at)
+                                 egress_label, created_at, updated_at)
             VALUES ($id, $name, $address, $private, $public, $psk, $enabled,
-                    $obfuscation, $kind, $groupId, $sortOrder, $generation, $createdAt, $updatedAt)
+                    $obfuscation, $kind, $groupId, $sortOrder, $generation, $egressLabel, $createdAt, $updatedAt)
             """,
             row =>
             [
@@ -377,7 +383,7 @@ public sealed class PanelSnapshotRepository(Database database)
                 ("$private", row.PrivateKey), ("$public", row.PublicKey), ("$psk", row.PresharedKey),
                 ("$enabled", row.Enabled ? 1 : 0), ("$obfuscation", row.ObfuscationJson),
                 ("$kind", row.Kind), ("$groupId", row.GroupId), ("$sortOrder", row.SortOrder),
-                ("$generation", row.ConfigGeneration),
+                ("$generation", row.ConfigGeneration), ("$egressLabel", row.EgressLabel),
                 ("$createdAt", row.CreatedAt.ToStorage()), ("$updatedAt", row.UpdatedAt.ToStorage())
             ]);
 
@@ -457,9 +463,10 @@ public sealed class PanelSnapshotRepository(Database database)
                 connection, transaction,
                 """
                 INSERT INTO nodes (id, name, hostname, endpoint_host, agent_public_key, status,
-                                   egress_interface, mtu, revoked, failover_priority, auto_failover, enrolled_at)
+                                   egress_interface, mtu, egress_plan, revoked, failover_priority,
+                                   auto_failover, enrolled_at)
                 VALUES ($id, $name, $hostname, $endpointHost, $key, 'provisioning',
-                        $egress, $mtu, $revoked, $priority, $auto, $enrolledAt)
+                        $egress, $mtu, $egressPlan, $revoked, $priority, $auto, $enrolledAt)
                 ON CONFLICT (id) DO UPDATE SET
                     name = excluded.name,
                     hostname = excluded.hostname,
@@ -467,6 +474,7 @@ public sealed class PanelSnapshotRepository(Database database)
                     agent_public_key = excluded.agent_public_key,
                     egress_interface = excluded.egress_interface,
                     mtu = excluded.mtu,
+                    egress_plan = excluded.egress_plan,
                     revoked = excluded.revoked,
                     failover_priority = excluded.failover_priority,
                     auto_failover = excluded.auto_failover,
@@ -475,6 +483,7 @@ public sealed class PanelSnapshotRepository(Database database)
                 ("$id", node.Id), ("$name", node.Name), ("$hostname", node.Hostname),
                 ("$endpointHost", node.EndpointHost), ("$key", node.AgentPublicKey),
                 ("$egress", node.EgressInterface), ("$mtu", node.Mtu),
+                ("$egressPlan", node.EgressPlan),
                 ("$revoked", node.Revoked ? 1 : 0), ("$priority", node.FailoverPriority),
                 ("$auto", node.AutoFailover ? 1 : 0), ("$enrolledAt", node.EnrolledAt.ToStorage()));
         }
@@ -544,14 +553,15 @@ public sealed class PanelSnapshotRepository(Database database)
                 UPDATE nodes
                    SET agent_version = $version, status = $status, applied_revision = $revision,
                        interface_up = $up, backend = $backend, bundle_schema_version = $schema,
-                       public_ip = $publicIp, last_seen_at = $lastSeen, last_error = $error,
-                       last_up_at = $lastUp
+                       public_ip = $publicIp, egress_report = $egressReport,
+                       last_seen_at = $lastSeen, last_error = $error, last_up_at = $lastUp
                  WHERE id = $id
                 """,
                 ("$id", node.Id), ("$version", node.AgentVersion), ("$status", node.Status),
                 ("$revision", node.AppliedRevision), ("$up", node.InterfaceUp ? 1 : 0),
                 ("$backend", node.Backend), ("$schema", node.BundleSchemaVersion),
-                ("$publicIp", node.PublicIp), ("$lastSeen", node.LastSeenAt.ToStorage()),
+                ("$publicIp", node.PublicIp), ("$egressReport", node.EgressReport),
+                ("$lastSeen", node.LastSeenAt.ToStorage()),
                 ("$error", node.LastError), ("$lastUp", node.LastUpAt.ToStorage()));
         }
 

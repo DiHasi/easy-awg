@@ -26,6 +26,7 @@ const emit = defineEmits<{
   remove: [node: Node]
   failover: [node: Node]
   settings: [node: Node]
+  egress: [node: Node]
   newPeer: []
   enroll: []
 }>()
@@ -310,6 +311,7 @@ async function copyRecord() {
             @remove="emit('remove', node)"
             @failover="emit('failover', node)"
             @settings="emit('settings', node)"
+            @egress="emit('egress', node)"
           />
         </div>
 

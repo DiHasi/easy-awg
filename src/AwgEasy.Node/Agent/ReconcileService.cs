@@ -19,6 +19,7 @@ public sealed class ReconcileService(
     AwgRuntime runtime,
     ControlPlaneClient controlPlane,
     PublicIpResolver publicIp,
+    EgressAddressReporter egressAddresses,
     NodeHealth health,
     ILogger<ReconcileService> logger) : BackgroundService
 {
@@ -224,6 +225,10 @@ public sealed class ReconcileService(
         var address = await publicIp.GetAsync(cancellationToken);
         health.RecordPublicIp(address);
 
+        // Which source addresses this node has to offer. Only the node can answer it, and the
+        // panel's egress plan is built from nothing else.
+        var egress = await egressAddresses.GetAsync(cancellationToken);
+
         var report = new NodeStatusReport(
             identity.AppliedRevision,
             status.IsRunning,
@@ -234,7 +239,8 @@ public sealed class ReconcileService(
             Metrics: null,
             health.LastError,
             DesiredStateBundle.CurrentSchemaVersion,
-            address);
+            address,
+            egress);
 
         await controlPlane.ReportStatusAsync(identity, report, cancellationToken);
     }

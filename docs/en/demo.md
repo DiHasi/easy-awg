@@ -62,6 +62,7 @@ discouraged in the browser.
 | Hostnames, endpoint hosts, DNS record names, panel URLs | A name under `example.net` |
 | Public keys, preshared keys, the server public key | A structurally valid 32-byte key |
 | The tunnel subnet | A different private subnet of the same size |
+| Egress labels | A stand-in name — `exit-4` |
 | S1-S4, H1-H4, the header protection key | A different, valid wire format |
 | Sentences the panel wrote about any of the above | The same sentence, about the stand-ins |
 

@@ -40,6 +40,9 @@ public sealed record FleetRecord(
 /// or 0 while the panel has never rendered one. Below <see cref="FleetRecord.Generation"/> it
 /// means the config this person is holding was issued against an identity the fleet has since
 /// replaced, and no longer works anywhere.</param>
+/// <param name="EgressLabel">Which of a node's addresses this peer leaves through, by the
+/// operator's name for it, or null to leave through that node's default. A label rather than an
+/// address, so it still means something after failover has moved traffic to another node.</param>
 public sealed record ClientRecord(
     string Id,
     string Name,
@@ -52,7 +55,8 @@ public sealed record ClientRecord(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     string? GroupId = null,
-    int ConfigGeneration = 0);
+    int ConfigGeneration = 0,
+    string? EgressLabel = null);
 
 /// <summary>One person, holding however many devices. Nothing a node ever sees.</summary>
 public sealed record ClientGroupRecord(
@@ -68,6 +72,17 @@ public sealed record ClientGroupRecord(
 /// </summary>
 public sealed record ClientPlacement(string? GroupId, IReadOnlyList<string> ClientIds);
 
+/// <param name="EgressPlan">
+/// The operator's egress plan for this node as the column holds it - which address is the
+/// default, and what the others are called. Carried as the JSON it is stored as, like the
+/// obfuscation profile: a node's own settings must not be able to drift because two panels
+/// serialized them differently.
+/// </param>
+/// <param name="EgressReport">
+/// What the agent last reported about the addresses its egress interface carries, as JSON. The
+/// node's own observation rather than anybody's choice, which is why it is kept apart from the
+/// plan and replicated with the rest of the evidence.
+/// </param>
 public sealed record NodeRecord(
     string Id,
     string Name,
@@ -89,7 +104,9 @@ public sealed record NodeRecord(
     DateTimeOffset EnrolledAt,
     DateTimeOffset? LastUpAt = null,
     int FailoverPriority = NodeRecord.DefaultFailoverPriority,
-    bool AutoFailover = true)
+    bool AutoFailover = true,
+    string? EgressPlan = null,
+    string? EgressReport = null)
 {
     /// <summary>Lower goes first. Left at this, nodes are tried in the order they enrolled.</summary>
     public const int DefaultFailoverPriority = 100;

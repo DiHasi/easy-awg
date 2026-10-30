@@ -123,7 +123,7 @@ public sealed class FleetService(
         var schemaVersion = BundleSchema.Normalize(node.BundleSchemaVersion);
 
         var obfuscation = current.Obfuscation;
-        if (schemaVersion < DesiredStateBundle.CurrentSchemaVersion && obfuscation is not null)
+        if (schemaVersion < BundleSchema.Schema3ObfuscationVersion && obfuscation is not null)
         {
             if (obfuscation.UsesSchema3Features)
             {
@@ -139,8 +139,33 @@ public sealed class FleetService(
             obfuscation = obfuscation.ToSchemaV1();
         }
 
+        // The labels stay here: a node is handed addresses. A peer whose label this node has no
+        // address for resolves to null and leaves through the node default, which is the whole
+        // point of labelling them - after failover a peer keeps what it was given rather than an
+        // address that only existed on the node it came from.
+        var egress = NodeEgressPlan.Read(node.EgressPlan);
+        if (schemaVersion < DesiredStateBundle.CurrentSchemaVersion)
+        {
+            if (!egress.IsEmpty)
+            {
+                // Same shape as the warning above and the same reason: this node has been given
+                // an egress plan its agent is too old to apply, so every peer on it leaves
+                // through whatever the kernel picks while the panel shows the plan as set.
+                logger.LogWarning(
+                    "Node {NodeName} reports bundle schema {NodeSchema} and cannot apply an egress plan. Its peers leave through the address the kernel picks; upgrade the agent on that server.",
+                    node.Name,
+                    schemaVersion);
+            }
+
+            egress = NodeEgressPlan.None;
+        }
+
         var peers = clients.ListEnabled()
-            .Select(client => new BundlePeer(client.PublicKey, client.PresharedKey, client.Address))
+            .Select(client => new BundlePeer(
+                client.PublicKey,
+                client.PresharedKey,
+                client.Address,
+                egress.Resolve(client.EgressLabel)))
             .ToArray();
 
         var bundle = new DesiredStateBundle(
@@ -154,7 +179,7 @@ public sealed class FleetService(
             obfuscation,
             // The fleet value unless this node overrides it - a node whose own egress is below
             // 1500 needs less, and must not be raised to what the rest of the fleet runs.
-            new NodeSettings("awg0", node.EgressInterface, node.Mtu ?? current.TunnelMtu),
+            new NodeSettings("awg0", node.EgressInterface, node.Mtu ?? current.TunnelMtu, egress.DefaultAddress),
             peers);
 
         using var signingKey = BundleSigning.ImportPrivateKey(current.SigningPrivateKey);

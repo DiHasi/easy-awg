@@ -233,7 +233,7 @@ public class FailoverPolicyTests
         IReadOnlyList<NodeRecord> nodes,
         IReadOnlyList<ProbeObservation>? observations = null,
         TimeSpan? activeFor = null,
-        bool requiresCurrentSchema = false,
+        bool requiresSchema3 = false,
         long identityRevision = 0)
     {
         var health = NodeHealthEvaluator.AssessAll(nodes, observations ?? [], Fleet.Now, Fleet.Options);
@@ -246,7 +246,7 @@ public class FailoverPolicyTests
             // Zero by default: a fleet nobody has rotated has no node behind its identity, which
             // is what every other case here is about.
             identityRevision,
-            requiresCurrentSchema,
+            requiresSchema3,
             Fleet.Now,
             Fleet.Options);
     }
@@ -350,9 +350,31 @@ public class FailoverPolicyTests
         var decision = Decide(
             "a",
             [Fleet.Node("a", interfaceUp: false, upAgo: TimeSpan.FromMinutes(5)), standby],
-            requiresCurrentSchema: true);
+            requiresSchema3: true);
 
         Assert.Equal(FailoverAction.Stuck, decision.Action);
+    }
+
+    /// <summary>
+    /// What a 3.x fleet needs of a node is the schema that carries the 3.x wire format, not the
+    /// newest one in this build. The two were the same number until a later schema added
+    /// something else entirely, and comparing against the newest would take every node whose
+    /// agent is one release behind out of the rotation for a reason that has nothing to do with
+    /// the profile it is serving.
+    /// </summary>
+    [Fact]
+    public void Still_picks_a_node_that_can_serve_the_3_x_profile_but_not_the_newest_schema()
+    {
+        var decision = Decide(
+            "a",
+            [
+                Fleet.Node("a", interfaceUp: false, upAgo: TimeSpan.FromMinutes(5)),
+                Fleet.Node("b", schema: BundleSchema.Schema3ObfuscationVersion)
+            ],
+            requiresSchema3: true);
+
+        Assert.Equal(FailoverAction.Switch, decision.Action);
+        Assert.Equal("b", decision.TargetNodeId);
     }
 
     [Fact]

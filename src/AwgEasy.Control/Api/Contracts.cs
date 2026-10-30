@@ -30,7 +30,8 @@ public sealed record ClientResponse(
     string? GroupId,
     int ConfigGeneration,
     int FleetGeneration,
-    bool ConfigStale)
+    bool ConfigStale,
+    string? EgressLabel)
 {
     public static ClientResponse From(ClientRecord client, int fleetGeneration)
         => new(
@@ -38,14 +39,30 @@ public sealed record ClientResponse(
             client.CreatedAt, client.UpdatedAt, client.Obfuscation, client.GroupId,
             client.ConfigGeneration,
             fleetGeneration,
-            client.ConfigGeneration != 0 && client.ConfigGeneration != fleetGeneration);
+            client.ConfigGeneration != 0 && client.ConfigGeneration != fleetGeneration,
+            client.EgressLabel);
 }
 
 /// <param name="GroupId">Files the new config under a person right away, so a device added from
 /// that person's own section does not have to be dragged there afterwards.</param>
-public sealed record CreateClientRequest(string Name, ClientObfuscationOverrides? Obfuscation, string? GroupId = null);
+/// <param name="EgressLabel">Which of a node's addresses this peer leaves through, so a config
+/// handed out for a particular reason is born with it rather than being corrected afterwards.</param>
+public sealed record CreateClientRequest(
+    string Name,
+    ClientObfuscationOverrides? Obfuscation,
+    string? GroupId = null,
+    string? EgressLabel = null);
 
 public sealed record UpdateClientRequest(string Name);
+
+/// <summary>
+/// Which address this peer leaves through, by the operator's name for it. Null unpins it.
+///
+/// Its own request rather than a field on <see cref="UpdateClientRequest"/>, which renames and
+/// nothing else: folding it in would mean the rename dialog, which sends a name alone, unpinned
+/// whoever it renamed.
+/// </summary>
+public sealed record UpdateClientEgressRequest(string? Label);
 
 /// <summary>
 /// A person, holding however many devices. The list order is the arrangement itself: both the
@@ -185,7 +202,9 @@ public sealed record NodeResponse(
     bool AutoFailover,
     string? EgressInterface,
     int? Mtu,
-    bool OnCurrentIdentity)
+    bool OnCurrentIdentity,
+    NodeEgressPlan EgressPlan,
+    ReportedEgressAddress[] EgressAddresses)
 {
     public static NodeResponse From(
         NodeRecord node,
@@ -206,10 +225,22 @@ public sealed record NodeResponse(
             health.ProbesReachable, health.ProbesReporting,
             node.FailoverPriority, node.AutoFailover,
             node.EgressInterface, node.Mtu,
-            node.AppliedRevision >= identityRevision);
+            node.AppliedRevision >= identityRevision,
+            NodeEgressPlan.Read(node.EgressPlan),
+            ReportedEgress.Read(node.EgressReport));
 }
 
 public sealed record UpdateNodeFailoverRequest(int Priority, bool AutoFailover);
+
+/// <summary>
+/// Which source addresses this node hands out and under what names.
+///
+/// Its own request rather than part of <see cref="UpdateNodeRequest"/>, and deliberately not part
+/// of <see cref="CreateNodeRequest"/> either: at enrollment nobody knows which addresses the node
+/// carries - they arrive with its first status report - so this is not a setting a one-time token
+/// could carry.
+/// </summary>
+public sealed record UpdateNodeEgressRequest(string? DefaultAddress, EgressLabel[]? Labels);
 
 /// <param name="Mode">One of <see cref="FailoverModes"/>.</param>
 /// <param name="NotificationChannels">Where notifications go; empty when none is configured.</param>

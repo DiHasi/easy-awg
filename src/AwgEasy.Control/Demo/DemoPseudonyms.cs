@@ -132,6 +132,14 @@ public sealed class DemoPseudonyms
     public string ProbeName(string value, int attempt = 0)
         => Places[(int)(Draw("probe", value, attempt) % (ulong)Places.Length)] + "-probe";
 
+    /// <summary>
+    /// An operator's own word for a group of egress addresses. Masked like a name rather than
+    /// passed through: an operator picks these words, and they are as likely to name the person
+    /// who needs that address, or the provider it came from, as anything else.
+    /// </summary>
+    public string EgressLabel(string value, int attempt = 0)
+        => "exit-" + (1 + Draw("egress", value, attempt) % 9).ToString(CultureInfo.InvariantCulture);
+
     public string PanelName(string value, int attempt = 0)
         => Places[(int)(Draw("panel", value, attempt) % (ulong)Places.Length)] + "-panel";
 

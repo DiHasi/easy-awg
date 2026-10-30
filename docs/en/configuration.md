@@ -61,8 +61,8 @@
 | `AWG_INTERFACE` | Interface name. Default `awg0`. A probe ignores it and uses `awgprobe`. |
 | `AWG_INTERFACE_CONFIG_PATH` | Where the generated awg-quick config is written. Default `/etc/amnezia/amneziawg/awg0.conf`. |
 | `AWG_BUNDLE_FILE` | A local bundle to apply instead of fetching one, for bootstrap and for testing a node without a panel. Ignored for a probe. |
-| `AWG_PUBLIC_IP` | States the node's public address instead of discovering it. |
-| `AWG_PUBLIC_IP_URLS` | Echo services used to discover it. Empty switches discovery off. |
+| `AWG_PUBLIC_IP` | States the node's public address instead of discovering it. It does not affect which addresses the node reports as available for [egress](panel.md#nodes) - those are read off the interface. |
+| `AWG_PUBLIC_IP_URLS` | Echo services used to discover it, and the same services are asked once per egress address to find out what each one looks like from outside. Empty switches both off. |
 | `AWG_PUBLIC_IP_REFRESH_MINUTES` | How often a known address is checked again. Default 10. |
 | `AWG_ROLE` | `probe` runs the image as a probe instead of a node. Its state lives in `/etc/awg-probe`. |
 

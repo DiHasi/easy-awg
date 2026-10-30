@@ -45,6 +45,14 @@ actually needs it.
   has, so a promoted standby brings them back and has to be cleared in its turn.
 - `/api/metrics` answers on either panel from that panel's own copy of the data, so scraping both
   double-counts every series. Scrape one, or the panel record.
+- Nothing checks that a node's [egress addresses](panel.md#nodes) work. A probe tests the address
+  clients connect *to*, so an address the provider has stopped routing outbound leaves the node
+  reading as healthy while the peers pinned to it reach nothing. What the panel can show is what
+  each address looked like from outside the last time the node asked, which is the question that
+  matters most and not the same thing as a check.
+- Egress addresses are IPv4 only, like the rest of the tunnel, and a changed address applies to
+  connections made after it: the ones already open keep the address they were established with
+  until they close.
 - The predecessor single-server app is preserved at tag `v0.9-standalone` and has been removed
   from the tree.
 

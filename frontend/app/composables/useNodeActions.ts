@@ -1,3 +1,4 @@
+import NodeEgressModal from '~/components/NodeEgressModal.vue'
 import NodeFailoverModal from '~/components/NodeFailoverModal.vue'
 import NodeSettingsModal from '~/components/NodeSettingsModal.vue'
 import type { DnsStatus, Node } from '~/types/api'
@@ -13,6 +14,7 @@ export function useNodeActions() {
   const overlay = useOverlay()
   const failoverDialog = overlay.create(NodeFailoverModal)
   const settingsDialog = overlay.create(NodeSettingsModal)
+  const egressDialog = overlay.create(NodeEgressModal)
   const { dns, refresh } = useFleetState()
 
   const busyId = ref<string | null>(null)
@@ -127,5 +129,13 @@ export function useNodeActions() {
     }
   }
 
-  return { busyId, activate, revoke, remove, editFailover, editSettings }
+  async function editEgress(node: Node) {
+    const saved = await egressDialog.open({ node })
+    if (saved) {
+      await refresh()
+      toast.add({ title: `${node.name} updated`, icon: 'i-lucide-check', color: 'success' })
+    }
+  }
+
+  return { busyId, activate, revoke, remove, editFailover, editSettings, editEgress }
 }

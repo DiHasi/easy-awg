@@ -99,6 +99,14 @@ public sealed class DemoMask(
             ["publicIp"] = DemoFieldKind.Address,
             ["targetAddress"] = DemoFieldKind.Address,
             ["resolvedAddresses"] = DemoFieldKind.Address,
+            ["defaultAddress"] = DemoFieldKind.Address,
+            // What an echo service answered for one of a node's own addresses. Not in the map:
+            // the panel does not hold it, the outside does.
+            ["observed"] = DemoFieldKind.Address,
+            // In the map for every label some node offers. The fallback is for a peer pinned to
+            // a label no node offers yet, which the panel accepts on purpose.
+            ["label"] = DemoFieldKind.EgressLabel,
+            ["egressLabel"] = DemoFieldKind.EgressLabel,
             ["subnet"] = DemoFieldKind.Subnet,
 
             // Key material. A demo never sees a private key - none is in any admin response - but
@@ -408,6 +416,7 @@ public sealed class DemoMask(
             {
                 DemoFieldKind.Person => pseudonyms.Person(value),
                 DemoFieldKind.NodeName => pseudonyms.NodeName(value),
+                DemoFieldKind.EgressLabel => pseudonyms.EgressLabel(value),
                 DemoFieldKind.Username => pseudonyms.Username(value),
                 DemoFieldKind.Host => pseudonyms.Host(value),
                 DemoFieldKind.Url => pseudonyms.Url(value),
@@ -536,6 +545,9 @@ public sealed class DemoMask(
             // starts to: a key in the map is masked wherever it turns up.
             Add(client.PrivateKey, _ => pseudonyms.Key(client.PrivateKey));
             Add(client.PresharedKey, _ => pseudonyms.Key(client.PresharedKey));
+            // A peer may name a label no node offers, which the panel accepts on purpose, so the
+            // node loop below would not have it.
+            Add(client.EgressLabel, attempt => pseudonyms.EgressLabel(client.EgressLabel!, attempt));
         }
 
         foreach (var group in groups.List())
@@ -550,6 +562,24 @@ public sealed class DemoMask(
             Add(node.EndpointHost, attempt => pseudonyms.Host(node.EndpointHost!, attempt));
             Add(node.PublicIp, _ => pseudonyms.Address(node.PublicIp!, fleetSubnet, demoSubnet));
             Add(node.AgentPublicKey, _ => pseudonyms.Key(node.AgentPublicKey));
+
+            // Both halves of a node's egress. The addresses are a fleet's addresses like any
+            // other - publishing the spare ones is publishing where else this fleet can be
+            // reached - and the labels are the operator's own words.
+            var plan = NodeEgressPlan.Read(node.EgressPlan);
+            Add(plan.DefaultAddress, _ => pseudonyms.Address(plan.DefaultAddress!, fleetSubnet, demoSubnet));
+
+            foreach (var entry in plan.Labels)
+            {
+                Add(entry.Address, _ => pseudonyms.Address(entry.Address, fleetSubnet, demoSubnet));
+                Add(entry.Label, attempt => pseudonyms.EgressLabel(entry.Label, attempt));
+            }
+
+            foreach (var reported in ReportedEgress.Read(node.EgressReport))
+            {
+                Add(reported.Address, _ => pseudonyms.Address(reported.Address, fleetSubnet, demoSubnet));
+                Add(reported.Observed, _ => pseudonyms.Address(reported.Observed!, fleetSubnet, demoSubnet));
+            }
         }
 
         foreach (var probe in probes.List())
@@ -603,6 +633,7 @@ internal enum DemoFieldKind
 {
     Person,
     NodeName,
+    EgressLabel,
     Username,
     Host,
     Url,

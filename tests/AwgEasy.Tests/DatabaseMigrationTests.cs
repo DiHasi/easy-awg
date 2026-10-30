@@ -387,6 +387,74 @@ public sealed class DatabaseMigrationTests : IDisposable
         Assert.False(accounts.IsDemo("ops"));
     }
 
+    /// <summary>The nodes table as a panel that predates per-node egress addresses wrote it.</summary>
+    private void WriteNodeWithoutEgressColumns()
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = _path }.ToString());
+        connection.Open();
+
+        using var create = connection.CreateCommand();
+        create.CommandText = """
+            CREATE TABLE nodes (
+                id                TEXT PRIMARY KEY,
+                name              TEXT    NOT NULL,
+                hostname          TEXT    NULL,
+                endpoint_host     TEXT    NULL,
+                agent_public_key  TEXT    NOT NULL,
+                agent_version     TEXT    NULL,
+                status            TEXT    NOT NULL,
+                applied_revision  INTEGER NOT NULL DEFAULT 0,
+                interface_up      INTEGER NOT NULL DEFAULT 0,
+                backend           TEXT    NULL,
+                bundle_schema_version INTEGER NOT NULL DEFAULT 1,
+                egress_interface  TEXT    NULL,
+                mtu               INTEGER NULL,
+                public_ip         TEXT    NULL,
+                last_seen_at      TEXT    NULL,
+                last_error        TEXT    NULL,
+                revoked           INTEGER NOT NULL DEFAULT 0,
+                enrolled_at       TEXT    NOT NULL,
+                last_up_at        TEXT    NULL,
+                failover_priority INTEGER NOT NULL DEFAULT 100,
+                auto_failover     INTEGER NOT NULL DEFAULT 1
+            );
+
+            INSERT INTO nodes (id, name, agent_public_key, status, public_ip, enrolled_at)
+            VALUES ('ams', 'ams-1', 'AGENT_PUBLIC', 'healthy', '203.0.113.7',
+                    '2025-01-01T00:00:00.0000000+00:00');
+            """;
+        create.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Nothing about an upgraded fleet's egress may change by itself. No plan means the kernel
+    /// picks the source address exactly as it did before the column existed, and no peer is
+    /// pinned to anything - an upgrade that started SNAT-ing anybody would move every one of
+    /// those people to a different address without being asked.
+    /// </summary>
+    [Fact]
+    public void An_upgraded_panel_pins_nobody_and_leaves_every_node_on_the_kernels_choice()
+    {
+        WriteFleetWithoutTunnelMtu();
+        WriteUngroupedClients(("first", "10.8.0.9"));
+        WriteNodeWithoutEgressColumns();
+
+        var database = new Database(Options(), NullLogger<Database>.Instance);
+        database.Migrate();
+
+        var node = new NodeRepository(database, Options()).Find("ams");
+        Assert.NotNull(node);
+        Assert.Null(node.EgressPlan);
+        Assert.True(NodeEgressPlan.Read(node.EgressPlan).IsEmpty);
+
+        // And no report either, which is not the same as a node that answered and carries
+        // nothing: the panel has simply not heard from an agent new enough to say.
+        Assert.Null(node.EgressReport);
+        Assert.Empty(ReportedEgress.Read(node.EgressReport));
+
+        Assert.All(new ClientRepository(database).List(), client => Assert.Null(client.EgressLabel));
+    }
+
     private ControlOptions Options() => new(
         DatabasePath: _path,
         DefaultSubnet: "10.8.0.0/24",

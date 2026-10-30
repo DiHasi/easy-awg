@@ -156,6 +156,58 @@ public class EgressInterfaceResolverTests
     }
 }
 
+public class EgressAddressParsingTests
+{
+    /// <summary>
+    /// A real host with a second address on it: the spare one sits on the `ens3:0` alias label as
+    /// a /32, which is exactly the address somebody would be pinned to. Both are globally scoped
+    /// and both have to come back.
+    /// </summary>
+    private const string Shown =
+        "2: ens3: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP group default qlen 1000\n" +
+        "    link/ether 52:54:00:73:fa:cc brd ff:ff:ff:ff:ff:ff\n" +
+        "    altname enp0s3\n" +
+        "    inet 157.228.112.119/32 brd 157.228.112.119 scope global ens3:0\n" +
+        "       valid_lft forever preferred_lft forever\n" +
+        "    inet 91.132.59.9/32 scope global ens3\n" +
+        "       valid_lft forever preferred_lft forever\n";
+
+    [Fact]
+    public void Reads_every_address_the_interface_carries()
+        => Assert.Equal(["157.228.112.119", "91.132.59.9"], EgressAddressResolver.ParseAddresses(Shown));
+
+    [Fact]
+    public void Reads_a_secondary_inside_a_subnet_as_well_as_a_host_route()
+        => Assert.Equal(
+            ["198.51.100.10", "198.51.100.11"],
+            EgressAddressResolver.ParseAddresses(
+                "    inet 198.51.100.10/24 brd 198.51.100.255 scope global ens3\n"
+                + "    inet 198.51.100.11/24 brd 198.51.100.255 scope global secondary ens3\n"));
+
+    // Nothing leaves through either, and the broadcast address on the same line is not an address
+    // of this host at all.
+    [Fact]
+    public void Leaves_out_what_nothing_can_leave_through()
+        => Assert.Empty(EgressAddressResolver.ParseAddresses(
+            "    inet 127.0.0.1/8 scope host lo\n"
+            + "    inet 169.254.3.4/16 brd 169.254.255.255 scope link ens3\n"));
+
+    /// <summary>
+    /// Which address the kernel would put on a packet heading out, which is what every unpinned
+    /// peer leaves with until an operator states a default - and on a host carrying two addresses
+    /// it was decided by the order they sit in and visible nowhere.
+    /// </summary>
+    [Fact]
+    public void Reads_the_source_the_kernel_would_pick()
+        => Assert.Equal(
+            "91.132.59.9",
+            EgressAddressResolver.ParseRouteSource("1.1.1.1 via 10.0.0.1 dev ens3 src 91.132.59.9 uid 0 \n    cache \n"));
+
+    [Fact]
+    public void Reads_no_source_from_output_it_does_not_understand()
+        => Assert.Null(EgressAddressResolver.ParseRouteSource("RTNETLINK answers: Network is unreachable"));
+}
+
 public class AwgDumpParsingTests
 {
     // `awg show <iface> dump`: first line is the interface, peers follow as

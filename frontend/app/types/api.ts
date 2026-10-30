@@ -87,6 +87,13 @@ export type Client = {
    * nothing of its is in anybody's hands.
    */
   configStale: boolean
+  /**
+   * Which of a node's addresses this peer leaves through, by the operator's name for it, or null
+   * to leave through whatever that node's default is. A label rather than an address, so it still
+   * means something after failover has moved traffic to another node - one that resolves the same
+   * label to an address of its own, or to nothing.
+   */
+  egressLabel?: string | null
 }
 
 /**
@@ -268,6 +275,42 @@ export type Node = {
    * nobody, and the panel refuses to send traffic there at all.
    */
   onCurrentIdentity: boolean
+  /** Which address this node hands out by default, and what the others are called. */
+  egressPlan: NodeEgressPlan
+  /** Every address the agent last reported on its egress interface. Empty until it has said. */
+  egressAddresses: ReportedEgressAddress[]
+}
+
+/** One of a node's addresses and the operator's name for it. */
+export type EgressLabel = {
+  address: string
+  label: string
+}
+
+/**
+ * Which source addresses one node hands out. A peer picks a label, never an address: addresses
+ * belong to a node, and a peer has to keep what it was given when failover moves it elsewhere.
+ */
+export type NodeEgressPlan = {
+  /** What everyone who asked for nothing else leaves with; null leaves the choice to the kernel. */
+  defaultAddress?: string | null
+  labels: EgressLabel[]
+}
+
+/** One address a node carries, as the node describes it. */
+export type ReportedEgressAddress = {
+  address: string
+  /**
+   * The address the kernel picks for outbound traffic right now, which is what every unpinned
+   * peer leaves with until the node is given a default of its own.
+   */
+  kernelDefault: boolean
+  /**
+   * What an echo service answered when the request left with this address as its source, or null
+   * when the check did not run. The difference between "this address is mine" and "this address
+   * presents as something else", which is the question pinning anybody to one is asked to answer.
+   */
+  observed?: string | null
 }
 
 /**

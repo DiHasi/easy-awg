@@ -119,6 +119,8 @@ public sealed class PanelReplicationTests
     [InlineData("POST", "/api/nodes/tokens")]
     [InlineData("PUT", "/api/fleet/mtu")]
     [InlineData("POST", "/api/failover/evaluate")]
+    [InlineData("PUT", "/api/nodes/whatever/egress")]
+    [InlineData("PUT", "/api/clients/whatever/egress")]
     public async Task A_standby_refuses_every_change_to_the_fleet(string method, string path)
     {
         await using var pair = await PanelPair.CreateAsync();
@@ -354,6 +356,63 @@ public sealed class PanelReplicationTests
         Assert.Equal(
             (await pair.ActiveAdmin.GetFromJsonAsync<FleetResponse>("/api/fleet"))!.ServerPublicKey,
             bundle.Identity.ServerPublicKey);
+    }
+
+    /// <summary>
+    /// A node's egress crosses in two halves, on the two different clocks the split exists for.
+    /// The plan and a peer's label are configuration and travel in the snapshot: a promoted panel
+    /// that read them as unset would move everybody back onto whatever address the kernel picks,
+    /// which is the thing an operator set them to avoid. The addresses the node reported are an
+    /// observation and travel on the stream, beside its public address.
+    /// </summary>
+    [Fact]
+    public async Task A_standby_replicates_both_halves_of_a_nodes_egress()
+    {
+        await using var pair = await PanelPair.CreateAsync();
+
+        var token = await pair.ActiveAdmin.PostAsJsonAsync("/api/nodes/tokens", new CreateNodeRequest("node-egress", null, null, null));
+        token.EnsureSuccessStatusCode();
+        var enrollment = (await token.Content.ReadFromJsonAsync<EnrollmentTokenResponse>())!;
+
+        using var agent = new TestAgent();
+        using var activeClient = pair.Active.CreateClient();
+        await agent.EnrollAsync(activeClient, enrollment.Token);
+
+        using var report = agent.SignedRequest(
+            HttpMethod.Post,
+            $"/api/v1/agents/{agent.NodeId}/status",
+            JsonContent.Create(new NodeStatusReport(
+                AppliedRevision: 0,
+                InterfaceUp: true,
+                Backend: "test",
+                AgentVersion: "test/1.0",
+                ReportedAt: DateTimeOffset.UtcNow,
+                Peers: [],
+                Metrics: null,
+                LastError: null,
+                BundleSchemaVersion: DesiredStateBundle.CurrentSchemaVersion,
+                PublicIp: "203.0.113.7",
+                EgressAddresses: [new ReportedEgressAddress("203.0.113.7", KernelDefault: true), new ReportedEgressAddress("203.0.113.8")])));
+
+        (await activeClient.SendAsync(report)).EnsureSuccessStatusCode();
+
+        (await pair.ActiveAdmin.PutAsJsonAsync(
+            $"/api/nodes/{agent.NodeId}/egress",
+            new UpdateNodeEgressRequest("203.0.113.7", [new EgressLabel("203.0.113.8", "clean")]))).EnsureSuccessStatusCode();
+
+        var peer = await pair.CreateClientAsync("Ivan");
+        (await pair.ActiveAdmin.PutAsJsonAsync($"/api/clients/{peer.Id}/egress", new UpdateClientEgressRequest("clean"))).EnsureSuccessStatusCode();
+
+        await pair.SyncAsync();
+
+        var replicated = (await pair.StandbyAdmin.GetFromJsonAsync<NodeResponse[]>("/api/nodes"))!.Single(node => node.Id == agent.NodeId);
+
+        Assert.Equal("203.0.113.7", replicated.EgressPlan.DefaultAddress);
+        Assert.Equal("clean", Assert.Single(replicated.EgressPlan.Labels).Label);
+        Assert.Equal(["203.0.113.7", "203.0.113.8"], replicated.EgressAddresses.Select(address => address.Address));
+
+        var replicatedPeer = (await pair.StandbyAdmin.GetFromJsonAsync<ClientResponse[]>("/api/clients"))!.Single(client => client.Id == peer.Id);
+        Assert.Equal("clean", replicatedPeer.EgressLabel);
     }
 
     /// <summary>

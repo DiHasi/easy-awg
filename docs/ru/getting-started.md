@@ -49,10 +49,12 @@ docker compose -f compose.node.yaml build
 # На машине сборки или в CI. AGENT_VERSION — это версия, которую нода сообщает
 # панели, а PANEL_VERSION — та, которую одна панель пары сообщает второй;
 # без них соответствующая сторона представляется как 0.0.0-dev.
-# Панель на 1.13.0, образ ноды остаётся на 1.4.3: ничего в src/AwgEasy.Node или
-# src/AwgEasy.Contracts в этом релизе не менялось. Пересобирайте образ ноды, когда
-# меняется что-то в src/AwgEasy.Node, src/AwgEasy.Contracts или docker/node.Dockerfile, а не
-# когда уехала только панель.
+# В этом релизе едут оба: контракт несёт адреса выхода, а агент их применяет, так что ни один
+# из образов не остался прежним. Пересобирайте образ ноды, когда меняется что-то в
+# src/AwgEasy.Node, src/AwgEasy.Contracts или docker/node.Dockerfile, а не когда уехала только
+# панель, - и учтите, что адресам выхода нужен образ ноды 1.5.0 или новее. Агент постарее
+# сообщает схему бандла ниже 3, панель продолжает отдавать ему конфигурацию, которую он умеет
+# применить, и все его пиры уходят через адрес, выбранный ядром; на карточке ноды это видно.
 # Оба образа мультиарховые (amd64 и arm64 - проба на Raspberry Pi) и собираются на
 # amd64-машине билдером buildx, умеющим пушить manifest list:
 #   docker buildx create --name awg --driver docker-container
@@ -60,9 +62,9 @@ docker compose -f compose.node.yaml build
 # Desktop работает на драйвере "docker", который двухархитектурную сборку не
 # выполняет вовсе, а оболочка с дефолтом, сброшенным назад на него, - обычное дело.
 docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/control.Dockerfile \
-    --build-arg PANEL_VERSION=1.13.0 -t dihasi/awg-control:1.13.0 -t dihasi/awg-control:latest --push .
+    --build-arg PANEL_VERSION=1.14.0 -t dihasi/awg-control:1.14.0 -t dihasi/awg-control:latest --push .
 docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/node.Dockerfile \
-    --build-arg AGENT_VERSION=1.4.3 -t dihasi/awg-node:1.4.3 -t dihasi/awg-node:latest --push .
+    --build-arg AGENT_VERSION=1.5.0 -t dihasi/awg-node:1.5.0 -t dihasi/awg-node:latest --push .
 ```
 
 ```bash

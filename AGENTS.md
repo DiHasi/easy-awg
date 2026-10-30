@@ -40,7 +40,7 @@ docs/                    Operator documentation, en/ and ru/ in step. README.md 
 
 ```bash
 dotnet build Awg-easy.sln          # whole solution
-dotnet test Awg-easy.sln           # 426 tests, all must pass
+dotnet test Awg-easy.sln           # 466 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
 cd frontend && pnpm run test       # vitest, in a Nuxt environment
@@ -556,6 +556,55 @@ changes no peer material.
 detected at runtime. The old code assumed `eth0`, which silently broke NAT on hosts using `ens3`
 or `enp1s0`: the tunnel came up, peers handshook, and no traffic reached the internet.
 
+**A peer picks a label; a node is handed an address.** One server often carries several public
+addresses, and they are not interchangeable: the services behind one of them have filed it as
+belonging to a region it is not in, or into a shadow ban, so one group of people wants that address
+and another wants anything else. `clients.egress_label` is therefore a name, resolved per node by
+`FleetService.BuildBundle` into `BundlePeer.EgressAddress`, with `nodes.egress_plan` holding what
+that node calls each of its addresses and which one is its default (`NodeSettings.DefaultEgressAddress`).
+An address would have been simpler and is wrong: addresses belong to one node, so a peer pinned to
+one would silently lose it the moment failover moved traffic - which is the thing this whole
+architecture exists to make invisible. A label a node has no address for resolves to null and that
+peer leaves through the node default, deliberately. The labels themselves never cross the wire, for
+the same reason address allocation belongs to the panel, and a change to either half bumps the
+revision because the bundle is served against an ETag of it.
+
+**Which addresses a node carries is a thing only the node can answer.** The agent enumerates them
+off the egress interface and reports them in `NodeStatusReport.EgressAddresses`, with the address
+the kernel is currently picking marked and what an echo service saw for each one beside it - the
+last being the whole question an operator is asking when they pin anybody. So the panel offers what
+was reported rather than a field to type an address into, and a round that could not enumerate
+reports **null** rather than an empty list: `RecordStatus` COALESCEs it, so a failed lookup does not
+empty the dialog an operator is in the middle of. A status-report field is not a bundle field, so
+none of this needs a synchronized upgrade.
+
+**The egress rules live in a chain of the agent's own, and are rebuilt rather than appended to.**
+`NodeFirewall.EgressChain` holds one `SNAT --to-source` per pinned peer and the node default last;
+`AwgInterface` compares it against `iptables -t nat -S` and flushes and refills on a mismatch. These
+are the only rules here that go stale on their own - a pin disappears when its peer is deleted or
+re-labelled - and the check-then-append loop that keeps the other rules alive can never notice a
+rule that ought to be gone. The order inside the chain is load-bearing, since SNAT terminates: the
+per-peer rules have to be seen before the default that covers the whole subnet. The jump into the
+chain is **inserted** at POSTROUTING 1 rather than appended, because on an upgrade the blanket
+MASQUERADE is already installed and a jump below it would leave every pin silently doing nothing.
+That MASQUERADE stays in the hooks: a node that comes up without its agent still NATs, so an
+unapplied pin costs a peer the address it was meant to leave with and never its traffic.
+
+**An address the node does not carry is skipped, not installed.** SNAT to a non-local source leaves
+that peer with no working traffic at all, where leaving the rule out leaves it on the default. The
+panel holds both halves of the discrepancy - the plan it published and the addresses the node
+reports - so it can say who is affected without the node inventing an error field. A node that
+could not read its addresses applies what the panel published: null is no evidence, not evidence of
+nothing.
+
+**The schema that carries the 3.x wire format is not the newest schema.**
+`BundleSchema.Schema3ObfuscationVersion` is 2 and `DesiredStateBundle.CurrentSchemaVersion` is 3.
+`FleetService.BuildBundle` downgrades the obfuscation profile below the first and omits the egress
+fields below the second, and `FailoverPolicy.IsEligible` asks about the first. They were one
+comparison while the two numbers were equal, and the bump that added the egress fields would
+otherwise have served every node one release behind a downgraded profile its own clients cannot
+handshake with - and taken it out of the failover rotation at the same time. Keep them apart.
+
 **`awg syncconf` applies the device, not the interface.** It carries keys, listen port,
 obfuscation and peers. The address, the MTU and the `PostUp`/`PostDown` hooks belong to
 awg-quick, and `awg-quick strip` removes them before syncconf ever sees them. So an interface
@@ -631,6 +680,11 @@ signed; it covers a hash of the body. Node revocation is a flag checked per requ
 - No ORM. Hand-written SQL via `Microsoft.Data.Sqlite` and the helpers in `SqliteExtensions`.
 - Frontend: Nuxt UI components, semantic Tailwind tokens (`text-muted`, `border-default`, …).
   The API models "unset" as `null`, form inputs need `undefined` — convert at the boundary.
+- A select item may never carry an empty value. The component underneath reserves the empty
+  string for its own placeholder and *throws* on an item that uses one, so a "none of these"
+  entry never renders - and a field that had been set could then never be unset again, which is
+  how a pinned peer became impossible to put back on its node's default. Unset is the
+  placeholder, and clearing it is a button beside the field. `egressChoices` has the test.
 - Every page section is an `AppCard` on the darker canvas, and a section's actions live in its
   own header. Keep an action next to the thing it acts on: switching nodes is a button on the
   node (`NodeCard`), handing out a config is the peer's Config dialog (`PeerConfigModal`). Node
@@ -698,3 +752,18 @@ never assert on a specific allocated address — assert on what the API returned
   it again once it is in charge.
 - `/api/metrics` answers on either panel, from that panel's own copy of the data, so scraping both
   double-counts every series. Scrape one, or the panel record.
+- Nothing verifies that a node's egress addresses still work. A probe checks the address clients
+  connect *to*, so an address the provider has stopped routing outbound leaves the node healthy
+  while the peers pinned to it reach nothing. The per-address observation in the status report is
+  the closest thing - what that address looked like from outside the last time the node asked -
+  and it is a diagnostic, not a check. A probe per egress address would be the real answer and is
+  a much larger thing: a probe's config is rendered by the panel and tied to one node, not to one
+  source address on it.
+- `e2e.sh` can cover a node's default egress address but not a per-peer pin: there is no client
+  container to pin, and the probe's peer is not reachable through the client endpoints by design.
+  What it asserts is the chain's contents and that traffic through the tunnel moves the default
+  rule's counter.
+- Egress addresses are IPv4 only, like the rest of the tunnel, and a changed pin applies to new
+  connections: conntrack keeps the translation of the ones already established. Flushing it per
+  peer would make a change immediate at the cost of dropping that person's live connections, and
+  `conntrack` is not in the node image.

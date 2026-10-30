@@ -20,6 +20,7 @@ public sealed class AwgInterface(
     NodeOptions options,
     AwgRuntime runtime,
     EgressInterfaceResolver egressResolver,
+    EgressAddressResolver addressResolver,
     ILogger<AwgInterface> logger)
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -76,7 +77,7 @@ public sealed class AwgInterface(
                 await RunAsync("awg-quick", ["up", options.InterfaceConfigPath], cancellationToken);
             }
 
-            await EnsureFirewallAsync(egress, cancellationToken);
+            await EnsureFirewallAsync(bundle, egress, cancellationToken);
 
             if (previousEgress is not null && !string.Equals(previousEgress, egress, StringComparison.Ordinal))
             {
@@ -187,8 +188,23 @@ public sealed class AwgInterface(
     /// rebuilds the FORWARD chain, or an interface that was already up when the agent arrived,
     /// otherwise leaves a tunnel that is up, in sync, and carries nothing.
     /// </summary>
-    private async Task EnsureFirewallAsync(string egressInterface, CancellationToken cancellationToken)
+    private async Task EnsureFirewallAsync(DesiredStateBundle bundle, string egressInterface, CancellationToken cancellationToken)
     {
+        // Before the loop, because one of those rules jumps to this chain and iptables will not
+        // install a rule naming a chain that does not exist. `-N` on one that already exists is
+        // an error and nothing else, so only a missing binary is worth reacting to.
+        var created = await ProcessRunner.TryRunAsync(
+            "iptables",
+            ["-t", "nat", "-N", NodeFirewall.EgressChain],
+            input: null,
+            cancellationToken);
+
+        if (created is null)
+        {
+            logger.LogWarning("iptables is not available. Forwarding rules were not checked.");
+            return;
+        }
+
         foreach (var rule in NodeFirewall.Rules(options.InterfaceName, egressInterface))
         {
             var check = await ProcessRunner.TryRunAsync("iptables", rule.ToArguments("-C"), input: null, cancellationToken);
@@ -204,6 +220,73 @@ public sealed class AwgInterface(
             }
 
             logger.LogWarning("Forwarding rule was missing; restoring it: {Rule}", rule.ToCommand("-A"));
+            await RunAsync("iptables", rule.ToArguments("-A"), cancellationToken);
+        }
+
+        await ReconcileEgressAsync(bundle, egressInterface, cancellationToken);
+    }
+
+    /// <summary>
+    /// Brings the egress chain in line with the bundle: one SNAT rule per peer that leaves
+    /// through an address of its own, the node default last.
+    ///
+    /// Compared before it is rebuilt, and rebuilt whole when it differs. Comparing is what keeps
+    /// a chain that is already right from being flushed on every poll - a flush is a window, however
+    /// short, in which a new connection falls through to the MASQUERADE - and rebuilding whole is
+    /// what removes the rule of a peer that has been deleted or re-labelled, which a
+    /// check-then-append pass can never notice.
+    ///
+    /// Nothing here takes the interface down: a changed pin costs nobody their tunnel, and the
+    /// translation of connections already established stands until they close.
+    /// </summary>
+    private async Task ReconcileEgressAsync(DesiredStateBundle bundle, string egressInterface, CancellationToken cancellationToken)
+    {
+        var available = await addressResolver.ListAsync(egressInterface, cancellationToken);
+        var held = available is null ? null : new HashSet<string>(available.Addresses, StringComparer.Ordinal);
+
+        if (held is not null)
+        {
+            var missing = NodeFirewall.ConfiguredEgressAddresses(bundle).Where(address => !held.Contains(address)).ToArray();
+            if (missing.Length > 0)
+            {
+                // Skipped rather than installed: a rule that SNATs to an address this host does
+                // not carry leaves that peer with no working traffic, where leaving it out leaves
+                // it on the default. The panel can name who is affected - it has both the plan it
+                // published and the addresses this node reports.
+                logger.LogWarning(
+                    "The bundle asks this node to leave through {Addresses}, which {EgressInterface} does not carry. Those peers keep the default address.",
+                    string.Join(", ", missing),
+                    egressInterface);
+            }
+        }
+
+        var desired = NodeFirewall.EgressRules(bundle, held);
+
+        var listing = await ProcessRunner.TryRunAsync(
+            "iptables",
+            ["-t", "nat", "-S", NodeFirewall.EgressChain],
+            input: null,
+            cancellationToken);
+
+        if (listing is null || listing.ExitCode != 0)
+        {
+            return;
+        }
+
+        if (NodeFirewall.ParseEgressChain(listing.Output)
+            .SequenceEqual(NodeFirewall.DescribeEgressRules(desired), StringComparer.Ordinal))
+        {
+            return;
+        }
+
+        logger.LogInformation(
+            "Egress rules changed; rebuilding {Chain} with {Count} rule(s).",
+            NodeFirewall.EgressChain,
+            desired.Length);
+
+        await RunAsync("iptables", ["-t", "nat", "-F", NodeFirewall.EgressChain], cancellationToken);
+        foreach (var rule in desired)
+        {
             await RunAsync("iptables", rule.ToArguments("-A"), cancellationToken);
         }
     }

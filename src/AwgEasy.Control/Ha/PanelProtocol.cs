@@ -193,7 +193,8 @@ public sealed record PanelClientRow(
     int SortOrder,
     int ConfigGeneration,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    string? EgressLabel = null);
 
 public sealed record PanelGroupRow(
     string Id,
@@ -218,7 +219,8 @@ public sealed record PanelNodeConfigRow(
     bool Revoked,
     int FailoverPriority,
     bool AutoFailover,
-    DateTimeOffset EnrolledAt);
+    DateTimeOffset EnrolledAt,
+    string? EgressPlan = null);
 
 public sealed record PanelProbeConfigRow(
     string Id,
@@ -305,7 +307,8 @@ public sealed record PanelNodeStateRow(
     string? PublicIp,
     DateTimeOffset? LastSeenAt,
     string? LastError,
-    DateTimeOffset? LastUpAt);
+    DateTimeOffset? LastUpAt,
+    string? EgressReport = null);
 
 public sealed record PanelProbeStateRow(string Id, string? AgentVersion, DateTimeOffset? LastSeenAt);
 

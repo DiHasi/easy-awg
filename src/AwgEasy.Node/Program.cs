@@ -63,6 +63,8 @@ else
     builder.Services.AddSingleton<BundleStore>();
     builder.Services.AddSingleton<BundleAcceptor>();
     builder.Services.AddSingleton<EgressInterfaceResolver>();
+    builder.Services.AddSingleton<EgressAddressResolver>();
+    builder.Services.AddSingleton<EgressAddressReporter>();
     builder.Services.AddSingleton<AwgRuntime>();
     builder.Services.AddSingleton<AwgInterface>();
     builder.Services.AddSingleton<NodeHealth>();

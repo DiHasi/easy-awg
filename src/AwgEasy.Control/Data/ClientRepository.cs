@@ -6,11 +6,11 @@ namespace AwgEasy.Control;
 
 public sealed class ClientRepository(Database database)
 {
-    private const string Columns = "id, name, address, private_key, public_key, preshared_key, enabled, obfuscation_json, group_id, config_generation, created_at, updated_at";
+    private const string Columns = "id, name, address, private_key, public_key, preshared_key, enabled, obfuscation_json, group_id, config_generation, egress_label, created_at, updated_at";
 
     /// <summary>The same columns for the one query that has to join the groups to sort by them.</summary>
     private const string QualifiedColumns = "c.id, c.name, c.address, c.private_key, c.public_key, c.preshared_key, "
-        + "c.enabled, c.obfuscation_json, c.group_id, c.config_generation, c.created_at, c.updated_at";
+        + "c.enabled, c.obfuscation_json, c.group_id, c.config_generation, c.egress_label, c.created_at, c.updated_at";
 
     /// <summary>
     /// The people the fleet serves, in exactly the order the panel draws them: the groups in the
@@ -99,11 +99,12 @@ public sealed class ClientRepository(Database database)
         using var connection = database.Open();
         using var command = connection.Sql(
             """
-            INSERT INTO clients (id, name, address, private_key, public_key, preshared_key, enabled, obfuscation_json, created_at, updated_at, kind, group_id, config_generation, sort_order)
-            VALUES ($id, $name, $address, $privateKey, $publicKey, $presharedKey, $enabled, $obfuscation, $createdAt, $updatedAt, $kind, $groupId, $configGeneration,
+            INSERT INTO clients (id, name, address, private_key, public_key, preshared_key, enabled, obfuscation_json, created_at, updated_at, kind, group_id, config_generation, egress_label, sort_order)
+            VALUES ($id, $name, $address, $privateKey, $publicKey, $presharedKey, $enabled, $obfuscation, $createdAt, $updatedAt, $kind, $groupId, $configGeneration, $egressLabel,
                     (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM clients WHERE group_id IS $groupId))
             """,
             ("$kind", kind),
+            ("$egressLabel", client.EgressLabel),
             ("$configGeneration", client.ConfigGeneration),
             ("$groupId", client.GroupId),
             ("$id", client.Id),
@@ -119,6 +120,19 @@ public sealed class ClientRepository(Database database)
 
         command.ExecuteNonQuery();
     }
+
+    /// <summary>
+    /// Which address this peer leaves through, by name. Null unpins it.
+    ///
+    /// Unlike a rename this does change what a node runs - the panel resolves the label into an
+    /// address while it builds each bundle - so the call site bumps the revision.
+    /// </summary>
+    public bool SetEgressLabel(string id, string? label, DateTimeOffset now)
+        => Execute(
+            "UPDATE clients SET egress_label = $label, updated_at = $now WHERE id = $id AND kind = 'user'",
+            ("$id", id),
+            ("$label", label),
+            ("$now", now.ToStorage()));
 
     public bool Rename(string id, string name, DateTimeOffset now)
         => Execute("UPDATE clients SET name = $name, updated_at = $now WHERE id = $id AND kind = 'user'", ("$id", id), ("$name", name), ("$now", now.ToStorage()));
@@ -230,7 +244,8 @@ public sealed class ClientRepository(Database database)
                 reader.GetTimestamp("created_at"),
                 reader.GetTimestamp("updated_at"),
                 reader.GetStringOrNull("group_id"),
-                reader.GetInt32("config_generation")));
+                reader.GetInt32("config_generation"),
+                reader.GetStringOrNull("egress_label")));
         }
 
         return clients;

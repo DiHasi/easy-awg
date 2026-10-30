@@ -47,6 +47,25 @@ offered when a node is enrolled, so a server that needs a narrower MTU has it in
 configuration it ever applies. Of the four, only the egress interface and the MTU travel in the
 bundle; the label and the endpoint host reissue nothing.
 
+*Egress addresses* on the same menu is the other half of what one node runs: which of its own
+addresses its traffic leaves through. The reason this exists is a provider handing you a second
+address on one server — one of them has been filed by the services behind it as belonging to a
+region it is not in, or into somebody's shadow ban, and the two halves of your fleet want opposite
+things from it. The rows are what the agent reported, because only the node knows which addresses
+it carries, and each row says what an echo service answered when a request left with that address
+as its source. Name an address and a peer can ask for it. Pick one as the default and everybody
+else leaves through it, rather than through whatever the kernel picks out of the order the
+addresses happen to sit in on the interface.
+
+A peer asks by name and not by address — *Egress address* on its row in the peer list — because an
+address belongs to one node. After a switch the peer leaves through the address the new node calls
+by the same name, or through that node's default where it has none, and its row says so. *Use
+node default* in the same dialog puts it back, and *Clear* beside a node's default address hands
+the choice back to the kernel. Saving
+either half advances the fleet revision, so every node re-applies its configuration: no interface
+is taken down, no config is reissued, and a connection already open keeps the address it was made
+with.
+
 Below the cards: how each node has stood over time and what each probe saw of it, automatic
 failover, the panel pair, and the probes.
 

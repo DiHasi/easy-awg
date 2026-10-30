@@ -48,10 +48,12 @@ for this reason: build once somewhere with room, push, and pull on the servers.
 # On a build machine or in CI. AGENT_VERSION is what each node reports back to
 # the panel, and PANEL_VERSION is what one panel of a pair reports to the other;
 # leave either out and that side identifies itself as 0.0.0-dev.
-# The panel is at 1.13.0 while the node image stays at 1.4.3: nothing under src/AwgEasy.Node
-# or src/AwgEasy.Contracts changed in it. Rebuild the node image when something under
-# src/AwgEasy.Node, src/AwgEasy.Contracts or docker/node.Dockerfile does, not when only the
-# panel moved.
+# Both move in this release: the contract carries the egress addresses and the agent applies
+# them, so neither image is the one from last time. Rebuild the node image when something under
+# src/AwgEasy.Node, src/AwgEasy.Contracts or docker/node.Dockerfile changes, not when only the
+# panel moved - and note that the egress addresses need a node image at 1.5.0 or newer. An older
+# agent reports a bundle schema below 3, the panel keeps serving it the configuration it can
+# apply, and it leaves every peer on the address the kernel picks; the node card says so.
 # Both images are multi-arch (amd64 and arm64 - a probe on a Raspberry Pi), built on an amd64
 # machine with a buildx builder that can push manifest lists:
 #   docker buildx create --name awg --driver docker-container
@@ -59,9 +61,9 @@ for this reason: build once somewhere with room, push, and pull on the servers.
 # default builder uses the "docker" driver, which refuses a two-architecture build
 # outright, and a shell where the default has reset back to it is the normal case.
 docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/control.Dockerfile \
-    --build-arg PANEL_VERSION=1.13.0 -t dihasi/awg-control:1.13.0 -t dihasi/awg-control:latest --push .
+    --build-arg PANEL_VERSION=1.14.0 -t dihasi/awg-control:1.14.0 -t dihasi/awg-control:latest --push .
 docker buildx build --builder awg --platform linux/amd64,linux/arm64 -f docker/node.Dockerfile \
-    --build-arg AGENT_VERSION=1.4.3 -t dihasi/awg-node:1.4.3 -t dihasi/awg-node:latest --push .
+    --build-arg AGENT_VERSION=1.5.0 -t dihasi/awg-node:1.5.0 -t dihasi/awg-node:latest --push .
 ```
 
 ```bash

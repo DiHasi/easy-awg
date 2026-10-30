@@ -24,6 +24,7 @@ const emit = defineEmits<{
   remove: []
   failover: []
   settings: []
+  egress: []
 }>()
 
 const state = computed(() => describeNode(props.node))
@@ -33,6 +34,20 @@ const endpoint = computed(() => {
     return 'address unknown'
   }
   return props.listenPort ? `${props.node.publicIp}:${props.listenPort}` : props.node.publicIp
+})
+
+/**
+ * What unpinned peers leave with. The plan's default when an operator stated one, otherwise the
+ * address the kernel is picking today - which is decided by the order the addresses happen to sit
+ * in on the interface, and was visible nowhere before the agent started reporting it.
+ */
+const egressDefault = computed(() => {
+  const node = props.node
+  if (node.egressPlan.defaultAddress) {
+    return node.egressPlan.defaultAddress
+  }
+  const kernel = node.egressAddresses.find(address => address.kernelDefault)
+  return kernel ? `${kernel.address} (kernel)` : 'kernel choice'
 })
 
 // Worth a line of its own only when something is wrong: a healthy node's reason is noise.
@@ -51,6 +66,7 @@ const menu = computed(() => {
   if (!props.node.revoked) {
     groups.push([
       { label: 'Node settings', icon: 'i-lucide-settings-2', onSelect: () => emit('settings') },
+      { label: 'Egress addresses', icon: 'i-lucide-arrow-up-right', onSelect: () => emit('egress') },
       { label: 'Failover settings', icon: 'i-lucide-route', onSelect: () => emit('failover') }
     ])
     groups.push([{ label: 'Revoke access', icon: 'i-lucide-ban', onSelect: () => emit('revoke') }])
@@ -219,6 +235,18 @@ const menu = computed(() => {
         mono
       >
         <span :class="node.egressInterface ? '' : 'text-muted'">{{ node.egressInterface ?? 'detected' }}</span>
+      </SpecItem>
+      <SpecItem
+        label="Egress address"
+        mono
+      >
+        <span :class="node.egressPlan.defaultAddress ? '' : 'text-muted'">{{ egressDefault }}</span>
+        <span
+          v-if="node.egressPlan.labels.length > 0"
+          class="text-muted"
+        >
+          + {{ node.egressPlan.labels.length }} named
+        </span>
       </SpecItem>
       <SpecItem
         label="MTU"

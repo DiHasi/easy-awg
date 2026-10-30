@@ -63,6 +63,8 @@ public class DemoAccountTests(ControlPlaneFixture fixture) : FleetScenario(fixtu
     [InlineData("PUT", "/api/fleet/mtu")]
     [InlineData("PUT", "/api/failover")]
     [InlineData("POST", "/api/nodes/availability/reset")]
+    [InlineData("PUT", "/api/nodes/whatever/egress")]
+    [InlineData("PUT", "/api/clients/whatever/egress")]
     public async Task Every_write_is_refused(string method, string path)
     {
         var response = await (await DemoAsync()).SendAsync(new HttpRequestMessage(new HttpMethod(method), path)
@@ -142,6 +144,43 @@ public class DemoAccountTests(ControlPlaneFixture fixture) : FleetScenario(fixtu
 
         Assert.DoesNotContain(NodeName, raw, StringComparison.Ordinal);
         Assert.DoesNotContain(NodeAddress, raw, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A node's spare addresses are a fleet's addresses: publishing them is publishing where else
+    /// this fleet answers, which is the list a blocker is short of. The labels are the operator's
+    /// own words and as likely to name the person who needed that address as anything, so they go
+    /// too - and one label stays one stand-in, on the node that offers it and on the peer that
+    /// asked for it, or the demo is noise.
+    /// </summary>
+    [Fact]
+    public async Task A_nodes_spare_addresses_and_the_words_for_them_are_not_published()
+    {
+        var admin = await AdminAsync();
+        var node = await NodeAsync(admin, "egress-demo-node", "203.0.113.77");
+
+        (await admin.PutAsJsonAsync(
+            $"/api/nodes/{node.Id}/egress",
+            new UpdateNodeEgressRequest("203.0.113.77", [new EgressLabel("203.0.113.78", "Olga clean")]))).EnsureSuccessStatusCode();
+
+        var peer = await PeerAsync(admin, "egress-demo-peer");
+        (await admin.PutAsJsonAsync($"/api/clients/{peer.Id}/egress", new UpdateClientEgressRequest("Olga clean"))).EnsureSuccessStatusCode();
+
+        var demo = await DemoAsync();
+        var rawNodes = await RawAsync(demo, "/api/nodes");
+        var rawClients = await RawAsync(demo, "/api/clients");
+
+        Assert.DoesNotContain("203.0.113.78", rawNodes, StringComparison.Ordinal);
+        Assert.DoesNotContain("Olga clean", rawNodes, StringComparison.Ordinal);
+        Assert.DoesNotContain("Olga clean", rawClients, StringComparison.Ordinal);
+
+        var masked = (await demo.GetFromJsonAsync<NodeResponse[]>("/api/nodes"))!.Single(entry => entry.Id == node.Id);
+        var maskedPeer = (await demo.GetFromJsonAsync<ClientResponse[]>("/api/clients"))!.Single(entry => entry.Id == peer.Id);
+
+        // The shape survives - a node with a default and one labelled address still reads as one -
+        // and the stand-in agrees across the two pages.
+        Assert.NotNull(masked.EgressPlan.DefaultAddress);
+        Assert.Equal(Assert.Single(masked.EgressPlan.Labels).Label, maskedPeer.EgressLabel);
     }
 
     /// <summary>

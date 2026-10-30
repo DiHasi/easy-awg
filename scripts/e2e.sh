@@ -25,6 +25,9 @@ COMPOSE="docker compose -f compose.e2e.yaml"
 PANEL="http://127.0.0.1:18080"
 JAR="$(mktemp)"
 NODE_B_IP="172.28.0.12"
+# A second address for node-a, added to its container below. The whole point of per-peer egress is
+# a server that carries more than one, which no compose network hands out by itself.
+NODE_A_SPARE="172.28.0.111"
 TUNNEL_PORT="51820"
 METRICS_TOKEN="e2e-scrape-token"
 # A waiting step gives up after this many seconds. Probe rounds are 10s apart and a handshake is
@@ -65,6 +68,12 @@ panel_answers() { curl -sf "$PANEL/api/health" >/dev/null; }
 two_agents_converged() { [ "$(nodes_matching '.interfaceUp and .inSync')" -ge 2 ]; }
 two_nodes_probed() { [ "$(nodes_matching '.healthSource == "probes" and .probesReachable > 0')" -ge 2 ]; }
 health_is() { [ "$(node "$1" .health)" = "$2" ]; }
+node_a_reports_both_addresses() { [ "$(node node-a '.egressAddresses | length')" -ge 2 ]; }
+# The rule the probe's own traffic has to pass through once node-a has a default of its own.
+egress_default_carried_traffic() {
+    $COMPOSE exec -T node-a iptables -t nat -L AWG_EGRESS -n -v -x \
+        | awk '/10\.9\.0\.0\/24/ && $1 > 0 { found = 1 } END { exit found ? 0 : 1 }'
+}
 switch_recommended() { [ "$(api POST /api/failover/evaluate | jq -r .action)" = "recommend" ]; }
 
 # Polls a predicate until it holds. The predicate is a function name, not a string of shell, so
@@ -141,6 +150,51 @@ NODE_A_ID="$(node node-a .id)"
 NODE_B_ID="$(node node-b .id)"
 api POST "/api/nodes/$NODE_A_ID/activate" >/dev/null
 [ "$(api GET /api/dns | jq -r .activeNodeId)" = "$NODE_A_ID" ] || fail "node-a did not become active"
+
+# Per-peer egress: one node, two source addresses, and the panel deciding who leaves through
+# which. Only the node knows which addresses it carries, so the panel has nothing to offer until
+# the agent has reported them - which is why the address is added to the container first.
+say "giving node-a a second address and letting it report both"
+$COMPOSE exec -T node-a ip addr add "$NODE_A_SPARE/24" dev eth0
+wait_for "node-a to report both of its addresses" node_a_reports_both_addresses
+
+say "naming them, and sending one peer through the one that is not the default"
+CLIENT_ADDRESS="$(api GET /api/clients | jq -r --arg id "$CLIENT_ID" '.[] | select(.id == $id) | .address')"
+[ -n "$CLIENT_ADDRESS" ] || fail "could not read the client tunnel address"
+
+EGRESS_REVISION="$(api GET /api/fleet | jq .revision)"
+api PUT "/api/nodes/$NODE_A_ID/egress" \
+    -d "{\"defaultAddress\":\"$NODE_A_SPARE\",\"labels\":[{\"address\":\"172.28.0.11\",\"label\":\"home\"}]}" >/dev/null
+api PUT "/api/clients/$CLIENT_ID/egress" -d '{"label":"home"}' >/dev/null
+
+# Both halves travel in the bundle, so the node has to be told: an unchanged revision is answered
+# with a 304 and this is exactly the node it is about.
+[ "$(api GET /api/fleet | jq .revision)" -gt "$EGRESS_REVISION" ] || fail "an egress change did not move the revision"
+wait_for "node-a to apply it" two_agents_converged
+
+say "the rules a real agent installed for it"
+CHAIN="$($COMPOSE exec -T node-a iptables -t nat -S AWG_EGRESS)"
+echo "$CHAIN"
+echo "$CHAIN" | grep -q -- "-s $CLIENT_ADDRESS/32 -j SNAT --to-source 172.28.0.11" \
+    || fail "the pinned peer has no rule of its own"
+echo "$CHAIN" | grep -q -- "-s 10.9.0.0/24 -j SNAT --to-source $NODE_A_SPARE" \
+    || fail "the node default was not installed"
+# The pin has to be seen first: SNAT terminates, so a default that covers the whole subnet above it
+# would mean no peer ever reaches a rule of its own.
+[ "$(echo "$CHAIN" | grep -n -- "-s $CLIENT_ADDRESS/32" | cut -d: -f1)" \
+    -lt "$(echo "$CHAIN" | grep -n -- "-s 10.9.0.0/24" | cut -d: -f1)" ] \
+    || fail "the node default is above the per-peer rule"
+
+# And the jump has to be above the blanket MASQUERADE, for the same reason one chain up.
+POSTROUTING="$($COMPOSE exec -T node-a iptables -t nat -S POSTROUTING)"
+[ "$(echo "$POSTROUTING" | grep -n -- "-j AWG_EGRESS" | cut -d: -f1)" \
+    -lt "$(echo "$POSTROUTING" | grep -n -- "-j MASQUERADE" | cut -d: -f1)" ] \
+    || fail "the egress chain is below the MASQUERADE"
+
+# The data path, not just the rule text: the probe keeps fetching through the tunnel, and that
+# traffic is unpinned, so it is the default rule it has to pass through.
+wait_for "traffic through the tunnel to pass through the egress chain" egress_default_carried_traffic
+health_is node-a healthy || fail "node-a stopped serving traffic once it had a default egress address"
 
 # The block that reads as perfectly healthy from the inside, and the reason the traffic check
 # exists at all: the handshake completes and nothing after it does. Arranged by dropping

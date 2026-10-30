@@ -31,6 +31,12 @@ public sealed record EnrollResponse(
 /// reports null rather than a guess. Unlike the bundle this report is not signed content shared
 /// byte for byte, so an older agent simply omits the field - no fleet-wide upgrade is involved.
 /// </param>
+/// <param name="EgressAddresses">
+/// Every address the node's egress interface carries. Null means this round could not enumerate
+/// them and the panel keeps what it had; an empty array means it enumerated and found none. The
+/// two are not the same thing, and conflating them would forget a node's addresses over one
+/// failed lookup.
+/// </param>
 public sealed record NodeStatusReport(
     long AppliedRevision,
     bool InterfaceUp,
@@ -41,7 +47,31 @@ public sealed record NodeStatusReport(
     NodeMetrics? Metrics,
     string? LastError,
     int BundleSchemaVersion = 0,
-    string? PublicIp = null);
+    string? PublicIp = null,
+    ReportedEgressAddress[]? EgressAddresses = null);
+
+/// <summary>
+/// One address the node's egress interface carries, and what the outside makes of it.
+///
+/// Which addresses a node holds is a thing only the node can answer, so the panel offers an
+/// operator exactly what was reported rather than a field to type an address into: SNAT to an
+/// address the host does not hold leaves that peer with no traffic at all.
+/// </summary>
+/// <param name="KernelDefault">
+/// True for the address the kernel picks right now for outbound traffic. That is what unpinned
+/// peers leave with while the node has no default of its own, and until this field existed it was
+/// not visible anywhere - on a host with several addresses on one interface it is decided by the
+/// order they happen to sit in.
+/// </param>
+/// <param name="Observed">
+/// What an echo service answered when the request was bound to this source address, or null when
+/// the check did not run or did not answer. The difference between "this address is mine" and
+/// "this address presents as something else", which is the whole question behind pinning one.
+/// </param>
+public sealed record ReportedEgressAddress(
+    string Address,
+    bool KernelDefault = false,
+    string? Observed = null);
 
 /// <summary>
 /// Traffic counters are reported per public key. The node does not know which client a key
@@ -72,6 +102,18 @@ public sealed record NodeStatusAck(
 /// </summary>
 public static class BundleSchema
 {
+    /// <summary>
+    /// The schema at which a node became able to serve the AmneziaWG 3.x wire format - header
+    /// protection, the padding and timing ranges, random trailers.
+    ///
+    /// Deliberately not <see cref="DesiredStateBundle.CurrentSchemaVersion"/>: what a node needs
+    /// in order to carry a 3.x fleet is this version, and a later schema adds other things
+    /// entirely. Comparing against the newest one worked only while they were the same number,
+    /// and the first bump past it would have downgraded the profile of every node that was in
+    /// fact serving it perfectly well.
+    /// </summary>
+    public const int Schema3ObfuscationVersion = 2;
+
     public static int Normalize(int reported)
         => reported <= 0
             ? DesiredStateBundle.MinimumSupportedSchemaVersion

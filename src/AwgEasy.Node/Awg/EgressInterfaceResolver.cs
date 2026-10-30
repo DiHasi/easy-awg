@@ -13,17 +13,27 @@ public sealed class EgressInterfaceResolver(NodeOptions options, ILogger<EgressI
     private const string Fallback = "eth0";
     private string? _resolved;
 
+    /// <summary>
+    /// The interface the last call settled on, overrides included. Kept apart from the detection
+    /// cache, which deliberately holds only what was detected: an override that is later removed
+    /// has to be detected again rather than remembered. This is for the report that describes
+    /// which interface the node is actually using.
+    /// </summary>
+    public string? Current { get; private set; }
+
     public async Task<string> ResolveAsync(string? bundleOverride, CancellationToken cancellationToken)
     {
         // Explicit configuration always wins: env var first, then whatever the control plane set.
         var configured = options.EgressInterface ?? bundleOverride;
         if (!string.IsNullOrWhiteSpace(configured))
         {
+            Current = configured;
             return configured;
         }
 
         if (_resolved is not null)
         {
+            Current = _resolved;
             return _resolved;
         }
 
@@ -41,6 +51,7 @@ public sealed class EgressInterfaceResolver(NodeOptions options, ILogger<EgressI
             _resolved = detected;
         }
 
+        Current = _resolved;
         return _resolved;
     }
 

@@ -137,6 +137,17 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
         // have already converged read as blocked through no fault of their own.
         EnsureColumn(connection, "fleet", "identity_rotated_at", "TEXT NULL");
 
+        // Letting one node hand out several source addresses. NULL on both is the honest start:
+        // no plan means the kernel picks the source exactly as it did before this existed, and no
+        // report means the panel has not heard from that agent yet - which is not the same as a
+        // node that answered and carries nothing.
+        EnsureColumn(connection, "nodes", "egress_plan", "TEXT NULL");
+        EnsureColumn(connection, "nodes", "egress_report", "TEXT NULL");
+
+        // And NULL here is a peer that leaves through whatever its node's default is, which is
+        // every peer that existed before the column did.
+        EnsureColumn(connection, "clients", "egress_label", "TEXT NULL");
+
         // Indexed here rather than in the schema above: a clients table written before grouping
         // has no group_id while that runs, and an index on a column that does not exist yet is
         // an error that stops the panel from opening an older database at all.
@@ -289,6 +300,10 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             -- makes it stale. Zero is "never rendered", which is not stale: nothing of that
             -- peer's is in anybody's hands.
             config_generation INTEGER NOT NULL DEFAULT 0,
+            -- Which of a node's addresses this peer leaves through, by the operator's name for
+            -- it. A label and not an address: addresses belong to a node, and a peer has to keep
+            -- what it was given when failover moves it to another one.
+            egress_label   TEXT    NULL,
             created_at     TEXT    NOT NULL,
             updated_at     TEXT    NOT NULL
         );
@@ -333,7 +348,13 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             enrolled_at       TEXT    NOT NULL,
             last_up_at        TEXT    NULL,
             failover_priority INTEGER NOT NULL DEFAULT 100,
-            auto_failover     INTEGER NOT NULL DEFAULT 1
+            auto_failover     INTEGER NOT NULL DEFAULT 1,
+            -- The two halves of this node's egress, and they are different kinds of thing. The
+            -- plan is the operator's: which address is the default and what the others are
+            -- called. The report is the node's own answer to which addresses it carries, which
+            -- is the only source the plan can be built from.
+            egress_plan       TEXT    NULL,
+            egress_report     TEXT    NULL
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_nodes_agent_key ON nodes (agent_public_key);
 

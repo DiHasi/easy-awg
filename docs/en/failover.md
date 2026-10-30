@@ -9,6 +9,11 @@ nothing more than making that host resolve to a different node: same key, same s
 obfuscation profile, different server. Nothing is reissued, no node re-applies anything, and the
 fleet revision deliberately does not move.
 
+What a switch does change is which addresses are on offer. A peer sent through one of a node's
+[egress addresses](panel.md#nodes) asked for it by name, so on the new node it leaves through the
+address called by that name - and where the new node has none, through that node's default. The
+peer keeps working either way; its row in the peer list says when the name is doing nothing today.
+
 In the panel: **Nodes → Make active** on the node you want clients on. Each node shows the public
 address its own agent discovered, which is what the record is pointed at, and the card at the top
 of the page shows the record, its TTL, and whether the panel's own resolver already agrees.

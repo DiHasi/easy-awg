@@ -65,7 +65,7 @@ public static class FailoverPolicy
         IReadOnlyDictionary<string, NodeAssessment> health,
         long fleetRevision,
         long identityRevision,
-        bool requiresCurrentSchema,
+        bool requiresSchema3,
         DateTimeOffset now,
         FailoverOptions options)
     {
@@ -97,7 +97,7 @@ public static class FailoverPolicy
 
         var others = nodes.Where(node => node.Id != active.Id).ToArray();
         var candidate = others
-            .Where(node => IsEligible(node, health, requiresCurrentSchema, identityRevision))
+            .Where(node => IsEligible(node, health, requiresSchema3, identityRevision))
             // A node that has not caught up with the fleet revision does not know the newest
             // clients yet. It beats no node, but not a node that does. Only a preference, unlike
             // the identity revision above - one peer missing is not every peer failing.
@@ -117,7 +117,7 @@ public static class FailoverPolicy
             // apart from the rotation".
             const long AnyIdentity = 0;
             var behind = others.Count(node => node.AppliedRevision < identityRevision
-                && IsEligible(node, health, requiresCurrentSchema, AnyIdentity));
+                && IsEligible(node, health, requiresSchema3, AnyIdentity));
 
             return new(
                 FailoverAction.Stuck,
@@ -158,7 +158,7 @@ public static class FailoverPolicy
     public static bool IsEligible(
         NodeRecord node,
         IReadOnlyDictionary<string, NodeAssessment> health,
-        bool requiresCurrentSchema,
+        bool requiresSchema3,
         long identityRevision)
         => !node.Revoked
             && node.AutoFailover
@@ -169,9 +169,10 @@ public static class FailoverPolicy
             // keys, the old wire format. It is up, it reports healthy, and not one config issued
             // since the rotation can complete a handshake with it.
             && node.AppliedRevision >= identityRevision
-            // A node a schema behind serves the downgraded wire format, which clients on the 3.x
-            // profile cannot complete a handshake with. It looks healthy and carries nobody.
-            && (!requiresCurrentSchema || node.BundleSchemaVersion >= DesiredStateBundle.CurrentSchemaVersion);
+            // Below the schema that carries the 3.x wire format, the node is served the
+            // downgraded profile, which clients on the 3.x one cannot complete a handshake with.
+            // It looks healthy and carries nobody.
+            && (!requiresSchema3 || node.BundleSchemaVersion >= BundleSchema.Schema3ObfuscationVersion);
 
     private static string Count(int value) => value.ToString(CultureInfo.InvariantCulture);
 

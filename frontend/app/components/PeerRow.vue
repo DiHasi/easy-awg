@@ -20,11 +20,19 @@ withDefaults(defineProps<{
   carried?: boolean
   /** The drop would land immediately above this row. */
   dropBefore?: boolean
+  /**
+   * False when the node clients are being sent to right now has no address under this peer's
+   * egress name, so it is leaving through that node's default instead. The pin is still set and
+   * still means something on the other nodes - but what it is doing today is nothing, and that is
+   * the one thing about it worth a colour.
+   */
+  egressHonoured?: boolean
 }>(), {
   busy: false,
   arrangeable: false,
   carried: false,
-  dropBefore: false
+  dropBefore: false,
+  egressHonoured: true
 })
 
 const emit = defineEmits<{
@@ -80,6 +88,17 @@ const emit = defineEmits<{
             variant="subtle"
           >
             custom timings
+          </UBadge>
+          <UBadge
+            v-if="client.egressLabel"
+            size="sm"
+            :color="egressHonoured ? 'neutral' : 'warning'"
+            variant="subtle"
+            :title="egressHonoured
+              ? `Leaves through the address each node calls '${client.egressLabel}', or that node's default where it has none.`
+              : `The active node has no address called '${client.egressLabel}', so this peer is leaving through that node's default address.`"
+          >
+            via {{ client.egressLabel }}
           </UBadge>
         </p>
         <p class="font-mono text-xs text-muted">

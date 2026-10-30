@@ -30,6 +30,8 @@ function node(overrides: Partial<Node> = {}): Node {
     failoverPriority: 100,
     autoFailover: true,
     onCurrentIdentity: true,
+    egressPlan: { defaultAddress: null, labels: [] },
+    egressAddresses: [],
     ...overrides
   }
 }

@@ -22,9 +22,13 @@ public sealed record DesiredStateBundle(
 {
     /// <summary>
     /// 2 added the AmneziaWG 3.x settings: header protection, random trailers, the timing and
-    /// padding ranges, and H1-H4 as ranges rather than single values.
+    /// padding ranges, and H1-H4 as ranges rather than single values. 3 added the egress
+    /// addresses: one source address per node and one per peer that needs its own.
+    ///
+    /// What a 3.x profile requires of a node is <see cref="BundleSchema.Schema3ObfuscationVersion"/>
+    /// and not this constant - the two stopped being the same number here.
     /// </summary>
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     /// <summary>
     /// The oldest schema this build still understands. The control plane must be able to serve
@@ -49,12 +53,25 @@ public sealed record NetworkProfile(
 
 /// <summary>Node-local knobs. <see cref="EgressInterface"/> is null when the agent should detect
 /// the default-route interface itself instead of assuming eth0.</summary>
+/// <param name="DefaultEgressAddress">
+/// The source address traffic leaves this node with unless a peer names its own. Null leaves the
+/// choice to the kernel, which is what every node did before this existed - and on a host with
+/// several addresses on one interface that choice is invisible, which is the reason an operator
+/// can now state it.
+/// </param>
 public sealed record NodeSettings(
     string InterfaceName,
     string? EgressInterface,
-    int? Mtu);
+    int? Mtu,
+    string? DefaultEgressAddress = null);
 
+/// <param name="EgressAddress">
+/// The source address this one peer leaves with, overriding the node's default. An address, not a
+/// label: the panel keeps the labels and resolves them per node, so a node never has to know that
+/// two of its addresses mean anything to anybody.
+/// </param>
 public sealed record BundlePeer(
     string PublicKey,
     string PresharedKey,
-    string Address);
+    string Address,
+    string? EgressAddress = null);

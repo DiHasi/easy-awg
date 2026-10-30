@@ -103,6 +103,18 @@ public static class BundleGuard
             return false;
         }
 
+        // The form only. Whether the node holds the address is settled at apply time, against the
+        // interface itself - a rule that SNATs to an address this host does not carry leaves that
+        // peer with no traffic at all, so the agent would rather skip it than install it.
+        if (bundle.Node.DefaultEgressAddress is not null
+            && !EgressAddress.TryParse(bundle.Node.DefaultEgressAddress, out _))
+        {
+            error = new ApiError(
+                "bundle_invalid_egress_address",
+                $"Default egress address {bundle.Node.DefaultEgressAddress} is not a usable source address.");
+            return false;
+        }
+
         var seenKeys = new HashSet<string>(StringComparer.Ordinal);
         var seenAddresses = new HashSet<string>(StringComparer.Ordinal);
 
@@ -129,6 +141,14 @@ public static class BundleGuard
             if (!seenAddresses.Add(peer.Address))
             {
                 error = new ApiError("bundle_duplicate_address", $"Bundle contains duplicate peer address {peer.Address}.");
+                return false;
+            }
+
+            if (peer.EgressAddress is not null && !EgressAddress.TryParse(peer.EgressAddress, out _))
+            {
+                error = new ApiError(
+                    "bundle_invalid_egress_address",
+                    $"Egress address {peer.EgressAddress} is not a usable source address.");
                 return false;
             }
         }
