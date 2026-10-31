@@ -131,7 +131,14 @@ public sealed class DemoMask(
             ["lastError"] = DemoFieldKind.Text,
             ["syncError"] = DemoFieldKind.Text,
             // A list of resolvers, which may carry several addresses in one string.
-            ["clientDns"] = DemoFieldKind.Text
+            ["clientDns"] = DemoFieldKind.Text,
+            // And one peer's own two, which are the same kinds of string as the fleet's. Listed
+            // rather than left to the fall-through for the same reason the sentences above are:
+            // the scrub they get is the one every string gets, and naming them is documentation.
+            // A route list keeps 0.0.0.0/0 and ::/0 - see DemoPseudonyms.Address - because a demo
+            // showing a documentation range there would be showing a config that routes nothing.
+            ["allowedIps"] = DemoFieldKind.Text,
+            ["dns"] = DemoFieldKind.Text
         }.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
