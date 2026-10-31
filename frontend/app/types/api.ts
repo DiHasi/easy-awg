@@ -110,6 +110,14 @@ export type Client = {
    * one is a number, and one is somebody's decision.
    */
   disabledBy?: 'expiry' | 'quota' | null
+  /**
+   * What this peer routes into the tunnel, or null for the fleet value. Render-time only: it is
+   * written into the config and reaches no node, so changing it means handing the config over
+   * again rather than waiting for anything to converge.
+   */
+  allowedIps?: string | null
+  /** Which resolver this peer's config names, or null for the fleet value. */
+  dns?: string | null
 }
 
 /**

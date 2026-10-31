@@ -18,7 +18,10 @@ public static class ClientConfigRenderer
         builder.AppendLine("[Interface]");
         builder.AppendSetting("PrivateKey", client.PrivateKey);
         builder.AppendSetting("Address", $"{client.Address}/{network.PrefixLength.ToString(CultureInfo.InvariantCulture)}");
-        builder.AppendSetting("DNS", fleet.ClientDns);
+        // The peer's own where it has one. Render-time only, so a change here reaches nobody
+        // until this config is handed over again - which is exactly what it is for: one person
+        // who needs a split tunnel, or a resolver of their own, without the fleet moving.
+        builder.AppendSetting("DNS", client.Dns ?? fleet.ClientDns);
         // Written explicitly rather than left to the client app: its own default is sized for
         // vanilla WireGuard and does not account for what 3.x adds to every transport packet.
         builder.AppendSetting("MTU", fleet.TunnelMtu);
@@ -34,7 +37,7 @@ public static class ClientConfigRenderer
         builder.AppendLine("[Peer]");
         builder.AppendSetting("PublicKey", fleet.ServerPublicKey);
         builder.AppendSetting("PresharedKey", client.PresharedKey);
-        builder.AppendSetting("AllowedIPs", fleet.ClientAllowedIps);
+        builder.AppendSetting("AllowedIPs", client.AllowedIps ?? fleet.ClientAllowedIps);
         builder.AppendSetting("Endpoint", $"{endpointHost}:{fleet.ListenPort.ToString(CultureInfo.InvariantCulture)}");
         // 3.x accepts a range here. Keeping every client on a fixed 25s makes the fleet's
         // keepalives line up into one recognizable heartbeat, so a range is worth configuring -

@@ -149,6 +149,21 @@ const limitNote = computed(() => {
           >
             {{ limitNote.label }}
           </UBadge>
+          <!-- Not the fleet's routing. Worth a badge because it is invisible everywhere else:
+               the panel is holding a config different from the one this person imported until
+               they are handed it again. -->
+          <UBadge
+            v-if="client.allowedIps || client.dns"
+            size="sm"
+            color="neutral"
+            variant="subtle"
+            :title="[
+              client.allowedIps ? `AllowedIPs ${client.allowedIps}` : null,
+              client.dns ? `DNS ${client.dns}` : null
+            ].filter(Boolean).join(' · ')"
+          >
+            own routing
+          </UBadge>
           <UBadge
             v-if="client.egressLabel"
             size="sm"

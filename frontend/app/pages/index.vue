@@ -41,6 +41,9 @@ const egressLabel = ref('')
 
 const limitsOpen = ref(false)
 const limitsClient = ref<Client | null>(null)
+
+const routingOpen = ref(false)
+const routingClient = ref<Client | null>(null)
 const configClient = ref<Client | null>(null)
 const statsOpen = ref(false)
 const statsClient = ref<Client | null>(null)
@@ -393,6 +396,36 @@ async function saveEgress(label: string | null) {
   }
 }
 
+function openRouting(client: Client) {
+  routingClient.value = client
+  routingOpen.value = true
+}
+
+/**
+ * The one save in the panel that changes a file somebody is already holding and nothing else: no
+ * node is told and no revision moves, so the toast says the part that is left to do.
+ */
+async function saveRouting(routing: { allowedIps: string | null, dns: string | null }) {
+  const client = routingClient.value
+  if (!client) {
+    return
+  }
+
+  busyId.value = client.id
+
+  try {
+    const updated = await api.put<Client>(`/clients/${client.id}/routing`, routing)
+    clients.value = clients.value.map(item => item.id === updated.id ? updated : item)
+    routingClient.value = updated
+    routingOpen.value = false
+    succeed(`Routing saved — hand ${updated.name} its config again`)
+  } catch (error) {
+    fail('Could not save the routing', error)
+  } finally {
+    busyId.value = null
+  }
+}
+
 function openLimits(client: Client) {
   limitsClient.value = client
   limitsOpen.value = true
@@ -563,6 +596,7 @@ function menuFor(client: Client): DropdownMenuItem[][] {
         ? [{ label: 'Egress address', icon: 'i-lucide-arrow-up-right', onSelect: () => openEgress(client) }]
         : []),
       { label: 'Limits', icon: 'i-lucide-hourglass', onSelect: () => openLimits(client) },
+      { label: 'Routing', icon: 'i-lucide-route', onSelect: () => openRouting(client) },
       {
         label: client.enabled ? 'Disable' : 'Enable',
         icon: client.enabled ? 'i-lucide-pause' : 'i-lucide-play',
@@ -1059,6 +1093,13 @@ usePolling(refresh, 10000)
       v-model:open="configOpen"
       :client="configClient"
       @rendered="markHandedOut"
+    />
+
+    <PeerRoutingModal
+      v-model:open="routingOpen"
+      :client="routingClient"
+      :fleet="fleet"
+      @save="saveRouting"
     />
 
     <PeerLimitsModal

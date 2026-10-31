@@ -51,6 +51,17 @@ of them is fixed by a date and the other by a number. Enabling such a peer by ha
 rather than undone by the next sweep a minute later. A peer **you** disabled carries no reason, and
 a monthly allowance renewing never puts it back - that was your decision, not a limit.
 
+**Routing** on the same menu is `AllowedIPs` and `DNS` for one peer: a split tunnel for somebody
+who only wants the office through it, or a resolver of their own. A blank field means the fleet
+value, never an empty setting - a config with no `AllowedIPs` comes up and routes nothing. Both are
+written into the config and nowhere else, which is why they can be per peer at all: a client's
+`AllowedIPs` is what that device sends through the tunnel, while the node's `AllowedIPs` for the
+same peer is that peer's tunnel address, and the two only share a name. So no node is told, no
+tunnel drops and no revision moves - and the config already installed keeps the routes it was
+imported with until that person is handed it again. The panel cannot know whether they have been,
+so it does not claim to: the generation mark on the list is about the fleet identity, which is a
+different question.
+
 **Groups** live in the same list. One person usually holds several configs, so peers can be filed
 into groups: a group is a person, the peers in it are their devices. Drag a peer by its handle to
 move it between groups or to reorder it, drag a group header to reorder the groups, or use *Move

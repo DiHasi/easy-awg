@@ -40,7 +40,7 @@ docs/                    Operator documentation, en/ and ru/ in step. README.md 
 
 ```bash
 dotnet build Awg-easy.sln          # whole solution
-dotnet test Awg-easy.sln           # 466 tests, all must pass
+dotnet test Awg-easy.sln           # 553 tests, all must pass
 cd frontend && pnpm run lint       # eslint
 cd frontend && pnpm run typecheck  # nuxt typecheck - catches real API/UI type drift
 cd frontend && pnpm run test       # vitest, in a Nuxt environment
@@ -572,6 +572,80 @@ byte for byte, so adding an optional field there needs no synchronized fleet upg
 agent omits it and reads as null. The bundle rules above still apply to anything inside
 `DesiredStateBundle`.
 
+**The password that opens the panel can be changed from the panel, and the attempts against it are
+counted.** `AWG_ADMIN_USER`/`AWG_ADMIN_PASSWORD` create an account on an empty database and are
+ignored afterwards, so without `AdminAccountApi` rotating the panel's own password means editing
+SQLite on the host - which is where this started. Three rules are load-bearing. Changing your own
+password requires the current one, because a session cookie is not proof of knowing it and taking
+the account over is what a stolen cookie must not be able to do. The account behind a cookie is
+checked per request (`OnValidatePrincipal`), so removing an operator ends the session they already
+had rather than leaving it live for twelve hours - and a deleted row no longer reads as the demo
+account. And you cannot remove the account you are signed in with, which is the single rule that
+also guarantees the panel never ends up with no operator: removing somebody else proves there are
+two of you, and the demo account cannot remove anybody. `LoginThrottle` is the brake - ten failures
+per account and thirty per source address in fifteen minutes - and it refuses *before* the hash,
+because PBKDF2 at 600k iterations is a few hundred milliseconds of CPU and unlimited guessing would
+otherwise pin every core the panel has. It lives in memory on purpose: a lockout that survived a
+restart would be a way to shut an operator out for good. A refused attempt is not counted, or an
+attacker could hold the window open forever.
+
+**These endpoints are not under `/api/auth`, and that is not tidiness.** Both guards wave the auth
+group through whatever the method, because signing in and out has to work for a demo session and on
+a standby. A write placed there would be one the read-only account could make and one a standby
+would apply to a database its next snapshot overwrites.
+
+**An export of the panel is the snapshot a standby replicates, not a second definition of it.**
+`FleetBackupService` builds `GET /api/fleet/export` from `PanelSnapshotRepository.BuildSnapshot` and
+applies `POST /api/fleet/restore` through `ApplySnapshot`, because "what the fleet runs on" is a
+line this panel already draws in one place and drawing it twice is how two answers come apart. So
+the identity, the peers with their keys, the arrangement, each node's own settings, the probes, the
+operators, the live tokens and the counter baselines travel; the evidence - the agents' reports,
+both histories, the event log - does not, and a restored panel is in the state any panel is in when
+it first comes up. A restore is wholesale, refused on a panel that already has peers until the
+replacement is confirmed, refused for an export with nothing in it (the same reasoning as
+`panel_never_synced`), and it takes charge at a term above the one in the file, so a panel the
+export was taken from steps down on its next hello. It pins its own signing key for the same reason
+a panel that created its fleet does, or stepping down would be a one-way door.
+
+**The export is the one GET the demo guard refuses instead of masking.** Everything else a demo
+session reads is a description of the fleet, and the mask is built from the panel's own tables so a
+field nobody thought about still comes out masked. A key pair is not a name: there is nothing to map
+it to and nothing to recognize it by, so a masked export would be the real fleet private key with
+the names changed - the whole of what matters leaking through the one response that looked like a
+read. `DemoGuard` names that path, as it names `/api/metrics`, and for the same kind of reason.
+
+**A peer's allowance is counted where the evidence is, and kept on the peer.** `UsageAccounting`
+credits `clients.quota_used_bytes` inside `NodeRepository.ReplacePeerStats`' transaction, beside the
+hourly row and from the same difference. Not read back out of `client_usage`, because those rows are
+pruned: a quota that forgot what somebody had moved once its history aged out would hand the
+allowance back every retention window. For the same reason it accrues even when
+`AWG_USAGE_RETENTION_DAYS` is `0` - that setting is a decision about holding a record of what people
+did, and it has nothing to say about whose allowance should start again - and a manual counter reset
+does not touch it either, for the same reason it does not touch the traffic history.
+
+**Reaching a limit is a disable, and reading one is `PeerLimitPolicy`.** The policy is pure and has
+three readers that must agree: `PeerLimitService`'s sweep, the refusal an operator meets when they
+enable a peer that is still past its limit, and the words the peer list draws. Enabling such a peer
+is *refused* rather than undone by the next sweep - the loop would be the honest implementation and
+it would leave an operator watching a config come back and die with nothing to say which limit did
+it. Setting a limit bumps no revision and reaches no node; the peer disappearing from the bundle
+when one is reached is an ordinary disable, which does. The sweep runs on its own clock, once a
+minute, so a peer can carry traffic for up to a minute past its allowance: a quota is a billing
+instrument and the nodes enforce nothing, which is the same order of imprecision as the twenty
+seconds between their reports. Only the panel in charge sweeps. `disabled_by` is what separates the
+panel's own disable from an operator's, which is what lets a monthly renewal put back exactly the
+peers the quota took out and nobody else's decision.
+
+**Per-client `AllowedIPs` and DNS are render-time only, and that is why they can exist per peer.**
+A client's `AllowedIPs` is what that device sends through the tunnel; the node's `AllowedIPs` for the
+same peer is that peer's tunnel address, and the two only share a name. So `ClientRouting` is read
+by `ClientConfigRenderer` and nowhere else: no node is told, no bundle changes, no revision moves.
+What it does change is the bytes of a config somebody is already holding, so the operator has to
+hand it over again - and the panel does not pretend to know whether they have. `config_generation`
+is a claim about the fleet identity and is deliberately not reused for this. A blank field means the
+fleet value and never an empty setting: `AllowedIPs =` with nothing after it is a tunnel that comes
+up and routes nothing.
+
 **Bump the fleet revision for anything that changes what a node runs.** Client create/delete/
 enable/disable and obfuscation changes bump it. Renaming a client deliberately does not — it
 changes no peer material.
@@ -791,6 +865,24 @@ never assert on a specific allocated address — assert on what the API returned
   connections: conntrack keeps the translation of the ones already established. Flushing it per
   peer would make a change immediate at the cost of dropping that person's live connections, and
   `conntrack` is not in the node image.
+- A peer's allowance is counted from what the nodes report, so it is as exact as they are: a node
+  that has gone silent is a peer still carrying traffic against an allowance nobody is crediting,
+  and it catches up in one report when the node comes back. Nothing enforces a quota on the node
+  itself, by design - the bundle carries no notion of one - so a peer is switched off up to a
+  minute after its allowance is gone.
+- Changing a peer's own `AllowedIPs` or DNS leaves the panel holding a config different from the one
+  that person imported, and nothing tracks whether they have been handed the new one.
+  `config_generation` is a claim about the fleet identity, so it is deliberately not reused for
+  this; what the operator has is the badge on the row saying the peer has routing of its own.
+- A panel export is plaintext JSON carrying the fleet private key and every client's. There is no
+  passphrase on purpose: it would make the one irrecoverable thing in the deployment recoverable
+  only while somebody still remembers a second secret. The file has to be kept where the panel's
+  own disk would be.
+- `LoginThrottle` counts per account and per source address, and the address half is weak by
+  construction: forwarded headers are honoured for everybody, as they must be behind a TLS
+  terminator, so an attacker can rotate that key freely. The account counter is the brake that
+  holds, and it can be used to keep an operator waiting fifteen minutes if somebody knows their
+  username.
 - Who is on a node is read from handshakes, so it cannot distinguish a device that has gone from
   one that is asleep: the idle count is a ceiling on who a shutdown would break. It is also only
   as fresh as that node's last status report, and a node that has gone silent therefore reads zero

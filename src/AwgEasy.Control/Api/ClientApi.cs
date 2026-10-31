@@ -187,6 +187,48 @@ public static class ClientApi
             return Results.Ok(ClientResponse.From(clients.Find(id)!, fleet.Current.Generation));
         });
 
+        // What this peer routes into the tunnel, and which resolver its config names. The one
+        // change in the panel that alters a config without altering anything else: no node is
+        // told, no bundle changes, no revision moves - and the file the person is already holding
+        // is now out of date, which is the part an operator has to act on. The panel cannot know
+        // whether they have, so it does not pretend to: the stale mark on the peer list is about
+        // the fleet identity, which is a different claim.
+        admin.MapPut("/clients/{id}/routing", (
+            string id,
+            UpdateClientRoutingRequest request,
+            ClientRepository clients,
+            FleetService fleet,
+            EventLog events,
+            HttpContext context) =>
+        {
+            if (!ClientRouting.TryReadAllowedIps(request.AllowedIps, out var allowedIps, out var routeError))
+            {
+                return Results.BadRequest(routeError);
+            }
+
+            if (!ClientRouting.TryReadDns(request.Dns, out var dns, out var dnsError))
+            {
+                return Results.BadRequest(dnsError);
+            }
+
+            if (clients.Find(id) is not { } existing)
+            {
+                return Results.NotFound(new ApiError("client_not_found", "Client was not found."));
+            }
+
+            if (!clients.SetRouting(id, allowedIps, dns, DateTimeOffset.UtcNow))
+            {
+                return Results.NotFound(new ApiError("client_not_found", "Client was not found."));
+            }
+
+            events.Record(
+                "client.routing_changed",
+                $"Client {existing.Name}: {ClientRouting.DescribeChange(allowedIps, dns)}. Hand the config over again.",
+                actor: context.User.Identity?.Name);
+
+            return Results.Ok(ClientResponse.From(clients.Find(id)!, fleet.Current.Generation));
+        });
+
         // The sweep the background loop runs, run now. The same method rather than a second one
         // shaped like it, for the reason POST /failover/evaluate exists: an operator who has just
         // set an expiry in the past should be able to see what it does without waiting out a

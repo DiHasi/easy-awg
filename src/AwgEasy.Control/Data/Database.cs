@@ -148,6 +148,12 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
         // every peer that existed before the column did.
         EnsureColumn(connection, "clients", "egress_label", "TEXT NULL");
 
+        // What one peer routes into the tunnel and which resolver it uses, where the fleet's own
+        // values do not suit it. NULL means the fleet value applies - never an empty string, which
+        // in a config is a tunnel that comes up and routes nothing.
+        EnsureColumn(connection, "clients", "allowed_ips", "TEXT NULL");
+        EnsureColumn(connection, "clients", "dns", "TEXT NULL");
+
         // When a peer stops working on its own, and how much it may move before it does. NULL on
         // both means no limit, which is every peer that existed before these columns - a config
         // that used to last forever must not acquire an expiry because the panel was upgraded.

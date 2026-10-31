@@ -43,6 +43,12 @@ public sealed record FleetRecord(
 /// <param name="EgressLabel">Which of a node's addresses this peer leaves through, by the
 /// operator's name for it, or null to leave through that node's default. A label rather than an
 /// address, so it still means something after failover has moved traffic to another node.</param>
+/// <param name="AllowedIps">
+/// What this peer routes into the tunnel, or null to use the fleet value. Render-time only: a
+/// client's AllowedIPs is what that device sends through the tunnel, while the node's AllowedIPs
+/// for the same peer is that peer's tunnel address - different settings that share a name.
+/// </param>
+/// <param name="Dns">Which resolver this peer's config names, or null for the fleet value.</param>
 /// <param name="Limits">
 /// When this config stops working on its own and how much it may carry before it does, or null
 /// for a peer with no limits - which is every peer until somebody sets one. The panel's own
@@ -63,7 +69,9 @@ public sealed record ClientRecord(
     string? GroupId = null,
     int ConfigGeneration = 0,
     string? EgressLabel = null,
-    PeerLimits? Limits = null);
+    PeerLimits? Limits = null,
+    string? AllowedIps = null,
+    string? Dns = null);
 
 /// <summary>One person, holding however many devices. Nothing a node ever sees.</summary>
 public sealed record ClientGroupRecord(

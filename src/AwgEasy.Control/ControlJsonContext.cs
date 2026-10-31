@@ -11,6 +11,7 @@ namespace AwgEasy.Control;
 [JsonSerializable(typeof(UpdateClientRequest))]
 [JsonSerializable(typeof(UpdateClientEgressRequest))]
 [JsonSerializable(typeof(UpdateClientLimitsRequest))]
+[JsonSerializable(typeof(UpdateClientRoutingRequest))]
 [JsonSerializable(typeof(PeerLimitSweep))]
 [JsonSerializable(typeof(ClientGroupResponse))]
 [JsonSerializable(typeof(ClientGroupResponse[]))]

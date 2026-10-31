@@ -45,7 +45,9 @@ public sealed record ClientResponse(
     long QuotaUsedBytes,
     long? QuotaRemaining,
     DateTimeOffset? QuotaStartedAt,
-    string? DisabledBy)
+    string? DisabledBy,
+    string? AllowedIps,
+    string? Dns)
 {
     public static ClientResponse From(ClientRecord client, int fleetGeneration)
     {
@@ -63,7 +65,9 @@ public sealed record ClientResponse(
             limits.QuotaUsedBytes,
             limits.QuotaRemaining,
             limits.QuotaStartedAt,
-            limits.DisabledBy);
+            limits.DisabledBy,
+            client.AllowedIps,
+            client.Dns);
     }
 }
 
@@ -80,6 +84,16 @@ public sealed record UpdateClientLimitsRequest(
     DateTimeOffset? ExpiresAt,
     long? QuotaBytes,
     string? QuotaWindow);
+
+/// <summary>
+/// What one peer routes into the tunnel and which resolver its config names. Null or blank on
+/// either means the fleet value applies.
+///
+/// Its own request rather than fields on <see cref="UpdateClientRequest"/> for the same reason the
+/// egress label has one: that request renames and nothing else, so folding these in would mean the
+/// rename dialog, which sends a name alone, put every peer it renamed back on the fleet defaults.
+/// </summary>
+public sealed record UpdateClientRoutingRequest(string? AllowedIps, string? Dns);
 
 /// <param name="GroupId">Files the new config under a person right away, so a device added from
 /// that person's own section does not have to be dragged there afterwards.</param>

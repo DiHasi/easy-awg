@@ -8,13 +8,13 @@ public sealed class ClientRepository(Database database)
 {
     private const string Columns = "id, name, address, private_key, public_key, preshared_key, enabled, obfuscation_json, "
         + "group_id, config_generation, egress_label, expires_at, quota_bytes, quota_window, quota_started_at, "
-        + "quota_used_bytes, disabled_by, created_at, updated_at";
+        + "quota_used_bytes, disabled_by, allowed_ips, dns, created_at, updated_at";
 
     /// <summary>The same columns for the one query that has to join the groups to sort by them.</summary>
     private const string QualifiedColumns = "c.id, c.name, c.address, c.private_key, c.public_key, c.preshared_key, "
         + "c.enabled, c.obfuscation_json, c.group_id, c.config_generation, c.egress_label, c.expires_at, "
         + "c.quota_bytes, c.quota_window, c.quota_started_at, c.quota_used_bytes, c.disabled_by, "
-        + "c.created_at, c.updated_at";
+        + "c.allowed_ips, c.dns, c.created_at, c.updated_at";
 
     /// <summary>
     /// The people the fleet serves, in exactly the order the panel draws them: the groups in the
@@ -130,9 +130,9 @@ public sealed class ClientRepository(Database database)
         using var command = connection.Sql(
             """
             INSERT INTO clients (id, name, address, private_key, public_key, preshared_key, enabled, obfuscation_json, created_at, updated_at, kind, group_id, config_generation, egress_label,
-                                 expires_at, quota_bytes, quota_window, quota_started_at, sort_order)
+                                 expires_at, quota_bytes, quota_window, quota_started_at, allowed_ips, dns, sort_order)
             VALUES ($id, $name, $address, $privateKey, $publicKey, $presharedKey, $enabled, $obfuscation, $createdAt, $updatedAt, $kind, $groupId, $configGeneration, $egressLabel,
-                    $expiresAt, $quotaBytes, $quotaWindow, $quotaStartedAt,
+                    $expiresAt, $quotaBytes, $quotaWindow, $quotaStartedAt, $allowedIps, $dns,
                     (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM clients WHERE group_id IS $groupId))
             """,
             ("$kind", kind),
@@ -140,6 +140,8 @@ public sealed class ClientRepository(Database database)
             ("$quotaBytes", limits.QuotaBytes),
             ("$quotaWindow", limits.QuotaWindow),
             ("$quotaStartedAt", limits.QuotaStartedAt.ToStorage()),
+            ("$allowedIps", client.AllowedIps),
+            ("$dns", client.Dns),
             ("$egressLabel", client.EgressLabel),
             ("$configGeneration", client.ConfigGeneration),
             ("$groupId", client.GroupId),
@@ -239,6 +241,23 @@ public sealed class ClientRepository(Database database)
 
         return Convert.ToInt32(command.ExecuteScalar());
     }
+
+    /// <summary>
+    /// What this peer routes and which resolver it names. Null on either means the fleet value.
+    ///
+    /// No revision bump at the call site, and this one is not even bookkeeping the panel keeps for
+    /// itself: it is read when a config is rendered and nowhere else. No node is told, no bundle
+    /// changes - but the file the person is holding is now out of date, which is the one thing
+    /// about it the operator has to act on.
+    /// </summary>
+    /// <returns>False when there is no such peer.</returns>
+    public bool SetRouting(string id, string? allowedIps, string? dns, DateTimeOffset now)
+        => Execute(
+            "UPDATE clients SET allowed_ips = $allowedIps, dns = $dns, updated_at = $now WHERE id = $id AND kind = 'user'",
+            ("$id", id),
+            ("$allowedIps", allowedIps),
+            ("$dns", dns),
+            ("$now", now.ToStorage()));
 
     /// <summary>
     /// What this peer is allowed. Deliberately no revision bump at the call site: a quota reaches
@@ -419,7 +438,9 @@ public sealed class ClientRepository(Database database)
                 reader.GetStringOrNull("group_id"),
                 reader.GetInt32("config_generation"),
                 reader.GetStringOrNull("egress_label"),
-                ReadLimits(reader)));
+                ReadLimits(reader),
+                reader.GetStringOrNull("allowed_ips"),
+                reader.GetStringOrNull("dns")));
         }
 
         return clients;

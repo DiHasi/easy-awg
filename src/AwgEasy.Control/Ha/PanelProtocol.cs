@@ -204,7 +204,12 @@ public sealed record PanelClientRow(
     string QuotaWindow = PeerQuotaWindows.Total,
     DateTimeOffset? QuotaStartedAt = null,
     long QuotaUsedBytes = 0,
-    string? DisabledBy = null);
+    string? DisabledBy = null,
+    // Render-time overrides. They reach no node either, but they are part of the config this
+    // panel would hand out, so a promoted standby that had lost them would hand somebody a
+    // different config than the one they are running.
+    string? AllowedIps = null,
+    string? Dns = null);
 
 public sealed record PanelGroupRow(
     string Id,
