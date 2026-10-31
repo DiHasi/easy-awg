@@ -16,6 +16,13 @@
 - Node revocation is a flag checked on every request, so it takes effect immediately. There is no
   revocation list to distribute.
 - Enrollment and share tokens are stored only as hashes.
+- **Sign-in attempts are counted,** per account and per source address. Ten wrong passwords for one
+  account within fifteen minutes and the panel stops verifying them at all, with a `429` and the
+  wait; thirty from one address does the same across every account. See
+  [Operator accounts](#operator-accounts).
+- **An operator password is at least 12 characters** wherever one is chosen in the panel. It is
+  what stands between the open internet and the fleet private key, and there is no second factor
+  and no account recovery.
 - The **demo account** is the one account that reads the fleet without being trusted with it: every
   write is refused, and every name, address and key is replaced before it leaves the panel. What it
   still reveals is the shape of the fleet - how many peers, how many nodes, where the blocks are -
@@ -31,6 +38,34 @@
 
 Assume that a hosting provider can read a node's disk. Treat any seized node as a compromise of
 the whole fleet, since every node carries the shared identity. When that happens, rotate.
+
+## Operator accounts
+
+**Settings → Operators** is who can sign in. `AWG_ADMIN_USER` and `AWG_ADMIN_PASSWORD` create the
+first account on an empty database and are ignored from then on, so this is the only way to change
+that password afterwards - before it existed, rotating the panel's own password meant editing
+SQLite on the host by hand.
+
+- **Changing your own password requires the current one.** A session cookie is not proof of
+  knowing it, and taking the account over is exactly what a stolen cookie must not be able to do.
+- **Another operator can reset a password without it,** which is the reason to create a second
+  account before you need one: somebody who has lost their password has nothing left to present.
+- **No password change signs anybody out.** The cookie carries a name, not anything derived from
+  the password, so every session that was open stays open - the one you changed it from included.
+  A changed password stops a new sign-in; a cookie already stolen keeps working until it expires,
+  which is worth knowing when the reason you are changing it is a compromise.
+- **Removing an account ends the session it already had,** on its very next request. The account
+  it was signed in with is checked per request rather than trusted from the cookie.
+- **You cannot remove the account you are signed in with.** That one rule is also what keeps the
+  panel from ever having no operator at all: removing somebody else means there are at least two
+  of you, and the demo account cannot remove anybody. A panel with no operator could not be
+  repaired from the panel.
+- Accounts replicate to [a standby](panel-pair.md) with the rest of the fleet, password hash and
+  read-only flag included: a promoted standby nobody could sign in to would be no use.
+
+The read-only [demo account](demo.md) stays an `AWG_DEMO_USER` decision and is not something this
+page creates. A password published next to a public link belongs with the deployment rather than
+behind a button, and the account is never counted as an operator.
 
 ## Rotating the fleet identity
 

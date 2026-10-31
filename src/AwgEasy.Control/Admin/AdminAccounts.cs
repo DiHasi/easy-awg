@@ -1,11 +1,12 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using AwgEasy.Contracts;
 
 namespace AwgEasy.Control;
 
 /// <summary>An account that can sign in to the panel.</summary>
-public sealed record AdminAccount(string Username, bool IsDemo);
+public sealed record AdminAccount(string Username, bool IsDemo, DateTimeOffset CreatedAt);
 
 /// <summary>
 /// Admin credentials.
@@ -19,6 +20,33 @@ public sealed class AdminAccounts(Database database, EventLog events, ILogger<Ad
     private const int Iterations = 600_000;
     private const int SaltBytes = 16;
     private const int HashBytes = 32;
+
+    /// <summary>
+    /// The shortest password the panel will accept through the API.
+    ///
+    /// Longer than a login form usually asks for, because what is behind it is not an account but
+    /// a fleet: the database this guards holds the server private key, every peer's preshared key
+    /// and every client's own key pair, and there is no second factor and no account recovery.
+    /// <see cref="LoginThrottle"/> caps how fast guesses arrive; this is what makes the space they
+    /// are guessing in worth the wait.
+    ///
+    /// Checked where a password is chosen, not where one is used: an existing account below it
+    /// still signs in, because refusing would lock out the operator this is meant to protect.
+    /// </summary>
+    public const int MinimumPasswordLength = 12;
+
+    /// <summary>
+    /// Whether a chosen password may be stored, as an <see cref="ApiError"/> or null. One method
+    /// so every way in says the same thing - creating an account, changing your own password and
+    /// resetting somebody else's are three endpoints and one rule.
+    /// </summary>
+    public static ApiError? ValidatePassword(string? password)
+        => password is null || password.Length < MinimumPasswordLength
+            ? new ApiError(
+                "password_too_short",
+                $"A password must be at least {MinimumPasswordLength} characters. This one unlocks the fleet's private "
+                + "key, and the panel has no second factor to fall back on.")
+            : null;
 
     /// <summary>
     /// Whether anybody can actually administer this panel.
@@ -50,7 +78,7 @@ public sealed class AdminAccounts(Database database, EventLog events, ILogger<Ad
     /// as an operator does and is refused every write, with every name and address it is served
     /// replaced on the way out.
     /// </summary>
-    public void Create(string username, string password, bool demo = false)
+    public void Create(string username, string password, bool demo = false, string? actor = null)
     {
         using var connection = database.Open();
         using var command = connection.Sql(
@@ -65,9 +93,66 @@ public sealed class AdminAccounts(Database database, EventLog events, ILogger<Ad
             demo ? "admin.demo_created" : "admin.created",
             demo
                 ? $"Read-only demo account '{username}' created."
-                : $"Admin account '{username}' created.");
+                : $"Admin account '{username}' created.",
+            actor: actor);
 
         logger.LogInformation("Created {Kind} account {Username}.", demo ? "demo" : "admin", username);
+    }
+
+    /// <summary>
+    /// Replaces an account's password with a fresh salt and hash.
+    ///
+    /// Nothing else about the row changes, and no session is torn down: the cookie carries a name
+    /// rather than anything derived from the password, so a sign-in that was already open stays
+    /// open. That is the honest consequence of a session cookie and worth stating rather than
+    /// hiding, because it is what an operator rotating a password after a compromise needs to
+    /// know - the password stops a new sign-in, and a stolen cookie keeps working until it expires.
+    /// </summary>
+    /// <returns>False when there is no such account.</returns>
+    public bool ChangePassword(string username, string password, string? actor = null)
+    {
+        using var connection = database.Open();
+        using var command = connection.Sql(
+            "UPDATE admins SET password_hash = $hash WHERE username = $username COLLATE NOCASE",
+            ("$hash", HashPassword(password)),
+            ("$username", username));
+
+        if (command.ExecuteNonQuery() == 0)
+        {
+            return false;
+        }
+
+        events.Record(
+            "admin.password_changed",
+            string.Equals(username, actor, StringComparison.OrdinalIgnoreCase)
+                ? $"Admin '{username}' changed their own password."
+                : $"Password for admin '{username}' was reset.",
+            actor: actor);
+
+        logger.LogInformation("Password changed for account {Username}.", username);
+        return true;
+    }
+
+    /// <summary>
+    /// Removes an account. The caller is the one that refuses to remove the last operator and the
+    /// signed-in one: both of those are decisions about who is asking, which this does not know.
+    /// </summary>
+    /// <returns>False when there is no such account.</returns>
+    public bool Delete(string username, string? actor = null)
+    {
+        using var connection = database.Open();
+        using var command = connection.Sql(
+            "DELETE FROM admins WHERE username = $username COLLATE NOCASE",
+            ("$username", username));
+
+        if (command.ExecuteNonQuery() == 0)
+        {
+            return false;
+        }
+
+        events.Record("admin.deleted", $"Admin account '{username}' deleted.", actor: actor);
+        logger.LogInformation("Deleted account {Username}.", username);
+        return true;
     }
 
     /// <summary>
@@ -102,13 +187,16 @@ public sealed class AdminAccounts(Database database, EventLog events, ILogger<Ad
     public IReadOnlyList<AdminAccount> List()
     {
         using var connection = database.Open();
-        using var command = connection.Sql("SELECT username, is_demo FROM admins ORDER BY id");
+        using var command = connection.Sql("SELECT username, is_demo, created_at FROM admins ORDER BY id");
 
         using var reader = command.ExecuteReader();
         var accounts = new List<AdminAccount>();
         while (reader.Read())
         {
-            accounts.Add(new AdminAccount(reader.GetString("username"), reader.GetBoolean("is_demo")));
+            accounts.Add(new AdminAccount(
+                reader.GetString("username"),
+                reader.GetBoolean("is_demo"),
+                reader.GetTimestamp("created_at")));
         }
 
         return accounts;

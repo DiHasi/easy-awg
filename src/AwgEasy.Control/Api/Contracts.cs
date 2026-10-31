@@ -354,6 +354,28 @@ public sealed record EnrollmentTokenResponse(string Token, string NodeName, Date
 
 public sealed record LoginRequest(string Username, string Password);
 
+/// <summary>
+/// An account that can sign in.
+/// </summary>
+/// <param name="Demo">The read-only account, which is not an operator: it is never counted when
+/// the panel refuses to remove the last one.</param>
+/// <param name="Self">The account this session is signed in with. Carried by the panel rather
+/// than compared in the page, for the same reason <see cref="NodeResponse.InSync"/> is: the names
+/// are matched case-insensitively, and a page doing that itself would get it wrong eventually.</param>
+public sealed record AdminResponse(string Username, bool Demo, bool Self, DateTimeOffset CreatedAt);
+
+public sealed record CreateAdminRequest(string Username, string Password);
+
+/// <summary>
+/// Your own password. The current one is required because the session cookie is not proof of
+/// knowing it, and taking over the account is exactly what a stolen cookie must not be able to do.
+/// </summary>
+public sealed record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+
+/// <summary>Somebody else's password, which they no longer have to be able to present - that is
+/// what a second operator is for.</summary>
+public sealed record ResetPasswordRequest(string Password);
+
 public sealed record EventResponse(long Id, DateTimeOffset At, string Kind, string? Actor, string? NodeId, string Message);
 
 /// <param name="ReceivedBytes">Bytes this peer sent into the tunnel, net of any counter reset.</param>

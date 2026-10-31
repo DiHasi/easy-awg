@@ -99,6 +99,12 @@ and *Rotate identity* for a node you have to assume was read. It says how many p
 holding a config from an older generation, which after a rotation is the list of people yet to be
 found.
 
+**Operators** on the same page is who can sign in. Change your own password - the current one is
+required - add a second operator, reset somebody else's password, or remove an account, which ends
+the session it already had. The account you are signed in with cannot be removed, and that is also
+what stops the panel from ending up with no operator at all. The rules, and what a password change
+does not do, are under [operator accounts](security.md#operator-accounts).
+
 ## Log
 
 An audit trail of who changed what and which nodes fetched configuration. It is each panel's own

@@ -1,4 +1,5 @@
 using AwgEasy.Control;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.HttpOverrides;
 
@@ -44,6 +45,27 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             return Task.CompletedTask;
         };
+
+        // An account that has been removed stops being signed in, on its very next request.
+        // Without this the cookie carries a name nothing checks, so a session open when the row
+        // went would keep working for the twelve hours it has left - and removing an operator
+        // whose access is the reason you are removing them has to mean something now rather than
+        // tonight. It is also what makes a deleted row's session go away rather than quietly read
+        // as the demo one, which is what AdminAccounts.IsDemo answers for a name it cannot find.
+        // One indexed read of a table with a handful of rows, which the demo guard already pays
+        // for on every cookie-authenticated request.
+        cookie.Events.OnValidatePrincipal = async context =>
+        {
+            var username = context.Principal?.Identity?.Name;
+            if (username is not null
+                && context.HttpContext.RequestServices.GetRequiredService<AdminAccounts>().Exists(username))
+            {
+                return;
+            }
+
+            context.RejectPrincipal();
+            await context.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+        };
     });
 
 builder.Services.AddAuthorization();
@@ -61,6 +83,10 @@ builder.Services.AddSingleton<IAwgKeyGenerator, AwgToolKeyGenerator>();
 builder.Services.AddSingleton<FleetService>();
 builder.Services.AddSingleton<FleetRotationService>();
 builder.Services.AddSingleton<AdminAccounts>();
+// How many wrong passwords the sign-in endpoint will look at. In memory, so a singleton is the
+// whole of it: the counters are this process's, which is what keeps a lockout from outliving a
+// restart and becoming a way to shut an operator out of their own panel.
+builder.Services.AddSingleton<LoginThrottle>();
 // The read-only demo account. Both singletons: the pseudonym key is drawn once per process, which
 // is what keeps one peer reading as one person for as long as the panel is up, and the mask caches
 // what it builds from the tables.
@@ -198,6 +224,19 @@ static void Bootstrap(WebApplication app)
     {
         if (!string.IsNullOrWhiteSpace(options.BootstrapAdminUser) && !string.IsNullOrWhiteSpace(options.BootstrapAdminPassword))
         {
+            // Warned about rather than refused, unlike the same password chosen through the API.
+            // A container that will not start because a password is short locks the operator out
+            // of the panel entirely, which is worse than the weak password - and the panel now has
+            // a way to change it from inside.
+            if (AdminAccounts.ValidatePassword(options.BootstrapAdminPassword) is not null)
+            {
+                logger.LogWarning(
+                    "AWG_ADMIN_PASSWORD is shorter than {Minimum} characters. The account has been created with it, but "
+                    + "this password is what stands between the open internet and the fleet private key: change it from "
+                    + "Settings → Operators.",
+                    AdminAccounts.MinimumPasswordLength);
+            }
+
             accounts.Create(options.BootstrapAdminUser, options.BootstrapAdminPassword);
         }
         else

@@ -520,6 +520,18 @@ export type AuditEvent = {
   message: string
 }
 
+/**
+ * An account that can sign in to the panel. `demo` is the read-only one, which is not an operator:
+ * the panel never counts it when it refuses to remove the last account that can administer the
+ * fleet. `self` is decided by the panel, not here - the names are matched case-insensitively.
+ */
+export type Admin = {
+  username: string
+  demo: boolean
+  self: boolean
+  createdAt: string
+}
+
 export type GeneratedKey = {
   key: string
 }

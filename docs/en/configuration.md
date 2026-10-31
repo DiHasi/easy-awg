@@ -11,7 +11,7 @@
 | `AWG_SUBNET` | Tunnel subnet; addresses are allocated fleet-wide from it. Default `10.8.0.0/24`. |
 | `AWG_CLIENT_ALLOWED_IPS` | `AllowedIPs` written into client configs. Default `0.0.0.0/0, ::/0`. |
 | `AWG_CLIENT_DNS` | DNS servers written into client configs. |
-| `AWG_ADMIN_USER`, `AWG_ADMIN_PASSWORD` | Creates the first admin on an empty database. |
+| `AWG_ADMIN_USER`, `AWG_ADMIN_PASSWORD` | Creates the first admin on an empty database, and is ignored afterwards. Change the password and add further operators from **Settings → Operators**. |
 | `AWG_DEMO_USER`, `AWG_DEMO_PASSWORD` | Creates the [read-only demo account](demo.md) on the panel in charge. It sees the real fleet with every name, address and key replaced, and is refused every write. Unset leaves it off. |
 | `AWG_CONTROL_DB` | SQLite file. Default `/etc/awg-control/control.db`. |
 | `AWG_BUNDLE_LIFETIME_MINUTES` | How long a signed bundle stays valid. Default 15. |

@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import type { Fleet, FleetRotation, GeneratedKey, ImportResult, ServerObfuscationProfile } from '~/types/api'
+import type { Admin, Fleet, FleetRotation, GeneratedKey, ImportResult, ServerObfuscationProfile } from '~/types/api'
 
 definePageMeta({ middleware: 'auth' })
 
 const api = useControlApi()
 const toast = useToast()
+const confirm = useConfirm()
 const { fleet, refresh } = useFleetState()
 
 const loading = ref(true)
@@ -23,6 +24,130 @@ const rotateOpen = ref(false)
 const rotating = ref(false)
 const reissueClientKeys = ref(false)
 const rotation = ref<FleetRotation | null>(null)
+
+/**
+ * Who can sign in. Loaded alongside the fleet rather than polled: the list changes when this page
+ * changes it and at no other time, and a poll would fight whatever dialog is open.
+ */
+const admins = ref<Admin[]>([])
+const adminsError = ref<string | null>(null)
+const savingAdmin = ref(false)
+
+const createAdminOpen = ref(false)
+const newAdmin = reactive({ username: '', password: '' })
+
+const passwordOpen = ref(false)
+const passwordForm = reactive({ current: '', next: '', repeat: '' })
+
+// Which account's password is being reset by another operator, or null while nobody's is.
+const resetTarget = ref<Admin | null>(null)
+const resetForm = reactive({ password: '', repeat: '' })
+
+/** The panel's own rule, repeated here only so the form can say so before a round trip. */
+const minimumPasswordLength = 12
+
+async function loadAdmins() {
+  try {
+    admins.value = await api.get<Admin[]>('/admins')
+    adminsError.value = null
+  } catch (error) {
+    adminsError.value = describeError(error, 'Failed to load the operator list.')
+  }
+}
+
+function failed(title: string) {
+  return (error: unknown) => toast.add({
+    title,
+    description: describeError(error, ''),
+    color: 'error',
+    icon: 'i-lucide-circle-alert'
+  })
+}
+
+async function createAdmin() {
+  savingAdmin.value = true
+
+  try {
+    await api.post('/admins', { username: newAdmin.username.trim(), password: newAdmin.password })
+    createAdminOpen.value = false
+    newAdmin.username = ''
+    newAdmin.password = ''
+    await loadAdmins()
+    toast.add({ title: 'Operator added', color: 'success', icon: 'i-lucide-user-plus' })
+  } catch (error) {
+    failed('Could not add the operator')(error)
+  } finally {
+    savingAdmin.value = false
+  }
+}
+
+async function changeOwnPassword() {
+  savingAdmin.value = true
+
+  try {
+    await api.post('/admins/password', { currentPassword: passwordForm.current, newPassword: passwordForm.next })
+    passwordOpen.value = false
+    passwordForm.current = ''
+    passwordForm.next = ''
+    passwordForm.repeat = ''
+    toast.add({
+      title: 'Password changed',
+      // Said plainly rather than left to be discovered: the cookie carries a name, not anything
+      // derived from the password, so sessions that were already open are still open.
+      description: 'Sessions that are already signed in stay signed in, this one included.',
+      color: 'success',
+      icon: 'i-lucide-key'
+    })
+  } catch (error) {
+    failed('Could not change the password')(error)
+  } finally {
+    savingAdmin.value = false
+  }
+}
+
+async function resetPassword() {
+  const target = resetTarget.value
+  if (!target) {
+    return
+  }
+
+  savingAdmin.value = true
+
+  try {
+    await api.put(`/admins/${encodeURIComponent(target.username)}/password`, { password: resetForm.password })
+    resetTarget.value = null
+    resetForm.password = ''
+    resetForm.repeat = ''
+    toast.add({ title: `Password reset for ${target.username}`, color: 'success', icon: 'i-lucide-key' })
+  } catch (error) {
+    failed('Could not reset the password')(error)
+  } finally {
+    savingAdmin.value = false
+  }
+}
+
+async function deleteAdmin(account: Admin) {
+  const ok = await confirm({
+    title: `Remove ${account.username}?`,
+    description: account.demo
+      ? 'The read-only demo account. If AWG_DEMO_USER is still set, the panel creates it again on its next start.'
+      : 'That account can no longer sign in. Nothing about the fleet changes.',
+    confirmLabel: 'Remove',
+    danger: true
+  })
+
+  if (!ok) {
+    return
+  }
+
+  try {
+    await api.del(`/admins/${encodeURIComponent(account.username)}`)
+    await loadAdmins()
+    toast.add({ title: `${account.username} removed`, color: 'success', icon: 'i-lucide-check' })
+  } catch (error) {
+    failed('Could not remove the account')(error)
+  }
+}
 
 /**
  * The API models "unset" as null, but form inputs only understand undefined. Keep the boundary
@@ -239,7 +364,10 @@ async function importLegacyState(event: Event) {
   }
 }
 
-onMounted(loadFleet)
+onMounted(() => {
+  void loadFleet()
+  void loadAdmins()
+})
 </script>
 
 <template>
@@ -455,6 +583,252 @@ onMounted(loadFleet)
             @click="rotateIdentity"
           >
             Rotate identity
+          </UButton>
+        </div>
+      </template>
+    </UModal>
+
+    <AppCard
+      title="Operators"
+      icon="i-lucide-users"
+      description="Who can sign in to this panel. The password here is what stands between the open internet and the fleet private key."
+    >
+      <template #actions>
+        <UButton
+          icon="i-lucide-key"
+          color="neutral"
+          variant="outline"
+          @click="passwordOpen = true"
+        >
+          Change my password
+        </UButton>
+        <UButton
+          icon="i-lucide-user-plus"
+          @click="createAdminOpen = true"
+        >
+          Add operator
+        </UButton>
+      </template>
+
+      <UAlert
+        v-if="adminsError"
+        class="mb-4"
+        color="error"
+        variant="subtle"
+        icon="i-lucide-circle-alert"
+        title="Could not load the operators"
+        :description="adminsError"
+      />
+
+      <ul class="divide-y divide-default">
+        <li
+          v-for="account in admins"
+          :key="account.username"
+          class="flex flex-wrap items-center gap-x-3 gap-y-2 py-3 first:pt-0 last:pb-0"
+        >
+          <UIcon
+            :name="account.demo ? 'i-lucide-eye' : 'i-lucide-user'"
+            class="size-4 shrink-0 text-muted"
+          />
+          <span class="font-medium text-highlighted">{{ account.username }}</span>
+          <UBadge
+            v-if="account.self"
+            color="primary"
+            variant="subtle"
+            size="sm"
+          >
+            You
+          </UBadge>
+          <UBadge
+            v-if="account.demo"
+            color="neutral"
+            variant="subtle"
+            size="sm"
+          >
+            Read-only
+          </UBadge>
+          <span class="text-sm text-muted">added {{ formatUtc(account.createdAt) }}</span>
+
+          <div class="ms-auto flex items-center gap-1">
+            <UButton
+              v-if="!account.self"
+              icon="i-lucide-key-round"
+              color="neutral"
+              variant="ghost"
+              size="sm"
+              :title="`Reset the password for ${account.username}`"
+              @click="resetTarget = account"
+            />
+            <UButton
+              v-if="!account.self"
+              icon="i-lucide-trash-2"
+              color="error"
+              variant="ghost"
+              size="sm"
+              :title="`Remove ${account.username}`"
+              @click="deleteAdmin(account)"
+            />
+          </div>
+        </li>
+      </ul>
+
+      <!-- The one thing an operator cannot discover from the list itself, and the reason a second
+           account is worth creating before it is needed. -->
+      <p class="mt-4 text-sm text-muted">
+        A forgotten password can only be reset by another operator: the bootstrap variables create
+        an account on an empty database and are ignored afterwards. Sign-in is refused after ten
+        wrong passwords for one account within fifteen minutes, counted in memory — a restart
+        clears them.
+      </p>
+    </AppCard>
+
+    <UModal
+      v-model:open="createAdminOpen"
+      title="Add an operator"
+      description="A full account: it can change everything about the fleet, including removing this one."
+    >
+      <template #body>
+        <div class="flex flex-col gap-4">
+          <UFormField label="Username">
+            <UInput
+              v-model="newAdmin.username"
+              class="w-full"
+              autocomplete="off"
+            />
+          </UFormField>
+          <UFormField
+            label="Password"
+            :help="`At least ${minimumPasswordLength} characters.`"
+          >
+            <UInput
+              v-model="newAdmin.password"
+              class="w-full"
+              type="password"
+              autocomplete="new-password"
+            />
+          </UFormField>
+        </div>
+      </template>
+
+      <template #footer>
+        <div class="flex w-full justify-end gap-2">
+          <UButton
+            variant="ghost"
+            @click="createAdminOpen = false"
+          >
+            Cancel
+          </UButton>
+          <UButton
+            :loading="savingAdmin"
+            :disabled="!newAdmin.username.trim() || newAdmin.password.length < minimumPasswordLength"
+            @click="createAdmin"
+          >
+            Add operator
+          </UButton>
+        </div>
+      </template>
+    </UModal>
+
+    <UModal
+      v-model:open="passwordOpen"
+      title="Change my password"
+      description="The current password is required: a session on its own is not proof of knowing it."
+    >
+      <template #body>
+        <div class="flex flex-col gap-4">
+          <UFormField label="Current password">
+            <UInput
+              v-model="passwordForm.current"
+              class="w-full"
+              type="password"
+              autocomplete="current-password"
+            />
+          </UFormField>
+          <UFormField
+            label="New password"
+            :help="`At least ${minimumPasswordLength} characters.`"
+          >
+            <UInput
+              v-model="passwordForm.next"
+              class="w-full"
+              type="password"
+              autocomplete="new-password"
+            />
+          </UFormField>
+          <UFormField label="Repeat the new password">
+            <UInput
+              v-model="passwordForm.repeat"
+              class="w-full"
+              type="password"
+              autocomplete="new-password"
+            />
+          </UFormField>
+        </div>
+      </template>
+
+      <template #footer>
+        <div class="flex w-full justify-end gap-2">
+          <UButton
+            variant="ghost"
+            @click="passwordOpen = false"
+          >
+            Cancel
+          </UButton>
+          <UButton
+            :loading="savingAdmin"
+            :disabled="passwordForm.next.length < minimumPasswordLength || passwordForm.next !== passwordForm.repeat"
+            @click="changeOwnPassword"
+          >
+            Change password
+          </UButton>
+        </div>
+      </template>
+    </UModal>
+
+    <UModal
+      :open="resetTarget !== null"
+      :title="`Reset the password for ${resetTarget?.username ?? ''}`"
+      description="Set a new one and hand it over. Their old password stops working at once; a session they already have stays open until it expires."
+      @update:open="(open: boolean) => !open && (resetTarget = null)"
+    >
+      <template #body>
+        <div class="flex flex-col gap-4">
+          <UFormField
+            label="New password"
+            :help="`At least ${minimumPasswordLength} characters.`"
+          >
+            <UInput
+              v-model="resetForm.password"
+              class="w-full"
+              type="password"
+              autocomplete="new-password"
+            />
+          </UFormField>
+          <UFormField label="Repeat it">
+            <UInput
+              v-model="resetForm.repeat"
+              class="w-full"
+              type="password"
+              autocomplete="new-password"
+            />
+          </UFormField>
+        </div>
+      </template>
+
+      <template #footer>
+        <div class="flex w-full justify-end gap-2">
+          <UButton
+            variant="ghost"
+            @click="resetTarget = null"
+          >
+            Cancel
+          </UButton>
+          <UButton
+            :loading="savingAdmin"
+            :disabled="resetForm.password.length < minimumPasswordLength || resetForm.password !== resetForm.repeat"
+            @click="resetPassword"
+          >
+            Reset password
           </UButton>
         </div>
       </template>
