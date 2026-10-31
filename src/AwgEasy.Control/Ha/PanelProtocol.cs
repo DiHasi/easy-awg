@@ -194,7 +194,17 @@ public sealed record PanelClientRow(
     int ConfigGeneration,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
-    string? EgressLabel = null);
+    string? EgressLabel = null,
+    // What this peer is allowed, and why the panel switched it off if it did. Configuration
+    // rather than evidence, like the grouping beside it: a promoted standby that had forgotten
+    // somebody's allowance would hand it out again from zero. Optional trailing fields, so a
+    // panel one release behind reads a payload that carries them and simply has no limits.
+    DateTimeOffset? ExpiresAt = null,
+    long? QuotaBytes = null,
+    string QuotaWindow = PeerQuotaWindows.Total,
+    DateTimeOffset? QuotaStartedAt = null,
+    long QuotaUsedBytes = 0,
+    string? DisabledBy = null);
 
 public sealed record PanelGroupRow(
     string Id,

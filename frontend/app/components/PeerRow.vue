@@ -7,7 +7,7 @@ import type { Client } from '~/types/api'
  * handshake or a transfer reads as is the page's decision - a row the stats poll has not reached
  * yet must not round a silence down to zero here.
  */
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   client: Client
   state: 'up' | 'idle' | 'off' | 'unknown'
   handshake: string
@@ -46,6 +46,38 @@ const emit = defineEmits<{
   stats: []
   grab: [PointerEvent]
 }>()
+
+/**
+ * What a limit is worth saying on the row, or nothing. A peer with weeks and most of its
+ * allowance left is just a peer, so only the end of either is drawn - the row is read at a
+ * glance, and a badge on everybody is a badge nobody reads.
+ */
+const limitNote = computed(() => {
+  const client = props.client
+  const share = client.quotaBytes ? client.quotaUsedBytes / client.quotaBytes : 0
+  const days = client.expiresAt
+    ? (new Date(client.expiresAt).getTime() - Date.now()) / 86_400_000
+    : null
+
+  if (days !== null && days <= 7) {
+    return {
+      label: days <= 1 ? 'expires today' : `${Math.ceil(days)}d left`,
+      urgent: days <= 1,
+      title: `Expires ${formatUtc(client.expiresAt)}; the panel switches it off then.`
+    }
+  }
+
+  if (client.quotaBytes && share >= 0.8) {
+    return {
+      label: `${formatBytes(client.quotaRemaining ?? 0)} left`,
+      urgent: true,
+      title: `${formatBytes(client.quotaUsedBytes)} of ${formatBytes(client.quotaBytes)} used`
+        + `${client.quotaWindow === 'monthly' ? ' this month' : ''}.`
+    }
+  }
+
+  return null
+})
 </script>
 
 <template>
@@ -94,6 +126,28 @@ const emit = defineEmits<{
             variant="subtle"
           >
             custom timings
+          </UBadge>
+          <!-- A limit is only worth a badge when it is close or already spent: a peer with
+               three weeks and 80 GB left is simply a peer. -->
+          <UBadge
+            v-if="client.disabledBy"
+            size="sm"
+            color="error"
+            variant="subtle"
+            :title="client.disabledBy === 'expiry'
+              ? 'Switched off by the panel: it passed its expiry. Move the date to bring it back.'
+              : 'Switched off by the panel: it used its whole allowance. Raise it or start it again.'"
+          >
+            {{ client.disabledBy === 'expiry' ? 'expired' : 'out of data' }}
+          </UBadge>
+          <UBadge
+            v-else-if="limitNote"
+            size="sm"
+            :color="limitNote.urgent ? 'warning' : 'neutral'"
+            variant="subtle"
+            :title="limitNote.title"
+          >
+            {{ limitNote.label }}
           </UBadge>
           <UBadge
             v-if="client.egressLabel"

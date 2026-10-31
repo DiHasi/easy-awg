@@ -43,6 +43,12 @@ public sealed record FleetRecord(
 /// <param name="EgressLabel">Which of a node's addresses this peer leaves through, by the
 /// operator's name for it, or null to leave through that node's default. A label rather than an
 /// address, so it still means something after failover has moved traffic to another node.</param>
+/// <param name="Limits">
+/// When this config stops working on its own and how much it may carry before it does, or null
+/// for a peer with no limits - which is every peer until somebody sets one. The panel's own
+/// bookkeeping like grouping: no node is ever told about a quota, and reaching one disables the
+/// peer, which is the ordinary change nodes already understand.
+/// </param>
 public sealed record ClientRecord(
     string Id,
     string Name,
@@ -56,7 +62,8 @@ public sealed record ClientRecord(
     DateTimeOffset UpdatedAt,
     string? GroupId = null,
     int ConfigGeneration = 0,
-    string? EgressLabel = null);
+    string? EgressLabel = null,
+    PeerLimits? Limits = null);
 
 /// <summary>One person, holding however many devices. Nothing a node ever sees.</summary>
 public sealed record ClientGroupRecord(

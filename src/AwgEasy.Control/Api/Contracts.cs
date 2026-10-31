@@ -18,6 +18,13 @@ namespace AwgEasy.Control;
 /// hands, and its own key material is current - saying its config is broken would be a claim
 /// about a config that was never issued.
 /// </param>
+/// <param name="QuotaRemaining">What is left of the allowance, or null when there is no quota.
+/// Never negative, and carried rather than subtracted in the page for the same reason
+/// <paramref name="ConfigStale"/> is: one answer, from the panel.</param>
+/// <param name="DisabledBy">Which limit switched this peer off - <c>expiry</c> or <c>quota</c> -
+/// or null for a peer the panel did not touch, which includes every peer an operator disabled by
+/// hand. The difference matters on the page: one of them is fixed by extending a date, one by
+/// resetting a number, and one is not a fault at all.</param>
 public sealed record ClientResponse(
     string Id,
     string Name,
@@ -31,17 +38,48 @@ public sealed record ClientResponse(
     int ConfigGeneration,
     int FleetGeneration,
     bool ConfigStale,
-    string? EgressLabel)
+    string? EgressLabel,
+    DateTimeOffset? ExpiresAt,
+    long? QuotaBytes,
+    string QuotaWindow,
+    long QuotaUsedBytes,
+    long? QuotaRemaining,
+    DateTimeOffset? QuotaStartedAt,
+    string? DisabledBy)
 {
     public static ClientResponse From(ClientRecord client, int fleetGeneration)
-        => new(
+    {
+        var limits = client.Limits ?? PeerLimits.None;
+        return new(
             client.Id, client.Name, client.Address, client.PublicKey, client.Enabled,
             client.CreatedAt, client.UpdatedAt, client.Obfuscation, client.GroupId,
             client.ConfigGeneration,
             fleetGeneration,
             client.ConfigGeneration != 0 && client.ConfigGeneration != fleetGeneration,
-            client.EgressLabel);
+            client.EgressLabel,
+            limits.ExpiresAt,
+            limits.QuotaBytes,
+            limits.QuotaWindow,
+            limits.QuotaUsedBytes,
+            limits.QuotaRemaining,
+            limits.QuotaStartedAt,
+            limits.DisabledBy);
+    }
 }
+
+/// <summary>
+/// When a config stops working on its own, and how much it may carry before it does. Null on
+/// either means no limit at all.
+/// </summary>
+/// <param name="QuotaWindow">
+/// <c>total</c> counts from the moment the allowance was set and is never reset by the panel - a
+/// trial. <c>monthly</c> counts from the start of the calendar month in UTC and puts the peer back
+/// when the next one begins.
+/// </param>
+public sealed record UpdateClientLimitsRequest(
+    DateTimeOffset? ExpiresAt,
+    long? QuotaBytes,
+    string? QuotaWindow);
 
 /// <param name="GroupId">Files the new config under a person right away, so a device added from
 /// that person's own section does not have to be dragged there afterwards.</param>

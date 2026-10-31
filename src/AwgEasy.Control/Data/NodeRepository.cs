@@ -204,10 +204,11 @@ public sealed class NodeRepository(Database database, ControlOptions options)
         // reporting at the same moment turns that into an error busy_timeout does not retry.
         using var transaction = connection.BeginTransaction(deferred: false);
 
-        if (options.Usage.Records)
-        {
-            UsageAccounting.Accrue(connection, transaction, nodeId, peers, reportedAt);
-        }
+        // Unconditionally: the allowances are counted even when no history is kept, because the
+        // retention setting is a decision about holding a record of what people did and says
+        // nothing about what somebody bought. The flag decides only whether the hourly rows are
+        // written.
+        UsageAccounting.Accrue(connection, transaction, nodeId, peers, reportedAt, options.Usage.Records);
 
         using (var delete = connection.Sql("DELETE FROM peer_stats WHERE node_id = $nodeId", ("$nodeId", nodeId)))
         {

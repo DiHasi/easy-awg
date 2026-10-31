@@ -108,6 +108,12 @@ builder.Services.AddHostedService(provider => provider.GetRequiredService<Failov
 // Trims both histories on its own clock, so the status reports and probe rounds that write
 // them never carry a delete of their own.
 builder.Services.AddHostedService<HistoryRetentionService>();
+// Switches peers off when they run out of time or allowance, on a clock of its own for the same
+// reason: the alternative is a disable, an event and a revision bump in front of every status
+// report from every node. Registered once and handed to the host as the same instance, so the API
+// can run the sweep the loop runs.
+builder.Services.AddSingleton<PeerLimitService>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<PeerLimitService>());
 builder.Services.AddSingleton<AgentAuthenticator>();
 
 // The panel pair. The live role lives in the database rather than in this process, so the context

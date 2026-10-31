@@ -67,7 +67,13 @@ public sealed class PanelSnapshotRepository(Database database)
                 reader.GetInt32("config_generation"),
                 reader.GetTimestamp("created_at"),
                 reader.GetTimestamp("updated_at"),
-                reader.GetStringOrNull("egress_label")))],
+                reader.GetStringOrNull("egress_label"),
+                reader.GetTimestampOrNull("expires_at"),
+                reader.GetInt64OrNull("quota_bytes"),
+                reader.GetString("quota_window"),
+                reader.GetTimestampOrNull("quota_started_at"),
+                reader.GetInt64("quota_used_bytes"),
+                reader.GetStringOrNull("disabled_by")))],
             [..Query(connection, "SELECT * FROM client_groups ORDER BY id", reader => new PanelGroupRow(
                 reader.GetString("id"),
                 reader.GetString("name"),
@@ -373,9 +379,13 @@ public sealed class PanelSnapshotRepository(Database database)
             """
             INSERT INTO clients (id, name, address, private_key, public_key, preshared_key, enabled,
                                  obfuscation_json, kind, group_id, sort_order, config_generation,
-                                 egress_label, created_at, updated_at)
+                                 egress_label, expires_at, quota_bytes, quota_window,
+                                 quota_started_at, quota_used_bytes, disabled_by,
+                                 created_at, updated_at)
             VALUES ($id, $name, $address, $private, $public, $psk, $enabled,
-                    $obfuscation, $kind, $groupId, $sortOrder, $generation, $egressLabel, $createdAt, $updatedAt)
+                    $obfuscation, $kind, $groupId, $sortOrder, $generation, $egressLabel,
+                    $expiresAt, $quotaBytes, $quotaWindow, $quotaStartedAt, $quotaUsed, $disabledBy,
+                    $createdAt, $updatedAt)
             """,
             row =>
             [
@@ -384,6 +394,9 @@ public sealed class PanelSnapshotRepository(Database database)
                 ("$enabled", row.Enabled ? 1 : 0), ("$obfuscation", row.ObfuscationJson),
                 ("$kind", row.Kind), ("$groupId", row.GroupId), ("$sortOrder", row.SortOrder),
                 ("$generation", row.ConfigGeneration), ("$egressLabel", row.EgressLabel),
+                ("$expiresAt", row.ExpiresAt.ToStorage()), ("$quotaBytes", row.QuotaBytes),
+                ("$quotaWindow", row.QuotaWindow), ("$quotaStartedAt", row.QuotaStartedAt.ToStorage()),
+                ("$quotaUsed", row.QuotaUsedBytes), ("$disabledBy", row.DisabledBy),
                 ("$createdAt", row.CreatedAt.ToStorage()), ("$updatedAt", row.UpdatedAt.ToStorage())
             ]);
 

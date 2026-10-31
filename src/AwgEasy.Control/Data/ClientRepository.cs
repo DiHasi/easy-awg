@@ -6,11 +6,15 @@ namespace AwgEasy.Control;
 
 public sealed class ClientRepository(Database database)
 {
-    private const string Columns = "id, name, address, private_key, public_key, preshared_key, enabled, obfuscation_json, group_id, config_generation, egress_label, created_at, updated_at";
+    private const string Columns = "id, name, address, private_key, public_key, preshared_key, enabled, obfuscation_json, "
+        + "group_id, config_generation, egress_label, expires_at, quota_bytes, quota_window, quota_started_at, "
+        + "quota_used_bytes, disabled_by, created_at, updated_at";
 
     /// <summary>The same columns for the one query that has to join the groups to sort by them.</summary>
     private const string QualifiedColumns = "c.id, c.name, c.address, c.private_key, c.public_key, c.preshared_key, "
-        + "c.enabled, c.obfuscation_json, c.group_id, c.config_generation, c.egress_label, c.created_at, c.updated_at";
+        + "c.enabled, c.obfuscation_json, c.group_id, c.config_generation, c.egress_label, c.expires_at, "
+        + "c.quota_bytes, c.quota_window, c.quota_started_at, c.quota_used_bytes, c.disabled_by, "
+        + "c.created_at, c.updated_at";
 
     /// <summary>
     /// The people the fleet serves, in exactly the order the panel draws them: the groups in the
@@ -121,14 +125,21 @@ public sealed class ClientRepository(Database database)
 
     public void Insert(ClientRecord client, string kind = ClientKinds.User)
     {
+        var limits = client.Limits ?? PeerLimits.None;
         using var connection = database.Open();
         using var command = connection.Sql(
             """
-            INSERT INTO clients (id, name, address, private_key, public_key, preshared_key, enabled, obfuscation_json, created_at, updated_at, kind, group_id, config_generation, egress_label, sort_order)
+            INSERT INTO clients (id, name, address, private_key, public_key, preshared_key, enabled, obfuscation_json, created_at, updated_at, kind, group_id, config_generation, egress_label,
+                                 expires_at, quota_bytes, quota_window, quota_started_at, sort_order)
             VALUES ($id, $name, $address, $privateKey, $publicKey, $presharedKey, $enabled, $obfuscation, $createdAt, $updatedAt, $kind, $groupId, $configGeneration, $egressLabel,
+                    $expiresAt, $quotaBytes, $quotaWindow, $quotaStartedAt,
                     (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM clients WHERE group_id IS $groupId))
             """,
             ("$kind", kind),
+            ("$expiresAt", limits.ExpiresAt.ToStorage()),
+            ("$quotaBytes", limits.QuotaBytes),
+            ("$quotaWindow", limits.QuotaWindow),
+            ("$quotaStartedAt", limits.QuotaStartedAt.ToStorage()),
             ("$egressLabel", client.EgressLabel),
             ("$configGeneration", client.ConfigGeneration),
             ("$groupId", client.GroupId),
@@ -229,8 +240,145 @@ public sealed class ClientRepository(Database database)
         return Convert.ToInt32(command.ExecuteScalar());
     }
 
+    /// <summary>
+    /// What this peer is allowed. Deliberately no revision bump at the call site: a quota reaches
+    /// no node and changes no peer material, exactly like a group or a rename. What a node does
+    /// eventually see is the peer being disabled when a limit is reached, and that is an ordinary
+    /// disable which bumps the revision like any other.
+    ///
+    /// Setting an allowance where there was none starts counting from now rather than from
+    /// whatever the peer has moved in its life: a quota handed out today is an allowance for
+    /// today onwards, and crediting it with a year of history would exhaust it before the
+    /// operator had finished typing. Raising or lowering an existing one leaves the count alone,
+    /// because that is a change of allowance and not a new one.
+    /// </summary>
+    /// <returns>False when there is no such peer.</returns>
+    public bool SetLimits(string id, DateTimeOffset? expiresAt, long? quotaBytes, string quotaWindow, DateTimeOffset now)
+        => Execute(
+            """
+            UPDATE clients
+               SET expires_at       = $expiresAt,
+                   quota_bytes      = $quotaBytes,
+                   quota_window     = $quotaWindow,
+                   quota_started_at = CASE
+                                          WHEN $quotaBytes IS NULL THEN NULL
+                                          WHEN quota_bytes IS NULL OR quota_started_at IS NULL THEN $now
+                                          WHEN quota_window <> $quotaWindow THEN $now
+                                          ELSE quota_started_at
+                                      END,
+                   quota_used_bytes = CASE
+                                          WHEN $quotaBytes IS NULL THEN 0
+                                          WHEN quota_bytes IS NULL OR quota_window <> $quotaWindow THEN 0
+                                          ELSE quota_used_bytes
+                                      END,
+                   updated_at       = $now
+             WHERE id = $id AND kind = 'user'
+            """,
+            ("$id", id),
+            ("$expiresAt", expiresAt.ToStorage()),
+            ("$quotaBytes", quotaBytes),
+            ("$quotaWindow", quotaWindow),
+            ("$now", now.ToStorage()));
+
+    /// <summary>
+    /// Starts the allowance again from zero. The caller re-enables the peer when the quota is what
+    /// switched it off - which is the whole point of resetting one - and that is a disable undone,
+    /// so it bumps the revision there.
+    /// </summary>
+    public bool ResetQuota(string id, DateTimeOffset now)
+        => Execute(
+            """
+            UPDATE clients
+               SET quota_used_bytes = 0,
+                   quota_started_at = CASE WHEN quota_bytes IS NULL THEN NULL ELSE $now END,
+                   updated_at       = $now
+             WHERE id = $id AND kind = 'user'
+            """,
+            ("$id", id),
+            ("$now", now.ToStorage()));
+
+    /// <summary>
+    /// Switches a peer off because it reached a limit, recording which one. Written together so
+    /// the reason can never be left behind on a peer that is back on, which is what decides
+    /// whether a monthly renewal puts it back.
+    /// </summary>
+    public bool Disable(string id, string reason, DateTimeOffset now)
+        => Execute(
+            "UPDATE clients SET enabled = 0, disabled_by = $reason, updated_at = $now WHERE id = $id AND kind = 'user' AND enabled = 1",
+            ("$id", id),
+            ("$reason", reason),
+            ("$now", now.ToStorage()));
+
+    /// <summary>
+    /// A new calendar month: the allowance starts again, and the peers the quota itself took out
+    /// come back. A peer an operator disabled by hand has no reason recorded, so it stays off -
+    /// a renewal must not quietly undo somebody's decision.
+    /// </summary>
+    /// <returns>The peers that were switched back on, so the caller can say whose service
+    /// resumed and bump the revision once for all of them.</returns>
+    public IReadOnlyList<string> RenewMonthlyQuota(string id, DateTimeOffset now)
+    {
+        using var connection = database.Open();
+        using var transaction = connection.BeginTransaction();
+
+        var reinstated = new List<string>();
+        using (var read = connection.Sql(
+            "SELECT disabled_by FROM clients WHERE id = $id AND kind = 'user'",
+            ("$id", id)))
+        {
+            read.Transaction = transaction;
+            if (read.ExecuteScalar() as string == PeerDisableReasons.Quota)
+            {
+                reinstated.Add(id);
+            }
+        }
+
+        using (var update = connection.Sql(
+            """
+            UPDATE clients
+               SET quota_used_bytes = 0,
+                   quota_started_at = $monthStart,
+                   enabled          = CASE WHEN disabled_by = $quota THEN 1 ELSE enabled END,
+                   disabled_by      = CASE WHEN disabled_by = $quota THEN NULL ELSE disabled_by END,
+                   updated_at       = $now
+             WHERE id = $id AND kind = 'user'
+            """,
+            ("$id", id),
+            ("$quota", PeerDisableReasons.Quota),
+            ("$monthStart", PeerLimitPolicy.MonthStart(now).ToStorage()),
+            ("$now", now.ToStorage())))
+        {
+            update.Transaction = transaction;
+            update.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        return reinstated;
+    }
+
+    /// <summary>
+    /// Every peer that has a limit of any kind, which is what the sweep walks. A fleet where
+    /// nobody has one costs it a query that returns nothing.
+    /// </summary>
+    public IReadOnlyList<ClientRecord> ListLimited()
+    {
+        using var connection = database.Open();
+        return Read(
+            connection,
+            $"SELECT {Columns} FROM clients WHERE kind = 'user' AND (expires_at IS NOT NULL OR quota_bytes IS NOT NULL) ORDER BY address");
+    }
+
+    /// <summary>
+    /// An operator switching a peer on or off by hand. Clears the panel's own reason either way:
+    /// a peer somebody enabled is no longer off because of a quota, and a peer somebody disabled
+    /// is off because they said so, which is what keeps a monthly renewal from putting it back.
+    /// </summary>
     public bool SetEnabled(string id, bool enabled, DateTimeOffset now)
-        => Execute("UPDATE clients SET enabled = $enabled, updated_at = $now WHERE id = $id", ("$id", id), ("$enabled", enabled ? 1 : 0), ("$now", now.ToStorage()));
+        => Execute(
+            "UPDATE clients SET enabled = $enabled, disabled_by = NULL, updated_at = $now WHERE id = $id",
+            ("$id", id),
+            ("$enabled", enabled ? 1 : 0),
+            ("$now", now.ToStorage()));
 
     public bool Delete(string id) => Execute("DELETE FROM clients WHERE id = $id", ("$id", id));
 
@@ -270,10 +418,36 @@ public sealed class ClientRepository(Database database)
                 reader.GetTimestamp("updated_at"),
                 reader.GetStringOrNull("group_id"),
                 reader.GetInt32("config_generation"),
-                reader.GetStringOrNull("egress_label")));
+                reader.GetStringOrNull("egress_label"),
+                ReadLimits(reader)));
         }
 
         return clients;
+    }
+
+    /// <summary>
+    /// Null rather than an empty <see cref="PeerLimits"/> for a peer nobody has limited, so
+    /// "has limits" is a question about the object and not about reading six fields - and so the
+    /// vast majority of peers, which have none, carry nothing.
+    /// </summary>
+    private static PeerLimits? ReadLimits(SqliteDataReader reader)
+    {
+        var expiresAt = reader.GetTimestampOrNull("expires_at");
+        var quota = reader.GetInt64OrNull("quota_bytes");
+        var disabledBy = reader.GetStringOrNull("disabled_by");
+
+        if (expiresAt is null && quota is null && disabledBy is null)
+        {
+            return null;
+        }
+
+        return new PeerLimits(
+            expiresAt,
+            quota,
+            reader.GetString("quota_window"),
+            reader.GetTimestampOrNull("quota_started_at"),
+            reader.GetInt64("quota_used_bytes"),
+            disabledBy);
     }
 
     private static string? Serialize(ClientObfuscationOverrides? value)

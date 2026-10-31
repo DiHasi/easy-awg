@@ -35,8 +35,15 @@ internal static class UsageAccounting
 
     /// <summary>
     /// Credits what every reported peer moved since its last reading to the bucket
-    /// <paramref name="reportedAt"/> falls in.
+    /// <paramref name="reportedAt"/> falls in, and against whatever allowance that peer has.
     /// </summary>
+    /// <param name="recordHistory">
+    /// False when <c>AWG_USAGE_RETENTION_DAYS</c> is 0, which drops the hourly rows and keeps them
+    /// dropped. The allowances are counted either way, deliberately: that setting is a decision
+    /// about whether the panel holds a record of what people did with their evenings, and it has
+    /// nothing to say about whether somebody's 100 GB should start again - the same line the
+    /// availability history's own retention knob draws.
+    /// </param>
     /// <remarks>
     /// A peer with no previous reading is skipped rather than credited in full: its counter may
     /// have been climbing since long before this panel first heard of the node, and dropping a
@@ -49,7 +56,8 @@ internal static class UsageAccounting
         SqliteTransaction transaction,
         string nodeId,
         PeerStatus[] peers,
-        DateTimeOffset reportedAt)
+        DateTimeOffset reportedAt,
+        bool recordHistory)
     {
         if (peers.Length == 0)
         {
@@ -83,23 +91,48 @@ internal static class UsageAccounting
                 continue;
             }
 
-            using var insert = connection.Sql(
+            if (recordHistory)
+            {
+                using var insert = connection.Sql(
+                    """
+                    INSERT INTO client_usage (client_id, bucket_start, received_bytes, transmitted_bytes, updated_at)
+                    VALUES ($clientId, $bucket, $rx, $tx, $now)
+                    ON CONFLICT (client_id, bucket_start) DO UPDATE
+                       SET received_bytes    = received_bytes + excluded.received_bytes,
+                           transmitted_bytes = transmitted_bytes + excluded.transmitted_bytes,
+                           updated_at        = excluded.updated_at
+                    """,
+                    ("$clientId", clientId),
+                    ("$bucket", bucket),
+                    ("$rx", rx),
+                    ("$tx", tx),
+                    ("$now", now));
+
+                insert.Transaction = transaction;
+                insert.ExecuteNonQuery();
+            }
+
+            // The same difference, against the allowance. Here rather than read back out of the
+            // history, because the history is pruned: a quota that forgot what somebody had moved
+            // once the rows behind it aged out would hand the allowance back every retention
+            // window. It is also why the counter survives an operator zeroing the live counters -
+            // that is bookkeeping about what a number on a page shows, and says nothing about
+            // what a person used.
+            //
+            // Only peers that actually have a quota are written to. A fleet where nobody has one
+            // must not pay an extra update per peer every twenty seconds for a column nothing
+            // reads.
+            using var allowance = connection.Sql(
                 """
-                INSERT INTO client_usage (client_id, bucket_start, received_bytes, transmitted_bytes, updated_at)
-                VALUES ($clientId, $bucket, $rx, $tx, $now)
-                ON CONFLICT (client_id, bucket_start) DO UPDATE
-                   SET received_bytes    = received_bytes + excluded.received_bytes,
-                       transmitted_bytes = transmitted_bytes + excluded.transmitted_bytes,
-                       updated_at        = excluded.updated_at
+                UPDATE clients
+                   SET quota_used_bytes = quota_used_bytes + $moved
+                 WHERE id = $clientId AND quota_bytes IS NOT NULL
                 """,
                 ("$clientId", clientId),
-                ("$bucket", bucket),
-                ("$rx", rx),
-                ("$tx", tx),
-                ("$now", now));
+                ("$moved", rx + tx));
 
-            insert.Transaction = transaction;
-            insert.ExecuteNonQuery();
+            allowance.Transaction = transaction;
+            allowance.ExecuteNonQuery();
         }
     }
 

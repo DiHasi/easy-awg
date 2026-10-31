@@ -38,6 +38,9 @@ const editName = ref('')
 const egressOpen = ref(false)
 const egressClient = ref<Client | null>(null)
 const egressLabel = ref('')
+
+const limitsOpen = ref(false)
+const limitsClient = ref<Client | null>(null)
 const configClient = ref<Client | null>(null)
 const statsOpen = ref(false)
 const statsClient = ref<Client | null>(null)
@@ -390,6 +393,57 @@ async function saveEgress(label: string | null) {
   }
 }
 
+function openLimits(client: Client) {
+  limitsClient.value = client
+  limitsOpen.value = true
+}
+
+/**
+ * Saving a limit reissues nothing, but it can put a peer back on: extending an expiry or raising
+ * an allowance is how an operator undoes what the panel did, which is what the panel itself told
+ * them to do. So the row is replaced with whatever comes back rather than patched here.
+ */
+async function saveLimits(limits: { expiresAt: string | null, quotaBytes: number | null, quotaWindow: string }) {
+  const client = limitsClient.value
+  if (!client) {
+    return
+  }
+
+  busyId.value = client.id
+
+  try {
+    const updated = await api.put<Client>(`/clients/${client.id}/limits`, limits)
+    clients.value = clients.value.map(item => item.id === updated.id ? updated : item)
+    limitsClient.value = updated
+    limitsOpen.value = false
+    succeed(updated.expiresAt || updated.quotaBytes ? `Limits saved for ${updated.name}` : `${updated.name} is unlimited`)
+  } catch (error) {
+    fail('Could not save the limits', error)
+  } finally {
+    busyId.value = null
+  }
+}
+
+async function resetQuota() {
+  const client = limitsClient.value
+  if (!client) {
+    return
+  }
+
+  busyId.value = client.id
+
+  try {
+    const updated = await api.post<Client>(`/clients/${client.id}/quota/reset`)
+    clients.value = clients.value.map(item => item.id === updated.id ? updated : item)
+    limitsClient.value = updated
+    succeed(`Allowance for ${updated.name} starts again`)
+  } catch (error) {
+    fail('Could not start the allowance again', error)
+  } finally {
+    busyId.value = null
+  }
+}
+
 function openEdit(client: Client) {
   editingClient.value = client
   editName.value = client.name
@@ -508,6 +562,7 @@ function menuFor(client: Client): DropdownMenuItem[][] {
       ...(egressPicks.value.length > 0 || client.egressLabel
         ? [{ label: 'Egress address', icon: 'i-lucide-arrow-up-right', onSelect: () => openEgress(client) }]
         : []),
+      { label: 'Limits', icon: 'i-lucide-hourglass', onSelect: () => openLimits(client) },
       {
         label: client.enabled ? 'Disable' : 'Enable',
         icon: client.enabled ? 'i-lucide-pause' : 'i-lucide-play',
@@ -1004,6 +1059,13 @@ usePolling(refresh, 10000)
       v-model:open="configOpen"
       :client="configClient"
       @rendered="markHandedOut"
+    />
+
+    <PeerLimitsModal
+      v-model:open="limitsOpen"
+      :client="limitsClient"
+      @save="saveLimits"
+      @reset="resetQuota"
     />
 
     <PeerStatsModal

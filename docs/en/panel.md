@@ -30,6 +30,27 @@ A peer is marked when the config it holds was issued against an identity the fle
 rotated, so after a rotation the list itself is the checklist of who still has to be handed a new
 one; the mark clears as soon as that config is rendered again.
 
+**Limits** on a peer's menu is when its config stops working on its own: an expiry, an allowance
+in gigabytes, or both. An allowance is counted either in total - a trial, counted from the moment
+you set it and never reset by the panel - or per calendar month in UTC, which puts the peer back
+when the next month starts. Reaching either disables the peer and nothing else: its keys, its
+address and its place in the list are untouched, so extending the expiry or starting the allowance
+again puts exactly that config back in service.
+
+The panel reads the limits once a minute, so a peer can carry traffic for up to a minute after its
+allowance is gone. That is deliberate - a quota is a billing instrument and the nodes enforce
+nothing - and it is the same order of imprecision as the twenty seconds between a node's reports.
+What is counted is received and sent together, as the difference between two of those reports, kept
+on the peer rather than read back out of the traffic history: `AWG_USAGE_RETENTION_DAYS` is a
+decision about holding a record of what people did and has nothing to say about whose allowance
+should start again, so allowances are counted even with the history switched off, and zeroing a
+peer's live counters does not hand its allowance back either.
+
+A peer the panel switched off says which limit did it, on its row and in the dialog, because one
+of them is fixed by a date and the other by a number. Enabling such a peer by hand is refused
+rather than undone by the next sweep a minute later. A peer **you** disabled carries no reason, and
+a monthly allowance renewing never puts it back - that was your decision, not a limit.
+
 **Groups** live in the same list. One person usually holds several configs, so peers can be filed
 into groups: a group is a person, the peers in it are their devices. Drag a peer by its handle to
 move it between groups or to reorder it, drag a group header to reorder the groups, or use *Move

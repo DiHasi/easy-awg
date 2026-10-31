@@ -187,6 +187,121 @@ public static class ClientApi
             return Results.Ok(ClientResponse.From(clients.Find(id)!, fleet.Current.Generation));
         });
 
+        // The sweep the background loop runs, run now. The same method rather than a second one
+        // shaped like it, for the reason POST /failover/evaluate exists: an operator who has just
+        // set an expiry in the past should be able to see what it does without waiting out a
+        // minute and wondering whether anything is wired up at all.
+        admin.MapPost("/clients/limits/sweep", async (PeerLimitService limits, CancellationToken cancellationToken)
+            => TypedResults.Ok(await limits.SweepAsync(cancellationToken)));
+
+        // When this config stops working on its own, and how much it may carry before it does.
+        // Deliberately no revision bump: a limit reaches no node and changes no peer material,
+        // exactly like a group or a rename. What a node eventually sees is the peer disappearing
+        // from the bundle when a limit is reached, and that is an ordinary disable.
+        admin.MapPut("/clients/{id}/limits", (
+            string id,
+            UpdateClientLimitsRequest request,
+            ClientRepository clients,
+            FleetService fleet,
+            EventLog events,
+            HttpContext context) =>
+        {
+            var window = string.IsNullOrWhiteSpace(request.QuotaWindow) ? PeerQuotaWindows.Total : request.QuotaWindow;
+            if (!PeerQuotaWindows.IsKnown(window))
+            {
+                return Results.BadRequest(new ApiError(
+                    "client_quota_window_invalid",
+                    $"A quota is counted either '{PeerQuotaWindows.Total}' or '{PeerQuotaWindows.Monthly}'."));
+            }
+
+            if (request.QuotaBytes is <= 0)
+            {
+                // Zero would be a config that stops the moment it is handed over, which nobody
+                // means: removing the quota is what "no limit" is, and that is null.
+                return Results.BadRequest(new ApiError(
+                    "client_quota_invalid",
+                    "An allowance has to be more than nothing. Clear it to leave the peer unlimited."));
+            }
+
+            if (clients.Find(id) is not { } existing)
+            {
+                return Results.NotFound(new ApiError("client_not_found", "Client was not found."));
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            if (!clients.SetLimits(id, request.ExpiresAt, request.QuotaBytes, window, now))
+            {
+                return Results.NotFound(new ApiError("client_not_found", "Client was not found."));
+            }
+
+            events.Record("client.limits_changed", Describe(existing.Name, request, window), actor: context.User.Identity?.Name);
+
+            // Extending an expiry or raising an allowance is how an operator puts somebody back,
+            // which is what the panel told them to do when it switched the peer off - so it does
+            // put them back rather than leaving them to find the enable button and be refused.
+            // Only peers the panel itself switched off: an operator's own disable is a decision,
+            // and raising a quota is not a reason to undo it.
+            var updated = clients.Find(id)!;
+            if (!updated.Enabled
+                && PeerDisableReasons.IsAutomatic(updated.Limits?.DisabledBy)
+                && PeerLimitPolicy.WouldRefuseEnabling(updated.Limits ?? PeerLimits.None, now) == PeerLimitAction.None
+                && clients.SetEnabled(id, true, now))
+            {
+                fleet.BumpRevision($"client {existing.Name} back inside its limits");
+                events.Record(
+                    "client.enabled",
+                    $"Client {existing.Name} is enabled again: it is back inside its limits.",
+                    actor: context.User.Identity?.Name);
+
+                updated = clients.Find(id)!;
+            }
+
+            return Results.Ok(ClientResponse.From(updated, fleet.Current.Generation));
+        });
+
+        // The allowance starts again from zero. Its own endpoint rather than a field on the one
+        // above, because it answers a different question: that one is "what are they allowed",
+        // this one is "let them carry on" - and an operator reaching for the second must not have
+        // to restate the first and risk mistyping it.
+        admin.MapPost("/clients/{id}/quota/reset", (
+            string id,
+            ClientRepository clients,
+            FleetService fleet,
+            EventLog events,
+            HttpContext context) =>
+        {
+            if (clients.Find(id) is not { } existing)
+            {
+                return Results.NotFound(new ApiError("client_not_found", "Client was not found."));
+            }
+
+            if (existing.Limits?.QuotaBytes is null)
+            {
+                return Results.BadRequest(new ApiError(
+                    "client_quota_not_set",
+                    "This peer has no allowance, so there is nothing to start again."));
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            clients.ResetQuota(id, now);
+            events.Record("client.quota_reset", $"Allowance for {existing.Name} starts again from zero.", actor: context.User.Identity?.Name);
+
+            // A reset is only ever pressed to put somebody back on, so it does: the quota is the
+            // one thing that was stopping them, and it is gone.
+            if (!existing.Enabled && existing.Limits?.DisabledBy == PeerDisableReasons.Quota)
+            {
+                var afterReset = clients.Find(id)!;
+                if (PeerLimitPolicy.WouldRefuseEnabling(afterReset.Limits ?? PeerLimits.None, now) == PeerLimitAction.None
+                    && clients.SetEnabled(id, true, now))
+                {
+                    fleet.BumpRevision($"client {existing.Name} allowance reset");
+                    events.Record("client.enabled", $"Client {existing.Name} is enabled again on a fresh allowance.", actor: context.User.Identity?.Name);
+                }
+            }
+
+            return Results.Ok(ClientResponse.From(clients.Find(id)!, fleet.Current.Generation));
+        });
+
         admin.MapPost("/clients/{id}/enable", (string id, ClientRepository clients, FleetService fleet, EventLog events, HttpContext context)
             => SetEnabled(id, true, clients, fleet, events, context));
 
@@ -292,6 +407,29 @@ public static class ClientApi
         return new ClientStatsResponse(client.Id, peer.Handshake, peer.Rx, peer.Tx, online, peer.NodeId, peer.ResetAt);
     }
 
+    /// <summary>The event log reads in what an operator would have said: a date, an allowance in
+    /// gigabytes, or that there is no longer a limit at all.</summary>
+    private static string Describe(string name, UpdateClientLimitsRequest request, string window)
+    {
+        if (request.ExpiresAt is null && request.QuotaBytes is null)
+        {
+            return $"Client {name} has no expiry and no allowance.";
+        }
+
+        var parts = new List<string>();
+        if (request.ExpiresAt is { } expiresAt)
+        {
+            parts.Add($"expires {expiresAt:u}");
+        }
+
+        if (request.QuotaBytes is { } quota)
+        {
+            parts.Add($"{quota / 1024d / 1024 / 1024:0.##} GB {window}");
+        }
+
+        return $"Client {name}: {string.Join(", ", parts)}.";
+    }
+
     private static IResult SetEnabled(
         string id,
         bool enabled,
@@ -301,7 +439,32 @@ public static class ClientApi
         HttpContext context)
     {
         var client = clients.Find(id);
-        if (client is null || !clients.SetEnabled(id, enabled, DateTimeOffset.UtcNow))
+        if (client is null)
+        {
+            return Results.NotFound(new ApiError("client_not_found", "Client was not found."));
+        }
+
+        var now = DateTimeOffset.UtcNow;
+
+        // Refused rather than switched on and switched off again a minute later by the sweep.
+        // The loop would be the honest implementation of "enable this peer", and it would leave
+        // an operator watching a config come back and die with nothing to say which of the two
+        // limits did it. The decision they actually meant to make is the one named here.
+        if (enabled && PeerLimitPolicy.WouldRefuseEnabling(client.Limits ?? PeerLimits.None, now) is var refusal
+            && refusal != PeerLimitAction.None)
+        {
+            return Results.BadRequest(refusal == PeerLimitAction.Expire
+                ? new ApiError(
+                    "client_expired",
+                    $"{client.Name} is past its expiry, so it would be switched off again within the minute. "
+                    + "Move the expiry or clear it first.")
+                : new ApiError(
+                    "client_quota_exhausted",
+                    $"{client.Name} has used its whole allowance, so it would be switched off again within the "
+                    + "minute. Reset the allowance or raise it first."));
+        }
+
+        if (!clients.SetEnabled(id, enabled, now))
         {
             return Results.NotFound(new ApiError("client_not_found", "Client was not found."));
         }

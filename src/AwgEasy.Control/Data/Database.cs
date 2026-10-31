@@ -148,6 +148,22 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
         // every peer that existed before the column did.
         EnsureColumn(connection, "clients", "egress_label", "TEXT NULL");
 
+        // When a peer stops working on its own, and how much it may move before it does. NULL on
+        // both means no limit, which is every peer that existed before these columns - a config
+        // that used to last forever must not acquire an expiry because the panel was upgraded.
+        EnsureColumn(connection, "clients", "expires_at", "TEXT NULL");
+        EnsureColumn(connection, "clients", "quota_bytes", "INTEGER NULL");
+        EnsureColumn(connection, "clients", "quota_window", "TEXT NOT NULL DEFAULT 'total'");
+        EnsureColumn(connection, "clients", "quota_started_at", "TEXT NULL");
+        // Accrued by UsageAccounting in the same transaction as the traffic history, so it is
+        // unaffected by how long that history is kept - a quota that forgot what a peer had moved
+        // because the rows behind it were pruned would hand the allowance out again.
+        EnsureColumn(connection, "clients", "quota_used_bytes", "INTEGER NOT NULL DEFAULT 0");
+        // Why the panel switched this peer off, so re-enabling it can say what to fix - and so a
+        // monthly allowance can put back exactly the peers it took out. NULL is a peer nobody
+        // automatic touched, which includes every peer an operator disabled by hand.
+        EnsureColumn(connection, "clients", "disabled_by", "TEXT NULL");
+
         // Indexed here rather than in the schema above: a clients table written before grouping
         // has no group_id while that runs, and an index on a column that does not exist yet is
         // an error that stops the panel from opening an older database at all.

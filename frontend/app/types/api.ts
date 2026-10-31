@@ -94,6 +94,22 @@ export type Client = {
    * label to an address of its own, or to nothing.
    */
   egressLabel?: string | null
+  /** When this config stops working on its own, or null for one that never does. */
+  expiresAt?: string | null
+  /** What it may carry before it is switched off, received and sent together. Null for no limit. */
+  quotaBytes?: number | null
+  /** `total` counts from when the allowance was set; `monthly` resets with the calendar month. */
+  quotaWindow: 'total' | 'monthly'
+  quotaUsedBytes: number
+  /** What is left of the allowance, never negative, or null when there is none. */
+  quotaRemaining?: number | null
+  quotaStartedAt?: string | null
+  /**
+   * Which limit switched this peer off, or null for a peer the panel did not touch - including
+   * every peer an operator disabled by hand. The difference decides what fixes it: one is a date,
+   * one is a number, and one is somebody's decision.
+   */
+  disabledBy?: 'expiry' | 'quota' | null
 }
 
 /**

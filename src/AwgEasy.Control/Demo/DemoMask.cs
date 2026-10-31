@@ -150,6 +150,10 @@ public sealed class DemoMask(
         "id", "clientId", "nodeId", "probeId", "panelId", "groupId",
         "activeNodeId", "targetNodeId", "activePanelId", "signingKeyId",
         "kind", "code", "status", "state", "role", "mode", "action", "provider", "outcome",
+        // Which limit switched a peer off, and how its allowance is counted. Status words like
+        // the rest of this line: substituting them would break the page without protecting
+        // anybody, since neither says anything about who the peer belongs to.
+        "disabledBy", "quotaWindow",
         "health", "healthSource", "window", "bucket", "backend", "recordType",
         "agentVersion", "version",
         // The name the visitor signed in with and reads in the header. Renaming it there would

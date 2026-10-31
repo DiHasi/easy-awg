@@ -328,6 +328,65 @@ public sealed class UsageHistoryTests : IDisposable
         Assert.Equal(client.Id, _clients.List().Single().Id);
     }
 
+    /// <summary>
+    /// An allowance is counted from the same difference the history is, in the same transaction,
+    /// and is kept on the peer rather than read back out of those rows - because the rows are
+    /// pruned. A quota that forgot what somebody had moved once its history aged out would hand
+    /// the allowance back every retention window.
+    /// </summary>
+    [Fact]
+    public void An_allowance_counts_what_the_traffic_history_counts()
+    {
+        var client = Client();
+        var at = new DateTimeOffset(2026, 3, 4, 10, 0, 0, TimeSpan.Zero);
+        _clients.SetLimits(client.Id, expiresAt: null, quotaBytes: 10_000, PeerQuotaWindows.Total, at);
+
+        Report("node-a", at, rx: 1_000, tx: 100);
+        Report("node-a", at.AddMinutes(5), rx: 1_600, tx: 150);
+
+        // 600 received and 50 sent since the previous reading, both against the one allowance:
+        // what a person is charged for is what they moved, in either direction.
+        Assert.Equal(650, _clients.Find(client.Id)!.Limits!.QuotaUsedBytes);
+        Assert.Equal(9_350, _clients.Find(client.Id)!.Limits!.QuotaRemaining);
+    }
+
+    /// <summary>
+    /// And nothing is written for the peers nobody limited. A fleet where no peer has an allowance
+    /// must not pay an extra update per peer every twenty seconds for a column nothing reads.
+    /// </summary>
+    [Fact]
+    public void A_peer_with_no_allowance_is_not_counted_against_one()
+    {
+        var client = Client();
+        var at = new DateTimeOffset(2026, 3, 4, 10, 0, 0, TimeSpan.Zero);
+
+        Report("node-a", at, rx: 1_000, tx: 100);
+        Report("node-a", at.AddMinutes(5), rx: 5_000, tx: 500);
+
+        Assert.Null(_clients.Find(client.Id)!.Limits);
+    }
+
+    /// <summary>
+    /// The allowance survives switching the history off, which is the point of keeping the count
+    /// on the peer: `AWG_USAGE_RETENTION_DAYS=0` is a decision about holding a record of what
+    /// people did, and it says nothing about whether their allowance should start again.
+    /// </summary>
+    [Fact]
+    public void An_allowance_is_counted_even_when_no_history_is_kept()
+    {
+        var client = Client();
+        var options = Options(retentionDays: 0);
+        var nodes = new NodeRepository(_database, options);
+        var at = new DateTimeOffset(2026, 3, 4, 10, 0, 0, TimeSpan.Zero);
+        _clients.SetLimits(client.Id, expiresAt: null, quotaBytes: 10_000, PeerQuotaWindows.Total, at);
+
+        nodes.ReplacePeerStats("node-a", [new PeerStatus(Key, at, 100, 10)], at);
+        nodes.ReplacePeerStats("node-a", [new PeerStatus(Key, at, 900, 90)], at.AddMinutes(5));
+
+        Assert.Empty(_usage.ByClient(at, at.AddHours(1)));
+        Assert.Equal(880, _clients.Find(client.Id)!.Limits!.QuotaUsedBytes);
+    }
+
     private ControlOptions Options(int retentionDays) => new(
         DatabasePath: _path,
         DefaultSubnet: "10.8.0.0/24",
