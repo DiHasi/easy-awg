@@ -12,7 +12,14 @@ awg_node_revision_lag{node="helsinki-1",node_id="..."} 2
 awg_node_report_timestamp_seconds{node="helsinki-1",node_id="..."} 1771000000
 awg_probe_reachable{probe="moscow-home",probe_id="...",node="helsinki-1",node_id="..."} 0
 awg_probe_handshake{probe="moscow-home",probe_id="...",node="helsinki-1",node_id="..."} 1
+awg_node_peers_online{node="helsinki-1",node_id="..."} 3
+awg_node_peers_idle{node="helsinki-1",node_id="..."} 2
 ```
+
+The last two are what a drain alerts on: `awg_node_peers_online` is peers handshaking through that
+node right now, `awg_node_peers_idle` is peers whose last known node it is and which are quiet.
+`awg_node_peers`, beside them, is a different number - every peer the node is configured with,
+which in a fleet is nearly the whole client list. None of the three carries a label naming a peer.
 
 ```yaml
 # prometheus.yml

@@ -9,15 +9,59 @@ public static class NodeApi
 {
     public static void MapNodes(this RouteGroupBuilder admin)
     {
-        admin.MapGet("/nodes", (NodeRepository nodes, FleetService fleet, DnsFailoverService failover, FailoverMonitor monitor) =>
+        admin.MapGet("/nodes", (
+            NodeRepository nodes,
+            FleetService fleet,
+            DnsFailoverService failover,
+            FailoverMonitor monitor,
+            PeerPresenceService presence) =>
         {
             var current = fleet.Current;
             var activeNodeId = failover.ActiveNodeId;
             var list = nodes.List();
-            var health = monitor.Assess(list, DateTimeOffset.UtcNow);
+            var now = DateTimeOffset.UtcNow;
+            var health = monitor.Assess(list, now);
+            var carrying = presence.Assess(list, now);
             return TypedResults.Ok(list
-                .Select(node => NodeResponse.From(node, current.Revision, current.IdentityRevision, activeNodeId, health[node.Id]))
+                .Select(node => NodeResponse.From(node, current.Revision, current.IdentityRevision, activeNodeId, health[node.Id], carrying.For(node.Id)))
                 .ToArray());
+        });
+
+        // Who is still on one node, which is the question nothing in the panel could answer: a
+        // running tunnel keeps the address it resolved at bring-up, so repointing the record moves
+        // the next connection and nobody who is already connected. An operator about to power a
+        // node off is asking what that costs.
+        admin.MapGet("/nodes/{id}/peers", (
+            string id,
+            NodeRepository nodes,
+            ClientRepository clients,
+            PeerPresenceService presence) =>
+        {
+            if (nodes.Find(id) is not { } node)
+            {
+                return Results.NotFound(new ApiError("node_not_found", "Node was not found."));
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            // The whole fleet, because the node a peer is on is decided by comparing every node's
+            // reading of it - not by what this one happens to have seen.
+            var carrying = presence.Assess(nodes.List(), now);
+            var byKey = clients.List().ToDictionary(client => client.PublicKey, StringComparer.Ordinal);
+
+            // Already ordered by handshake, so the peers that are online come first by arithmetic
+            // rather than by a second sort.
+            var peers = carrying.On(id)
+                .Where(peer => byKey.ContainsKey(peer.PublicKey))
+                .Select(peer => new NodePeerResponse(
+                    byKey[peer.PublicKey].Id,
+                    byKey[peer.PublicKey].Name,
+                    byKey[peer.PublicKey].Address,
+                    peer.Handshake,
+                    peer.Online))
+                .ToArray();
+
+            var load = carrying.For(id);
+            return Results.Ok(new NodePeersResponse(id, load.Online, load.Idle, node.LastSeenAt, peers));
         });
 
         // The per-node half of a node's configuration. Two kinds of field in one request, and the
@@ -36,6 +80,7 @@ public static class NodeApi
             FleetService fleet,
             DnsFailoverService failover,
             FailoverMonitor monitor,
+            PeerPresenceService presence,
             EventLog events,
             HttpContext context) =>
         {
@@ -89,9 +134,16 @@ public static class NodeApi
             }
 
             var node = nodes.Find(id)!;
-            var health = monitor.Assess([node], DateTimeOffset.UtcNow);
+            var now = DateTimeOffset.UtcNow;
+            var health = monitor.Assess([node], now);
             var current = fleet.Current;
-            return Results.Ok(NodeResponse.From(node, current.Revision, current.IdentityRevision, failover.ActiveNodeId, health[node.Id]));
+            return Results.Ok(NodeResponse.From(
+                node,
+                current.Revision,
+                current.IdentityRevision,
+                failover.ActiveNodeId,
+                health[node.Id],
+                presence.Assess(nodes.List(), now).For(node.Id)));
         });
 
         // Which source addresses this node hands out, and what they are called. Both halves are
@@ -107,6 +159,7 @@ public static class NodeApi
             FleetService fleet,
             DnsFailoverService failover,
             FailoverMonitor monitor,
+            PeerPresenceService presence,
             EventLog events,
             HttpContext context) =>
         {
@@ -138,9 +191,16 @@ public static class NodeApi
             }
 
             var updated = nodes.Find(id)!;
-            var state = monitor.Assess([updated], DateTimeOffset.UtcNow);
+            var now = DateTimeOffset.UtcNow;
+            var state = monitor.Assess([updated], now);
             var fleetState = fleet.Current;
-            return Results.Ok(NodeResponse.From(updated, fleetState.Revision, fleetState.IdentityRevision, failover.ActiveNodeId, state[updated.Id]));
+            return Results.Ok(NodeResponse.From(
+                updated,
+                fleetState.Revision,
+                fleetState.IdentityRevision,
+                failover.ActiveNodeId,
+                state[updated.Id],
+                presence.Assess(nodes.List(), now).For(updated.Id)));
         });
 
         // Not a fleet change either: which node automatic failover prefers decides nothing any
@@ -152,6 +212,7 @@ public static class NodeApi
             FleetService fleet,
             DnsFailoverService failover,
             FailoverMonitor monitor,
+            PeerPresenceService presence,
             EventLog events,
             HttpContext context) =>
         {
@@ -174,9 +235,16 @@ public static class NodeApi
                 nodeId: id);
 
             var node = nodes.Find(id)!;
-            var health = monitor.Assess([node], DateTimeOffset.UtcNow);
+            var now = DateTimeOffset.UtcNow;
+            var health = monitor.Assess([node], now);
             var current = fleet.Current;
-            return Results.Ok(NodeResponse.From(node, current.Revision, current.IdentityRevision, failover.ActiveNodeId, health[node.Id]));
+            return Results.Ok(NodeResponse.From(
+                node,
+                current.Revision,
+                current.IdentityRevision,
+                failover.ActiveNodeId,
+                health[node.Id],
+                presence.Assess(nodes.List(), now).For(node.Id)));
         });
 
         // Manual failover. Deliberately not a fleet change: the record every client config already

@@ -203,6 +203,30 @@ obfuscation profile answer at a different address. Nothing is reissued and no no
 anything, so `POST /nodes/{id}/activate` deliberately does not bump the revision. If you ever find
 yourself bumping it there, the model has drifted.
 
+**Switching the record moves the next connection and nobody who is already connected, so the
+panel has to say who that is.** A tunnel resolves its endpoint once, as it comes up, and then holds
+the address it got - so a node an operator has switched away from goes on carrying people for as
+long as their clients keep running, and nothing in the protocol will move them. `PeerPresence` is
+the one rule that answers it, pure like `NodeHealthEvaluator`, and several readers depend on it
+agreeing with itself: the count on a node's card, the list behind it, the node named in a peer's
+row, and `online` on the peer list. Four places disagreeing about the same peer on the same page
+would be worse than none of them, which is why the three-minute window lives there as a constant
+and not in each of them - and why it is not a setting: it is a claim about when AmneziaWG rekeys,
+and a window somebody shortened would have the drain count call a node empty while people are on
+it.
+
+A peer belongs to **exactly one** node, the one that saw its newest handshake, so the counts
+partition the peers that are online and the numbers across the fleet add up to the people who are
+connected - the arithmetic an operator does while draining. Equal handshakes are broken on the node
+id, because `ReplacePeerStats` deletes and re-inserts a node's rows on every report and without a
+tie-break the winner is whichever row the scan read first: the node beside a peer would flip
+between two polls. Probes are excluded by construction (`ClientRepository.ServedPublicKeys`): a
+probe is a peer on every node and handshakes with all of them, so counting one shows every node
+permanently occupied, which is the one way to get this badly wrong. And the evidence is a handshake
+and nothing stronger - a peer with no traffic and no keepalive makes none at all, so the idle
+number is a ceiling on who would notice rather than a count of them, and a node nothing has been
+heard from reads zero because nothing vouches for anybody, not because it is empty.
+
 **A node below the identity revision is not a failover target, manual or automatic.**
 `fleet.identity_revision` is the revision the identity last changed at, written inside
 `FleetRepository.Rotate` in the same statement as the revision itself. A node whose
@@ -767,3 +791,9 @@ never assert on a specific allocated address — assert on what the API returned
   connections: conntrack keeps the translation of the ones already established. Flushing it per
   peer would make a change immediate at the cost of dropping that person's live connections, and
   `conntrack` is not in the node image.
+- Who is on a node is read from handshakes, so it cannot distinguish a device that has gone from
+  one that is asleep: the idle count is a ceiling on who a shutdown would break. It is also only
+  as fresh as that node's last status report, and a node that has gone silent therefore reads zero
+  connected - which the card says in words, because the number alone would read as "safe to power
+  off". A peer current on two nodes at once is credited to the newer handshake, so two devices
+  sharing one config read as one.

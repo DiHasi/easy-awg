@@ -73,6 +73,7 @@ builder.Services.AddNotifications(options.Notifications);
 // Registered once and handed to the host as the same instance, so the API reads the rounds the
 // background loop actually ran rather than a second, idle monitor of its own.
 builder.Services.AddSingleton<FailoverMonitor>();
+builder.Services.AddSingleton<PeerPresenceService>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<FailoverMonitor>());
 // Trims both histories on its own clock, so the status reports and probe rounds that write
 // them never carry a delete of their own.

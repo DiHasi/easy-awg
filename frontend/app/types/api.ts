@@ -115,6 +115,11 @@ export type ClientStats = {
   receivedBytes: number
   transmittedBytes: number
   online: boolean
+  /**
+   * The node that saw this peer's newest handshake - where it is right now. Resolve it against the
+   * full node list rather than the serving one: a peer still being carried by a *revoked* node is
+   * the case worth seeing, not the case worth hiding.
+   */
   nodeId?: string | null
   /** When the counters were last zeroed in the panel; null means they are lifetime totals. */
   statsResetAt?: string | null
@@ -275,6 +280,18 @@ export type Node = {
    * nobody, and the panel refuses to send traffic there at all.
    */
   onCurrentIdentity: boolean
+  /**
+   * Peers whose newest handshake in the fleet was on this node and is current. As old as
+   * `lastSeenAt`: a silent node reads zero because nothing vouches for anybody, not because it is
+   * empty.
+   */
+  peersOnline: number
+  /**
+   * Peers whose last known node is this one and which are not handshaking now. These are the ones
+   * a shutdown breaks quietly - a phone in a pocket makes no handshakes, and wakes up pointed at
+   * the address it resolved when its tunnel came up.
+   */
+  peersIdle: number
   /** Which address this node hands out by default, and what the others are called. */
   egressPlan: NodeEgressPlan
   /** Every address the agent last reported on its egress interface. Empty until it has said. */
@@ -326,6 +343,24 @@ export type NodeSettings = {
   endpointHost: string | null
   egressInterface: string | null
   mtu: number | null
+}
+
+/** Who one node is carrying, and who would notice if it went away. */
+export type NodePeers = {
+  nodeId: string
+  online: number
+  idle: number
+  /** That node's last status report. The whole answer is as old as this. */
+  evidenceAt?: string | null
+  peers: NodePeer[]
+}
+
+export type NodePeer = {
+  id: string
+  name: string
+  address: string
+  latestHandshakeAt?: string | null
+  online: boolean
 }
 
 export type NodeHealth = 'healthy' | 'blocked' | 'down' | 'silent' | 'unknown' | 'revoked'

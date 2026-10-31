@@ -27,12 +27,18 @@ withDefaults(defineProps<{
    * the one thing about it worth a colour.
    */
   egressHonoured?: boolean
+  /**
+   * The node this peer's newest handshake came through, already resolved. Null when no node has
+   * ever seen it.
+   */
+  nodeName?: string | null
 }>(), {
   busy: false,
   arrangeable: false,
   carried: false,
   dropBefore: false,
-  egressHonoured: true
+  egressHonoured: true,
+  nodeName: null
 })
 
 const emit = defineEmits<{
@@ -101,8 +107,8 @@ const emit = defineEmits<{
             via {{ client.egressLabel }}
           </UBadge>
         </p>
-        <p class="font-mono text-xs text-muted">
-          {{ client.address }}<span class="lg:hidden"> · {{ handshake }}</span>
+        <p class="truncate font-mono text-xs text-muted">
+          {{ client.address }}<span v-if="nodeName"> · on {{ nodeName }}</span><span class="lg:hidden"> · {{ handshake }}</span>
         </p>
         <!-- The traffic columns do not fit on a phone, so the numbers move here and open the
              full picture on a tap. -->

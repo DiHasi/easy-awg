@@ -142,6 +142,49 @@ public class MetricsEndpointTests(ControlPlaneFixture fixture) : FleetScenario(f
     }
 
     /// <summary>
+    /// The two series an operator draining a node alerts on, and the reason the third one beside
+    /// them cannot be reused: it counts the peers a node is configured with, which in a fleet is
+    /// nearly the whole client list.
+    /// </summary>
+    [Fact]
+    public async Task The_peers_a_node_is_carrying_are_exported_apart_from_the_peers_it_is_configured_with()
+    {
+        var admin = await AdminAsync();
+        var created = await admin.PostAsJsonAsync("/api/clients", new CreateClientRequest("metrics-carried", null));
+        created.EnsureSuccessStatusCode();
+        var peer = (await created.Content.ReadFromJsonAsync<ClientResponse>())!;
+
+        var node = await NodeAsync(admin, "metrics-carrying", "203.0.113.66");
+        var report = new NodeStatusReport(
+            AppliedRevision: 0,
+            InterfaceUp: true,
+            Backend: "test",
+            AgentVersion: "test/1.0",
+            ReportedAt: DateTimeOffset.UtcNow,
+            Peers: [new PeerStatus(peer.PublicKey, DateTimeOffset.UtcNow.AddSeconds(-10), 10, 10)],
+            Metrics: null,
+            LastError: null,
+            BundleSchemaVersion: DesiredStateBundle.CurrentSchemaVersion,
+            PublicIp: node.PublicIp);
+
+        (await node.Client.SendAsync(node.Agent.SignedRequest(
+            HttpMethod.Post,
+            $"/api/v1/agents/{node.Id}/status",
+            JsonContent.Create(report)))).EnsureSuccessStatusCode();
+
+        var scrape = await ScrapeAsync();
+        var labels = $"{{node=\"{node.Name}\",node_id=\"{node.Id}\"}}";
+
+        Assert.Contains($"awg_node_peers_online{labels} 1", scrape, StringComparison.Ordinal);
+        Assert.Contains($"awg_node_peers_idle{labels} 0", scrape, StringComparison.Ordinal);
+
+        // Counts of people, never a label naming one.
+        Assert.DoesNotContain("metrics-carried", scrape, StringComparison.Ordinal);
+        Assert.DoesNotContain(peer.PublicKey, scrape, StringComparison.Ordinal);
+        Assert.DoesNotContain(peer.Address, scrape, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// And neither are the spare ones. A node that hands out several addresses has several a
     /// blocker would want, and an exported label would put the operator's reason for each of them
     /// into every copy of the scrape as well.

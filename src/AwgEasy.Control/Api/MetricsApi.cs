@@ -44,7 +44,8 @@ public static class MetricsApi
             NodeRepository nodes,
             ClientRepository clients,
             ProbeRepository probes,
-            FailoverMonitor monitor) =>
+            FailoverMonitor monitor,
+            PeerPresenceService presence) =>
         {
             if (!options.Metrics.IsEnabled)
             {
@@ -60,7 +61,7 @@ public static class MetricsApi
                     statusCode: StatusCodes.Status401Unauthorized);
             }
 
-            return Results.Text(Render(fleet, fleetRepository, nodes, clients, probes, monitor), ContentType);
+            return Results.Text(Render(fleet, fleetRepository, nodes, clients, probes, monitor, presence), ContentType);
         }).AllowAnonymous();
     }
 
@@ -88,13 +89,15 @@ public static class MetricsApi
         NodeRepository nodes,
         ClientRepository clients,
         ProbeRepository probes,
-        FailoverMonitor monitor)
+        FailoverMonitor monitor,
+        PeerPresenceService presence)
     {
         var now = DateTimeOffset.UtcNow;
         var current = fleet.Current;
         var fleetNodes = nodes.List();
         var health = monitor.Assess(fleetNodes, now);
         var traffic = nodes.AggregateByNode();
+        var carrying = presence.Assess(fleetNodes, now);
         var peers = clients.List();
         var observations = probes.Observations(includeRevoked: true).ToLookup(observation => observation.ProbeId, StringComparer.Ordinal);
         var activeNodeId = fleetRepository.FindActiveNode().NodeId;
@@ -147,7 +150,16 @@ public static class MetricsApi
         Gauge(text, "awg_node_report_timestamp_seconds", "When the agent last reported. 0 before its first report.", fleetNodes, node => Seconds(node.LastSeenAt));
         Gauge(text, "awg_node_probes_reachable", "Probes that got traffic through to this node in their latest round.", fleetNodes, node => health[node.Id].ProbesReachable);
         Gauge(text, "awg_node_probes_reporting", "Probes whose latest result about this node still counts.", fleetNodes, node => health[node.Id].ProbesReporting);
-        Gauge(text, "awg_node_peers", "Peers the node last reported carrying.", fleetNodes, node => traffic.GetValueOrDefault(node.Id).Peers);
+        // Three peer counts that mean three different things, which is why the help strings have
+        // to be exact: this one is every peer the node is configured with, which in a fleet is
+        // nearly the whole client list - every node carries every peer, probes included.
+        Gauge(text, "awg_node_peers", "Peers configured on the node, as it last reported them.", fleetNodes, node => traffic.GetValueOrDefault(node.Id).Peers);
+
+        // The two an operator draining a node alerts on. Counts of people, never a label naming
+        // one: a per-peer series would put "who" into a store that is federated and backed up far
+        // more casually than this database.
+        Gauge(text, "awg_node_peers_online", "Peers handshaking through this node right now.", fleetNodes, node => carrying.For(node.Id).Online);
+        Gauge(text, "awg_node_peers_idle", "Peers whose last known node is this one and which are not handshaking now.", fleetNodes, node => carrying.For(node.Id).Idle);
 
         // Counters as the node reports them, so a reboot shows up as the reset it is - which is
         // the one reader that knows what to do with that.

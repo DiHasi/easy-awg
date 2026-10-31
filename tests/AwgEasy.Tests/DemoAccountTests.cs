@@ -184,6 +184,51 @@ public class DemoAccountTests(ControlPlaneFixture fixture) : FleetScenario(fixtu
     }
 
     /// <summary>
+    /// The list of who is on a node is a new response shape nobody told the mask about, which is
+    /// the property the mask is built to have: it is a pass over the body, so a peer named there
+    /// is masked because every peer name is in the map, not because this endpoint was remembered.
+    /// </summary>
+    [Fact]
+    public async Task Who_is_on_a_node_names_nobody()
+    {
+        var admin = await AdminAsync();
+        var created = await PeerAsync(admin, "Nadia on a node");
+        var node = await NodeAsync(admin, "demo-carrying", "203.0.113.88");
+
+        var report = new NodeStatusReport(
+            AppliedRevision: 0,
+            InterfaceUp: true,
+            Backend: "test",
+            AgentVersion: "test/1.0",
+            ReportedAt: DateTimeOffset.UtcNow,
+            Peers: [new PeerStatus(created.PublicKey, DateTimeOffset.UtcNow.AddSeconds(-10), 9, 9)],
+            Metrics: null,
+            LastError: null,
+            BundleSchemaVersion: DesiredStateBundle.CurrentSchemaVersion,
+            PublicIp: node.PublicIp);
+
+        (await node.Client.SendAsync(node.Agent.SignedRequest(
+            HttpMethod.Post,
+            $"/api/v1/agents/{node.Id}/status",
+            JsonContent.Create(report)))).EnsureSuccessStatusCode();
+
+        var demo = await DemoAsync();
+        var raw = await RawAsync(demo, $"/api/nodes/{node.Id}/peers");
+
+        Assert.DoesNotContain("Nadia on a node", raw, StringComparison.Ordinal);
+        Assert.DoesNotContain(created.Address, raw, StringComparison.Ordinal);
+
+        // What the demo is for survives: somebody is on that node, and it is the same stand-in the
+        // peer list draws.
+        var masked = (await demo.GetFromJsonAsync<NodePeersResponse>($"/api/nodes/{node.Id}/peers"))!;
+        var listed = (await demo.GetFromJsonAsync<ClientResponse[]>("/api/clients"))!.Single(entry => entry.Id == created.Id);
+
+        Assert.Equal(1, masked.Online);
+        Assert.Equal(listed.Name, Assert.Single(masked.Peers).Name);
+        Assert.Equal(created.Id, masked.Peers[0].Id);
+    }
+
+    /// <summary>
     /// The log is prose the panel wrote about peers and nodes, which is exactly where a mask that
     /// only knew about fields would leak.
     /// </summary>

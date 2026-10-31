@@ -29,6 +29,8 @@ function node(name: string, labels: EgressLabel[]): Node {
     failoverPriority: 100,
     autoFailover: true,
     onCurrentIdentity: true,
+    peersOnline: 0,
+    peersIdle: 0,
     egressPlan: { defaultAddress: null, labels },
     egressAddresses: []
   }

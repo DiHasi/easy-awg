@@ -8,7 +8,7 @@ definePageMeta({ middleware: 'auth' })
 const api = useControlApi()
 const toast = useToast()
 const confirm = useConfirm()
-const { fleet, dns, serving } = useFleetState()
+const { fleet, dns, nodes, serving } = useFleetState()
 const nodeActions = useNodeActions()
 
 const clients = ref<Client[]>([])
@@ -338,10 +338,16 @@ function openStats(client: Client) {
 }
 
 /** The node the newest handshake came through, so the modal can name where this peer is. */
-const statsNode = computed(() => {
-  const nodeId = statsClient.value ? stats.value[statsClient.value.id]?.nodeId : null
-  return nodeId ? serving.value.find(node => node.id === nodeId) ?? null : null
-})
+const statsNode = computed(() => nodeOf(statsClient.value, stats.value, nodes.value))
+
+/**
+ * Which node a peer is on, for its row. Resolved against every node rather than the serving ones:
+ * a peer still being carried by a revoked node is the case worth seeing, and a revoked node is
+ * exactly where somebody can be stranded - revoking stops configuration, not traffic.
+ */
+function nodeName(client: Client) {
+  return nodeOf(client, stats.value, nodes.value)?.name ?? null
+}
 
 function applyStats(updated: ClientStats) {
   stats.value = { ...stats.value, [updated.id]: updated }
@@ -558,6 +564,7 @@ usePolling(refresh, 10000)
         @failover="nodeActions.editFailover"
         @settings="nodeActions.editSettings"
         @egress="nodeActions.editEgress"
+        @peers="nodeActions.showPeers"
         @new-peer="openCreate()"
         @enroll="enrollOpen = true"
       />
@@ -741,6 +748,7 @@ usePolling(refresh, 10000)
             :carried="drag.isDragged('peer', client.id)"
             :drop-before="drag.isDropBefore('peer', client.id, section.key)"
             :egress-honoured="egressHonoured(client)"
+            :node-name="nodeName(client)"
             @grab="(event: PointerEvent) => drag.begin(event, 'peer', client.id, section.key)"
             @config="openConfig(client)"
             @stats="openStats(client)"

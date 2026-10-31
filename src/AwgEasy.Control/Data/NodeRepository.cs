@@ -160,11 +160,32 @@ public sealed class NodeRepository(Database database, ControlOptions options)
         return command.ExecuteNonQuery() > 0;
     }
 
+    /// <summary>
+    /// Forgetting a node takes its readings with it. Nothing else prunes them by node, and a
+    /// deleted node's rows would go on being the newest handshake anybody reported for the peers
+    /// it was carrying - placing those peers on a server that is no longer in the fleet.
+    /// </summary>
     public bool Delete(string id)
     {
         using var connection = database.Open();
-        using var command = connection.Sql("DELETE FROM nodes WHERE id = $id", ("$id", id));
-        return command.ExecuteNonQuery() > 0;
+        using var transaction = connection.BeginTransaction();
+
+        bool removed;
+        using (var command = connection.Sql("DELETE FROM nodes WHERE id = $id", ("$id", id)))
+        {
+            command.Transaction = transaction;
+            removed = command.ExecuteNonQuery() > 0;
+        }
+
+        foreach (var table in (string[])["peer_stats", "peer_stat_baselines"])
+        {
+            using var delete = connection.Sql($"DELETE FROM {table} WHERE node_id = $id", ("$id", id));
+            delete.Transaction = transaction;
+            delete.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        return removed;
     }
 
     /// <summary>
@@ -293,11 +314,18 @@ public sealed class NodeRepository(Database database, ControlOptions options)
     }
 
     /// <summary>
-    /// Aggregates counters across the fleet: a client may be connected through any node, and with
-    /// active-active it may even move between them, so the newest handshake wins and byte counters
-    /// are summed.
+    /// Every reading the fleet holds, one row per node per peer, already net of any reset.
+    ///
+    /// The per-node dimension is the whole point: which node a peer is on is a question about
+    /// which of them saw it last, and <see cref="AggregatePeerStats"/> folds that away. One scan
+    /// serves both readings, so they cannot come from two different moments.
+    ///
+    /// <c>reported_at</c> is deliberately not read: the panel stamps it with the same value it
+    /// stamps <c>nodes.last_seen_at</c> with, and re-inserts a node's rows whole on every report,
+    /// so every row of a node carries that node's own last-seen time. Whoever needs to know how
+    /// old a reading is reads it off the node.
     /// </summary>
-    public IReadOnlyDictionary<string, PeerTotals> AggregatePeerStats()
+    public IReadOnlyList<PeerStatRow> ReadPeerStats()
     {
         using var connection = database.Open();
         using var command = connection.Sql(
@@ -310,46 +338,28 @@ public sealed class NodeRepository(Database database, ControlOptions options)
             """);
         using var reader = command.ExecuteReader();
 
-        var stats = new Dictionary<string, PeerTotals>(StringComparer.Ordinal);
+        var rows = new List<PeerStatRow>();
         while (reader.Read())
         {
-            var key = reader.GetString("public_key");
-            var handshake = reader.GetTimestampOrNull("latest_handshake_at");
-            var nodeId = reader.GetString("node_id");
-            var resetAt = reader.GetTimestampOrNull("reset_at");
-            var rx = SinceReset(reader.GetInt64("received_bytes"), reader.GetInt64OrNull("base_rx"));
-            var tx = SinceReset(reader.GetInt64("transmitted_bytes"), reader.GetInt64OrNull("base_tx"));
-
-            if (stats.TryGetValue(key, out var existing))
-            {
-                var newest = AtLeastAsNew(existing.Handshake, handshake);
-                stats[key] = new PeerTotals(
-                    newest ? existing.Handshake : handshake,
-                    existing.Rx + rx,
-                    existing.Tx + tx,
-                    newest ? existing.NodeId : nodeId,
-                    AtLeastAsNew(existing.ResetAt, resetAt) ? existing.ResetAt : resetAt);
-            }
-            else
-            {
-                stats[key] = new PeerTotals(handshake, rx, tx, nodeId, resetAt);
-            }
+            rows.Add(new PeerStatRow(
+                reader.GetString("node_id"),
+                reader.GetString("public_key"),
+                reader.GetTimestampOrNull("latest_handshake_at"),
+                SinceReset(reader.GetInt64("received_bytes"), reader.GetInt64OrNull("base_rx")),
+                SinceReset(reader.GetInt64("transmitted_bytes"), reader.GetInt64OrNull("base_tx")),
+                reader.GetTimestampOrNull("reset_at")));
         }
 
-        return stats;
+        return rows;
     }
 
     /// <summary>
-    /// Null is no reading at all, which is older than any reading - never newer. Comparing two
-    /// nullable timestamps with <c>&gt;=</c> answers false in both directions when either is null,
-    /// so a node that reports a peer with no handshake would erase the handshake another node
-    /// reported, depending only on the order the scan happened to return the rows in. Every node
-    /// carries every peer, so in a fleet most nodes report most peers as never seen, and
-    /// <see cref="ReplacePeerStats"/> re-inserts a node's rows at the end of the table on every
-    /// report - which is what made the whole list flip to "never" and back between two refreshes.
+    /// Aggregates counters across the fleet: a client may be connected through any node, and with
+    /// active-active it may even move between them, so the newest handshake wins and byte counters
+    /// are summed. The fold itself lives in <see cref="PeerPresence"/>, because which node saw a
+    /// peer last is the same question asked twice.
     /// </summary>
-    private static bool AtLeastAsNew(DateTimeOffset? held, DateTimeOffset? candidate)
-        => candidate is null || (held is { } seen && seen >= candidate.Value);
+    public IReadOnlyDictionary<string, PeerTotals> AggregatePeerStats() => PeerPresence.Totals(ReadPeerStats());
 
     /// <summary>
     /// A counter below its own baseline means the device started counting again - the node
@@ -399,6 +409,17 @@ public sealed class NodeRepository(Database database, ControlOptions options)
 
 /// <summary>One node's own counters: how many peers it reported, and what they moved through it.</summary>
 public readonly record struct NodeTrafficTotals(int Peers, long Rx, long Tx);
+
+/// <summary>One node's reading of one peer, as stored and already net of any reset.</summary>
+/// <param name="Handshake">Null when this node has never seen this peer, which is most pairs:
+/// every node carries every peer.</param>
+public readonly record struct PeerStatRow(
+    string NodeId,
+    string PublicKey,
+    DateTimeOffset? Handshake,
+    long Rx,
+    long Tx,
+    DateTimeOffset? ResetAt);
 
 /// <summary>
 /// One client's counters as the whole fleet sees them, already net of any reset.

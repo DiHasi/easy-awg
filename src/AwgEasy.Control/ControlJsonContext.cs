@@ -25,6 +25,7 @@ namespace AwgEasy.Control;
 [JsonSerializable(typeof(CreateNodeRequest))]
 [JsonSerializable(typeof(UpdateNodeRequest))]
 [JsonSerializable(typeof(UpdateNodeEgressRequest))]
+[JsonSerializable(typeof(NodePeersResponse))]
 [JsonSerializable(typeof(NodeEgressPlan))]
 [JsonSerializable(typeof(ReportedEgressAddress[]))]
 [JsonSerializable(typeof(DnsStatusResponse))]

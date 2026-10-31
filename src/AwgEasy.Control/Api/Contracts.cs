@@ -204,14 +204,17 @@ public sealed record NodeResponse(
     int? Mtu,
     bool OnCurrentIdentity,
     NodeEgressPlan EgressPlan,
-    ReportedEgressAddress[] EgressAddresses)
+    ReportedEgressAddress[] EgressAddresses,
+    int PeersOnline,
+    int PeersIdle)
 {
     public static NodeResponse From(
         NodeRecord node,
         long fleetRevision,
         long identityRevision,
         string? activeNodeId,
-        NodeAssessment health)
+        NodeAssessment health,
+        NodePeerLoad peers)
         => new(
             node.Id, node.Name, node.Hostname, node.EndpointHost,
             node.PublicIp, string.Equals(node.Id, activeNodeId, StringComparison.Ordinal),
@@ -227,8 +230,34 @@ public sealed record NodeResponse(
             node.EgressInterface, node.Mtu,
             node.AppliedRevision >= identityRevision,
             NodeEgressPlan.Read(node.EgressPlan),
-            ReportedEgress.Read(node.EgressReport));
+            ReportedEgress.Read(node.EgressReport),
+            peers.Online,
+            peers.Idle);
 }
+
+/// <summary>Who one node is carrying, and who would notice if it went away.</summary>
+/// <param name="EvidenceAt">
+/// That node's last status report. The whole answer is as old as this: a node nothing has heard
+/// from reads zero online because nothing vouches for anybody, not because it is empty.
+/// </param>
+public sealed record NodePeersResponse(
+    string NodeId,
+    int Online,
+    int Idle,
+    DateTimeOffset? EvidenceAt,
+    NodePeerResponse[] Peers);
+
+/// <param name="Online">
+/// Handshaking through this node right now, by the same window the peer list calls a peer online.
+/// False is a peer whose last known node is this one and which is saying nothing - the one a
+/// shutdown breaks quietly.
+/// </param>
+public sealed record NodePeerResponse(
+    string Id,
+    string Name,
+    string Address,
+    DateTimeOffset? LatestHandshakeAt,
+    bool Online);
 
 public sealed record UpdateNodeFailoverRequest(int Priority, bool AutoFailover);
 

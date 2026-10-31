@@ -79,6 +79,31 @@ public sealed class ClientRepository(Database database)
         return Convert.ToInt64(command.ExecuteScalar()) > 0;
     }
 
+    /// <summary>
+    /// The peers a node counts as carrying somebody: people's clients, enabled.
+    ///
+    /// Probes are left out because a probe is a peer on every node by design and handshakes with
+    /// all of them, so counting one would show every node permanently occupied - the same filter
+    /// <see cref="UsageAccounting"/> makes, for the same reason. Disabled peers are left out so a
+    /// node cannot claim to carry somebody the peer list draws as off: the list already refuses to
+    /// call a disabled peer online, and a node disagreeing with it reads as a bug rather than as
+    /// the one poll interval of lag it is.
+    /// </summary>
+    public IReadOnlySet<string> ServedPublicKeys()
+    {
+        using var connection = database.Open();
+        using var command = connection.Sql("SELECT public_key FROM clients WHERE kind = 'user' AND enabled = 1");
+        using var reader = command.ExecuteReader();
+
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        while (reader.Read())
+        {
+            keys.Add(reader.GetString(0));
+        }
+
+        return keys;
+    }
+
     public IReadOnlySet<string> UsedAddresses()
     {
         using var connection = database.Open();

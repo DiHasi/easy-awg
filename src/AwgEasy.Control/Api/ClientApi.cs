@@ -275,17 +275,19 @@ public static class ClientApi
         });
     }
 
-    /// <summary>A peer with no handshake in three minutes is not carrying traffic: AmneziaWG rekeys
-    /// well inside that, so a longer silence means the tunnel is idle or gone.</summary>
+    /// <summary>
+    /// Whether a peer is carrying traffic is <see cref="PeerPresence"/>'s rule, not a second copy
+    /// of it here: the same window decides this, which half of a node's count a peer lands in, and
+    /// which node its row names. Three readers disagreeing about the same peer on the same page
+    /// would be worse than none of them.
+    /// </summary>
     private static ClientStatsResponse Stats(
         ClientRecord client,
         IReadOnlyDictionary<string, PeerTotals> stats,
         DateTimeOffset now)
     {
         stats.TryGetValue(client.PublicKey, out var peer);
-        var online = client.Enabled
-            && peer.Handshake.HasValue
-            && now - peer.Handshake.Value <= TimeSpan.FromMinutes(3);
+        var online = client.Enabled && PeerPresence.IsCurrent(peer.Handshake, now);
 
         return new ClientStatsResponse(client.Id, peer.Handshake, peer.Rx, peer.Tx, online, peer.NodeId, peer.ResetAt);
     }

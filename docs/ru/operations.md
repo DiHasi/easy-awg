@@ -12,7 +12,15 @@ awg_node_revision_lag{node="helsinki-1",node_id="..."} 2
 awg_node_report_timestamp_seconds{node="helsinki-1",node_id="..."} 1771000000
 awg_probe_reachable{probe="moscow-home",probe_id="...",node="helsinki-1",node_id="..."} 0
 awg_probe_handshake{probe="moscow-home",probe_id="...",node="helsinki-1",node_id="..."} 1
+awg_node_peers_online{node="helsinki-1",node_id="..."} 3
+awg_node_peers_idle{node="helsinki-1",node_id="..."} 2
 ```
+
+Последние два — то, по чему строится алерт на вывод ноды: `awg_node_peers_online` — пиры, у которых
+прямо сейчас хендшейк через эту ноду, `awg_node_peers_idle` — пиры, для которых эта нода последняя
+известная и которые молчат. Стоящий рядом `awg_node_peers` — другое число: все пиры, которые на
+ноде настроены, а это во флоте почти весь список клиентов. Ни один из трёх не несёт метки с именем
+пира.
 
 ```yaml
 # prometheus.yml

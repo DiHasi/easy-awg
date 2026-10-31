@@ -193,6 +193,7 @@ async function copyRecord() {
           @failover="nodeActions.editFailover(node)"
           @settings="nodeActions.editSettings(node)"
           @egress="nodeActions.editEgress(node)"
+          @peers="nodeActions.showPeers(node)"
         />
       </div>
     </AppCard>

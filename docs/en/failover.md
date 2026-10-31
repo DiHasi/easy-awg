@@ -33,12 +33,55 @@ error: the panel creates it.
 Without a token the button still works - it records which node is active and shows the record to
 set - and the resolver check is what confirms you made the change.
 
-Clients move over as resolvers expire the answer they were handed, so the record's TTL is the real
-speed limit. A node does not need to be reachable for this: switching away from a dead node is
-exactly the case it is for.
+A client moves over when its tunnel next resolves that name, which is not the same thing as when
+the record changes. WireGuard resolves the endpoint once, as the tunnel comes up, and then holds
+the address it was given - so the TTL is the speed limit for a client that reconnects, and a client
+that never reconnects stays where it is for as long as the old node keeps answering. Switching away
+from a node that is **down** needs nothing else: there is nothing left to hold anybody there, and
+a client whose handshakes go unanswered reconnects on its own (the desktop and mobile apps resolve
+the name again when they do; `awg-quick` on a server holds its address until the tunnel is
+restarted).
 
 If a node reports no address at all, its agent could not reach any echo service. Set `AWG_PUBLIC_IP`
 on that node to state it directly.
+
+## Draining a node
+
+Switching the record decides where the *next* connection goes. It moves nobody who is already
+connected - which is why the panel tells you who that is, on the node's own card:
+
+```
+3 connected here · 2 pointed here, silent
+```
+
+**Connected here** is a peer that handshaked through this node inside the last three minutes.
+Powering the node off drops those sessions, and they come back on whatever the record answers
+within a handshake retry. **Pointed here, silent** is a peer whose last handshake anywhere in the
+fleet was through this node and which is saying nothing now: a phone in a pocket, a laptop asleep.
+Those are the ones a shutdown breaks quietly - they will wake up pointed at a server that is gone
+and stay broken until their client resolves the name again. *Peers on this node* in the node's menu
+lists both groups by name.
+
+So the procedure is: repoint the record, watch **Clients connect here** move to the new node, then
+watch the old node's count fall as devices reconnect for their own reasons - a network change, a
+sleep and wake, an app restart. Power it off when what is left is small enough to accept. The
+count is what that decision costs, not a progress bar: it will not reach zero on its own while the
+node is still answering.
+
+Three limits are worth knowing, because the number is evidence rather than a fact:
+
+- A handshake is all there is. A peer that sends nothing and has no persistent keepalive produces
+  none at all, so the silent number is a ceiling on who would notice and not a count of them.
+- The whole answer is as old as that node's last status report. A node nothing has been heard from
+  reads zero connected because nothing vouches for anybody - not because it is empty, and the line
+  says so.
+- A peer is credited to one node, the one that saw its newest handshake, so the numbers across the
+  fleet add up to the people who are connected. Two devices sharing one config on two nodes
+  therefore read as one.
+
+A revoked node is the sharpest case. Revoking stops configuration reaching it, not traffic leaving
+through it, which is what the warning after a [rotation](panel.md#settings) is about - and its card
+still carries the count, so that warning has a number behind it.
 
 ## Automatic failover and probes
 

@@ -25,9 +25,14 @@ const emit = defineEmits<{
   failover: []
   settings: []
   egress: []
+  peers: []
 }>()
 
 const state = computed(() => describeNode(props.node))
+
+/** What this node is carrying. Shown whatever else is true of it, revoked included: revoking
+ * stops configuration, not traffic, so a revoked node with people on it is the headline. */
+const load = computed(() => describePeerLoad(props.node))
 
 const endpoint = computed(() => {
   if (!props.node.publicIp) {
@@ -65,6 +70,7 @@ const menu = computed(() => {
   const groups: DropdownMenuItem[][] = []
   if (!props.node.revoked) {
     groups.push([
+      { label: 'Peers on this node', icon: 'i-lucide-users', onSelect: () => emit('peers') },
       { label: 'Node settings', icon: 'i-lucide-settings-2', onSelect: () => emit('settings') },
       { label: 'Egress addresses', icon: 'i-lucide-arrow-up-right', onSelect: () => emit('egress') },
       { label: 'Failover settings', icon: 'i-lucide-route', onSelect: () => emit('failover') }
@@ -186,6 +192,28 @@ const menu = computed(() => {
     >
       {{ node.lastError }}
     </p>
+
+    <!--
+      Outside the `detail` grid on purpose: that grid is only rendered on the nodes page, and the
+      overview graph - where an operator stands while they move traffic around - is exactly where
+      this number is needed.
+    -->
+    <component
+      :is="load.peers > 0 ? 'button' : 'p'"
+      class="mt-2 flex items-center gap-1.5 text-left text-xs"
+      :class="[
+        load.tone === 'warning' ? 'text-warning' : 'text-muted',
+        load.peers > 0 ? 'hover:underline' : ''
+      ]"
+      :type="load.peers > 0 ? 'button' : undefined"
+      @click="load.peers > 0 && emit('peers')"
+    >
+      <UIcon
+        name="i-lucide-users"
+        class="size-3.5 shrink-0"
+      />
+      <span>{{ load.text }}</span>
+    </component>
 
     <dl
       v-if="detail"

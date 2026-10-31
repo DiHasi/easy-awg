@@ -1,5 +1,6 @@
 import NodeEgressModal from '~/components/NodeEgressModal.vue'
 import NodeFailoverModal from '~/components/NodeFailoverModal.vue'
+import NodePeersModal from '~/components/NodePeersModal.vue'
 import NodeSettingsModal from '~/components/NodeSettingsModal.vue'
 import type { DnsStatus, Node } from '~/types/api'
 
@@ -15,6 +16,7 @@ export function useNodeActions() {
   const failoverDialog = overlay.create(NodeFailoverModal)
   const settingsDialog = overlay.create(NodeSettingsModal)
   const egressDialog = overlay.create(NodeEgressModal)
+  const peersDialog = overlay.create(NodePeersModal)
   const { dns, refresh } = useFleetState()
 
   const busyId = ref<string | null>(null)
@@ -35,7 +37,11 @@ export function useNodeActions() {
     }
 
     const record = dns.value ? `${dns.value.recordName} ${dns.value.recordType}` : 'the failover record'
-    const ttl = dns.value ? ` Clients move over as resolvers expire the old answer, within ${dns.value.ttl} s.` : ''
+    // What an operator expects here is that clients follow the record. Half of them do: a tunnel
+    // resolves its endpoint once, as it comes up, so only a client that reconnects moves at all.
+    const ttl = dns.value
+      ? ` A client that reconnects follows within ${dns.value.ttl} s; one whose tunnel is already up keeps the address it resolved until it does.`
+      : ''
     const confirmed = await confirm({
       title: `Make ${node.name} active?`,
       description: `${record} will point at ${node.publicIp}.${ttl} No client config is reissued.`,
@@ -137,5 +143,10 @@ export function useNodeActions() {
     }
   }
 
-  return { busyId, activate, revoke, remove, editFailover, editSettings, editEgress }
+  /** Read-only, so nothing to refresh afterwards. */
+  async function showPeers(node: Node) {
+    await peersDialog.open({ node })
+  }
+
+  return { busyId, activate, revoke, remove, editFailover, editSettings, editEgress, showPeers }
 }

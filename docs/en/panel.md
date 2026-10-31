@@ -19,6 +19,10 @@ traffic and handshake data is aggregated across every node, per peer, and the co
 from the panel: the kernel will not reset a peer counter without tearing the peer down, so the
 panel remembers where the counter stood and reports the difference.
 
+Each row names the node that peer is on, beside its address, taken from the newest handshake any
+node in the fleet reported for it. A peer still being carried by a revoked node says so — the one
+case where the panel has cut a node off and people are on it anyway.
+
 A share link shows only the QR code, the config and a link to the AmneziaWG build for whatever
 device opened it — never the name the peer is filed under here.
 
@@ -65,6 +69,11 @@ the choice back to the kernel. Saving
 either half advances the fleet revision, so every node re-applies its configuration: no interface
 is taken down, no config is reissued, and a connection already open keeps the address it was made
 with.
+
+Each card also says what that node is carrying — how many peers handshaked through it just now,
+and how many were last seen there and have gone quiet — with *Peers on this node* in its menu
+listing both by name. That is the number to read before switching a node off; what it means, and
+what it cannot tell you, is under [draining a node](failover.md#draining-a-node).
 
 Below the cards: how each node has stood over time and what each probe saw of it, automatic
 failover, the panel pair, and the probes.
