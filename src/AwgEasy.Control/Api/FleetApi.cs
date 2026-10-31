@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using AwgEasy.Contracts;
 
 namespace AwgEasy.Control;
@@ -90,6 +92,52 @@ public static class FleetApi
             return Results.Ok(result);
         });
 
+        // The panel handing over a copy of itself. A GET because it is a download, and the one
+        // GET in the panel that is refused outright to a demo session rather than masked: what
+        // comes out is the fleet private key and every client's, in plaintext, and a response
+        // whose secrets happened not to be in the mask's substitution table would be a leak
+        // rather than a refusal. The demo guard names this path for that reason.
+        admin.MapGet("/fleet/export", (FleetBackupService backups, HttpContext context) =>
+        {
+            var backup = backups.Export(context.User.Identity?.Name);
+            var stamp = backup.CreatedAt.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+
+            // Named after the fleet and the moment, because the one thing an operator has to be
+            // able to do with a drawer full of these is tell them apart - and downloaded as an
+            // opaque stream rather than application/json so a browser saves it instead of
+            // drawing it on screen.
+            return Results.File(
+                JsonSerializer.SerializeToUtf8Bytes(backup, ControlJsonContext.Default.FleetBackupFile),
+                "application/octet-stream",
+                $"awg-panel-{Sanitize(backup.EndpointHost)}-{stamp}.json");
+        });
+
+        // And the way back. Wholesale: nothing is merged, because a half-restored panel holds one
+        // fleet's identity and another fleet's peers. Posted as the file's own bytes like the
+        // legacy import, with `replace` meaning the same thing it means there.
+        admin.MapPost("/fleet/restore", async Task<IResult> (
+            HttpRequest request,
+            FleetBackupService backups,
+            HttpContext context) =>
+        {
+            var replace = request.Query["replace"] == "true";
+
+            FleetBackupFile? backup;
+            try
+            {
+                backup = await JsonSerializer.DeserializeAsync(request.Body, ControlJsonContext.Default.FleetBackupFile);
+            }
+            catch (JsonException)
+            {
+                // Said as a refusal rather than a 500: an operator who picked the wrong file in a
+                // bad week needs to be told which, not shown a stack trace.
+                return Results.BadRequest(new ApiError("backup_unreadable", "That file is not JSON this panel can read."));
+            }
+
+            var (result, error) = backups.Restore(backup, replace, context.User.Identity?.Name);
+            return result is null ? Results.BadRequest(error) : Results.Ok(result);
+        });
+
         // Generated here rather than in the browser so key material keeps coming from one place,
         // the same `awg` the fleet identity comes from.
         admin.MapPost("/fleet/header-protection-key", (IAwgKeyGenerator keys)
@@ -106,5 +154,13 @@ public static class FleetApi
             var (result, error) = importer.Import(json, replace);
             return result is null ? Results.BadRequest(error) : Results.Ok(result);
         });
+    }
+
+    /// <summary>A filename an operator can keep in a folder: the endpoint host, with anything a
+    /// filesystem would argue about replaced.</summary>
+    private static string Sanitize(string host)
+    {
+        var safe = new string(host.Select(c => char.IsLetterOrDigit(c) || c is '-' or '.' ? c : '-').ToArray()).Trim('-', '.');
+        return string.IsNullOrWhiteSpace(safe) ? "fleet" : safe;
     }
 }

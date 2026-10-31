@@ -542,6 +542,22 @@ export type ImportResult = {
   warnings: string[]
 }
 
+/**
+ * What a restore put back. `peersReplaced` is what this panel held before and no longer does -
+ * zero on the fresh panel a restore is normally run on, and the first thing to read on any other.
+ */
+export type FleetRestore = {
+  generation: number
+  revision: number
+  peersRestored: number
+  nodesRestored: number
+  probesRestored: number
+  operatorsRestored: number
+  peersReplaced: number
+  panelTerm: number
+  warning: string
+}
+
 /** How one panel of a pair reads at a glance. A short vocabulary on purpose. */
 export type PanelState = 'active' | 'replicating' | 'never_synced' | 'silent' | 'revoked'
 

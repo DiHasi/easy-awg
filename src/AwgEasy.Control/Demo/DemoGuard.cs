@@ -98,6 +98,24 @@ public static class DemoGuard
                 return;
             }
 
+            // The panel's own export, which is the one read here that is refused rather than
+            // masked. Everything else a demo session reads is a description of the fleet, and the
+            // mask is built from the panel's own tables so a field nobody thought about still
+            // comes out masked. This is not a description: it is the database, carrying the fleet
+            // private key and every client's. A secret is not a name - there is nothing to map it
+            // to and nothing to recognize it by - so a masked export would be a real key pair
+            // with the names changed, which is the whole of what matters leaking in the one
+            // response that looked like a read.
+            if (path.StartsWith("/api/fleet/export", StringComparison.OrdinalIgnoreCase))
+            {
+                await RefuseAsync(context, new ApiError(
+                    "demo_read_only",
+                    "An export is the panel's database, private keys included, so it is not served to a demo "
+                    + "session - there is no way to mask a key pair, only to hand it over."));
+
+                return;
+            }
+
             // The one read whose body is not JSON. It renders its own config from stand-in
             // material, so there is nothing here to rewrite - and a config that had been
             // scrubbed line by line afterwards would be a worse answer than one that was never

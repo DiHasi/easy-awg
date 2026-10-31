@@ -82,6 +82,10 @@ builder.Services.AddSingleton<ShareRepository>();
 builder.Services.AddSingleton<IAwgKeyGenerator, AwgToolKeyGenerator>();
 builder.Services.AddSingleton<FleetService>();
 builder.Services.AddSingleton<FleetRotationService>();
+// The panel handing over a copy of itself, and the way back from one. Built from the same
+// snapshot a standby replicates: "what the fleet runs on" is a line the panel already draws, and
+// a backup that drew it again would be a second answer to drift from the first.
+builder.Services.AddSingleton<FleetBackupService>();
 builder.Services.AddSingleton<AdminAccounts>();
 // How many wrong passwords the sign-in endpoint will look at. In memory, so a singleton is the
 // whole of it: the counters are this process's, which is what keeps a lockout from outliving a

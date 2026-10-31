@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Admin, Fleet, FleetRotation, GeneratedKey, ImportResult, ServerObfuscationProfile } from '~/types/api'
+import type { Admin, Fleet, FleetRestore, FleetRotation, GeneratedKey, ImportResult, ServerObfuscationProfile } from '~/types/api'
 
 definePageMeta({ middleware: 'auth' })
 
@@ -324,6 +324,100 @@ async function saveObfuscation() {
     })
   } finally {
     saving.value = false
+  }
+}
+
+const exporting = ref(false)
+const restoring = ref(false)
+const restoreResult = ref<FleetRestore | null>(null)
+const replaceOnRestore = ref(false)
+
+/**
+ * The panel handing over a copy of itself. Downloaded through fetch rather than a plain link so
+ * the session cookie goes with it and a failure can be shown as a failure, and the filename the
+ * panel chose is kept: it names the fleet and the moment, which is the only way a drawer full of
+ * these can be told apart.
+ */
+async function exportPanel() {
+  exporting.value = true
+
+  try {
+    const response = await fetch(api.url('/fleet/export'), { credentials: 'include' })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    const suggested = /filename="?([^";]+)"?/.exec(response.headers.get('content-disposition') ?? '')?.[1]
+    const url = URL.createObjectURL(await response.blob())
+    const link = document.createElement('a')
+    link.href = url
+    link.download = suggested ?? 'awg-panel-export.json'
+    link.click()
+    URL.revokeObjectURL(url)
+
+    toast.add({
+      title: 'Export downloaded',
+      description: 'It carries the fleet private key and every client key in plaintext. Keep it where you would keep the panel’s own disk.',
+      color: 'success',
+      icon: 'i-lucide-download'
+    })
+  } catch (error) {
+    failed('Could not export the panel')(error)
+  } finally {
+    exporting.value = false
+  }
+}
+
+/**
+ * And the way back. Behind a confirmation because it is wholesale: nothing is merged, so running
+ * one on a panel that is already serving replaces that fleet and every config it ever issued.
+ */
+async function restorePanel(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) {
+    return
+  }
+
+  input.value = ''
+
+  const peers = fleet.value?.clientsCount ?? 0
+  const ok = await confirm({
+    title: 'Restore this panel from the export?',
+    description: peers > 0
+      ? `This panel holds ${peers} peer(s) right now. A restore replaces them with whatever is in the file, and every config this panel issued stops working at once.`
+      : 'The fleet identity, the peers and their keys, the nodes and the operators all come from the file. The agents reconnect on their next poll.',
+    confirmLabel: 'Restore',
+    danger: true
+  })
+
+  if (!ok) {
+    return
+  }
+
+  restoring.value = true
+  restoreResult.value = null
+
+  try {
+    const text = await file.text()
+    restoreResult.value = await api.postRaw<FleetRestore>(
+      `/fleet/restore?replace=${replaceOnRestore.value || peers > 0}`,
+      text
+    )
+
+    await loadFleet()
+    await loadAdmins()
+    void refresh()
+    toast.add({
+      title: `Restored generation ${restoreResult.value.generation}`,
+      description: `${restoreResult.value.peersRestored} peer(s) and ${restoreResult.value.nodesRestored} node(s) are back.`,
+      color: 'success',
+      icon: 'i-lucide-archive-restore'
+    })
+  } catch (error) {
+    failed('Could not restore the panel')(error)
+  } finally {
+    restoring.value = false
   }
 }
 
@@ -1068,6 +1162,96 @@ onMounted(() => {
           </UButton>
         </div>
       </template>
+    </AppCard>
+
+    <AppCard
+      title="Export and restore"
+      icon="i-lucide-archive"
+      description="A copy of the panel to keep somewhere else. The one thing in this deployment that cannot be rebuilt is in it."
+    >
+      <template #actions>
+        <UButton
+          icon="i-lucide-download"
+          color="neutral"
+          variant="outline"
+          :loading="exporting"
+          @click="exportPanel"
+        >
+          Download export
+        </UButton>
+      </template>
+
+      <p class="text-sm text-muted">
+        The export holds the fleet identity, every peer with its own key pair, the groups and their
+        arrangement, each node’s own settings, the probes and the operators — everything a panel
+        publishes, and nothing it merely observed. A
+        <ULink to="/#panels">
+          standby
+        </ULink>
+        covers losing this host, but it follows a mistake as faithfully as anything else: a
+        rotation nobody meant to run reaches it within one poll. This is the copy that does not.
+      </p>
+
+      <UAlert
+        class="mt-4"
+        color="warning"
+        variant="subtle"
+        icon="i-lucide-triangle-alert"
+        title="It is the database, in plaintext"
+        description="The fleet private key and every client private key are in the file. Keep it exactly where you would keep this panel’s own disk — anyone holding it can stand up a server every config in the field already trusts."
+      />
+
+      <div class="mt-4 flex flex-col gap-4 border-t border-default pt-4 sm:flex-row sm:items-center sm:gap-8">
+        <USwitch
+          v-model="replaceOnRestore"
+          label="Replace what is here"
+          description="Required when this panel already has peers of its own."
+        />
+
+        <label
+          class="inline-flex w-fit cursor-pointer items-center gap-2 rounded-md border border-accented px-3 py-2 text-sm font-medium text-default transition-colors hover:bg-elevated focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary"
+          :class="restoring ? 'pointer-events-none opacity-60' : ''"
+        >
+          <UIcon
+            :name="restoring ? 'i-lucide-loader-circle' : 'i-lucide-archive-restore'"
+            class="size-4"
+            :class="restoring ? 'animate-spin' : ''"
+          />
+          {{ restoring ? 'Restoring…' : 'Restore from an export' }}
+          <input
+            type="file"
+            accept="application/json,.json"
+            class="sr-only"
+            :disabled="restoring"
+            @change="restorePanel"
+          >
+        </label>
+      </div>
+
+      <!-- Kept on the page rather than only in a toast, like a rotation: what remains to be done
+           is the part an operator reads after the panel says it worked. -->
+      <UAlert
+        v-if="restoreResult"
+        class="mt-4"
+        color="warning"
+        variant="subtle"
+        icon="i-lucide-triangle-alert"
+        :title="`Restored generation ${restoreResult.generation} at revision ${restoreResult.revision}, in charge at term ${restoreResult.panelTerm}`"
+      >
+        <template #description>
+          <p>
+            {{ restoreResult.peersRestored }} peer(s), {{ restoreResult.nodesRestored }} node(s),
+            {{ restoreResult.probesRestored }} probe(s) and {{ restoreResult.operatorsRestored }}
+            operator account(s) are back.
+            {{ restoreResult.peersReplaced > 0
+              ? `${restoreResult.peersReplaced} peer(s) this panel held before are gone.`
+              : '' }}
+          </p>
+          <p class="mt-2">
+            {{ restoreResult.warning }}
+          </p>
+        </template>
+      </UAlert>
     </AppCard>
 
     <AppCard

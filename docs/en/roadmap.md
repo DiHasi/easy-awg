@@ -6,15 +6,14 @@
 
 Phase 1 (multi-server with manual switchover) and Phase 2 (probes, blocked-vs-down detection,
 automatic failover, notifications) are done, and so is fleet identity rotation - a seized node is
-now recoverable from the panel rather than by rebuilding everything by hand. What comes next:
+now recoverable from the panel rather than by rebuilding everything by hand. So is
+[an export of the panel itself](operations.md#backing-the-panel-up), the file neither half of a
+pair could hand you, and [operator accounts](security.md#operator-accounts), so the panel's own
+password can be changed from the panel rather than in SQLite on the host. What comes next:
 
 - **Re-pinning the bundle signing key.** Rotation deliberately leaves it alone, because an agent
   that cannot verify a bundle stops converging rather than fetching a new key. Rotating it needs
   a re-pinning handshake of its own.
-- **An export of the panel itself.** [A standby](panel-pair.md) now keeps a live second copy of
-  the fleet key pair and every client's, which covers losing the panel host. What neither panel can
-  do is hand you a file to keep offline, and a replica follows a mistake as faithfully as it
-  follows anything else.
 
 Cloudflare stays the only DNS provider by choice. Another one, or a floating IP, is a second
 implementation of `IDnsRecordUpdater` and nothing else, so it can be added when a deployment

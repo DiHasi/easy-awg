@@ -157,6 +157,29 @@ public sealed record FleetRotationResponse(
 /// </summary>
 public sealed record UpdateTunnelMtuRequest(int Mtu);
 
+/// <summary>
+/// What a restore put back.
+/// </summary>
+/// <param name="PeersReplaced">How many peers this panel held before, which is the number that
+/// stopped existing. Zero on the panel a restore is normally run on - a fresh one - and the thing
+/// an operator most needs to read on any other.</param>
+/// <param name="PanelTerm">The term this panel took charge at: one above whatever the export
+/// named, so a panel the export was taken from is told it has been superseded if it is still
+/// running.</param>
+/// <param name="Warning">What a restore does not do, in the panel's own words. On the response
+/// rather than only in the page for the same reason <see cref="FleetRotationResponse.Warning"/>
+/// is: a caller driving the API has to hear it too.</param>
+public sealed record FleetRestoreResponse(
+    int Generation,
+    long Revision,
+    int PeersRestored,
+    int NodesRestored,
+    int ProbesRestored,
+    int OperatorsRestored,
+    int PeersReplaced,
+    long PanelTerm,
+    string Warning);
+
 /// <param name="PublicIp">Where this node says it is reachable, as discovered by the agent itself.</param>
 /// <param name="IsActive">True for the one node the failover DNS record currently points at.</param>
 /// <param name="Health">One of <see cref="NodeHealthStates"/>: whether clients can reach it, not just whether it runs.</param>
