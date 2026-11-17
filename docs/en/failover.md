@@ -139,8 +139,13 @@ silent or recovering, switches, and a failover that is stuck or refused. **Test*
 
 ## Availability history
 
-The node cards answer what is wrong right now. **Nodes → Availability** answers how often it has
-been: one row per node, hour by hour, over the same windows the Traffic page offers.
+**Nodes → Availability → Checks** lists individual panel assessments and probe results, newest
+first. Each row shows when the panel recorded it, the node, the source and the result. Probe
+rows also show the handshake, target address, latency and any details the probe reported.
+Filter by node or source, show issues only, or jump to checks before a local date and time.
+
+**Summary** shows one row per node over the same windows as the Traffic page. History collected
+before the check journal was added is available in Summary as hourly counts.
 
 Each bucket is coloured by the worst state that occurred in it rather than by the most common one,
 because an hour that was blocked for ten minutes is an hour worth seeing, and averaging it away is
@@ -156,8 +161,8 @@ anything from being done about it - but the history keeps no block the panel cau
 records nothing in its place: a window filtered down to the checks that went well would claim an
 uptime the evidence does not support.
 
-Below the rows, the same window **per probe**. This is the only place the panel can say *where* a
-node is blocked: a node no probe reaches and a node only the office probe reaches are different
+Below the summary rows, the same window **per probe** shows where failures were observed.
+A node no probe reaches and a node only the office probe reaches are different
 problems with different fixes. The handshake count beside it separates the two kinds of block -
 handshakes that complete with no traffic behind them are DPI or broken egress, handshakes that
 never complete are the address or the port.
@@ -165,7 +170,7 @@ never complete are the address or the port.
 ### Clearing it
 
 When the record is wrong rather than merely old, **Clear** in the card's header drops all of it, and
-the menu on a node's row drops that node's alone. A rotation no longer leaves a mark, but other
+the menu on a node's row in **Summary** drops that node's alone. A rotation no longer leaves a mark, but other
 reasons outlive it: a probe whose own uplink was down records the nodes it could not reach as
 unreachable, a node rebuilt under its old row carries the blocks of the host it no longer is, and a
 rotation made before this version left a fleet-wide notch that is still in the record. What a

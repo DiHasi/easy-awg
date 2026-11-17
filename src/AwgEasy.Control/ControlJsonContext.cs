@@ -52,6 +52,7 @@ namespace AwgEasy.Control;
 [JsonSerializable(typeof(UsageSummaryResponse))]
 [JsonSerializable(typeof(ClientUsageSeriesResponse))]
 [JsonSerializable(typeof(AvailabilitySummaryResponse))]
+[JsonSerializable(typeof(AvailabilityChecksResponse))]
 [JsonSerializable(typeof(AvailabilityResetResponse))]
 [JsonSerializable(typeof(ImportResultResponse))]
 [JsonSerializable(typeof(ClientShareResponse))]

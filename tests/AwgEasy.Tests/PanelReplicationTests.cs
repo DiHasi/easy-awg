@@ -449,6 +449,38 @@ public sealed class PanelReplicationTests
         Assert.Single(usage.Clients, entry => entry.Id == client.Id && entry.ReceivedBytes == 4_000);
     }
 
+    [Fact]
+    public async Task Individual_availability_checks_reach_the_standby_incrementally()
+    {
+        await using var pair = await PanelPair.CreateAsync();
+        using var token = await pair.ActiveAdmin.PostAsJsonAsync("/api/nodes/tokens", new CreateNodeRequest("check-node", null, null, null));
+        token.EnsureSuccessStatusCode();
+        var enrollment = (await token.Content.ReadFromJsonAsync<EnrollmentTokenResponse>())!;
+        using var agent = new TestAgent();
+        using var activeClient = pair.Active.CreateClient();
+        await agent.EnrollAsync(activeClient, enrollment.Token);
+
+        var availability = pair.Active.Services.GetRequiredService<AvailabilityRepository>();
+        var at = DateTimeOffset.UtcNow;
+        var up = new NodeAssessment(agent.NodeId!, NodeHealthStates.Healthy, "Tunnel up", NodeHealthEvaluator.AgentSource,
+            at, null, 0, 0);
+        availability.Accrue([up], at);
+        await pair.SyncAsync();
+
+        var url = $"/api/nodes/availability/checks?nodeId={agent.NodeId}";
+        var first = (await pair.StandbyAdmin.GetFromJsonAsync<AvailabilityChecksResponse>(url))!;
+        var firstCheck = Assert.Single(first.Items, check => check.CheckedAt == at);
+        Assert.Equal(NodeHealthStates.Healthy, firstCheck.Outcome);
+
+        var later = at.AddSeconds(1);
+        availability.Accrue([up with { State = NodeHealthStates.Down, Reason = "Tunnel down" }], later);
+        await pair.SyncAsync();
+
+        var second = (await pair.StandbyAdmin.GetFromJsonAsync<AvailabilityChecksResponse>(url))!;
+        Assert.Single(second.Items, check => check.Id == firstCheck.Id);
+        Assert.Equal("Tunnel down", Assert.Single(second.Items, check => check.CheckedAt == later).Detail);
+    }
+
     /// <summary>A token for one kind of thing must never enroll another: this one hands over the
     /// entire panel, and an install command pasted in the wrong place must not do that quietly.</summary>
     [Fact]

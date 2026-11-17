@@ -87,6 +87,7 @@ public sealed class DemoMask(
             ["name"] = DemoFieldKind.Person,
             ["clientName"] = DemoFieldKind.Person,
             ["nodeName"] = DemoFieldKind.NodeName,
+            ["probeName"] = DemoFieldKind.ProbeName,
             ["activeNodeName"] = DemoFieldKind.NodeName,
             ["actor"] = DemoFieldKind.Username,
 
@@ -161,7 +162,7 @@ public sealed class DemoMask(
         // the rest of this line: substituting them would break the page without protecting
         // anybody, since neither says anything about who the peer belongs to.
         "disabledBy", "quotaWindow",
-        "health", "healthSource", "window", "bucket", "backend", "recordType",
+        "health", "healthSource", "window", "bucket", "backend", "recordType", "checkedAt", "nextCursor",
         "agentVersion", "version",
         // The name the visitor signed in with and reads in the header. Renaming it there would
         // read as a bug rather than as discretion.
@@ -427,6 +428,7 @@ public sealed class DemoMask(
             {
                 DemoFieldKind.Person => pseudonyms.Person(value),
                 DemoFieldKind.NodeName => pseudonyms.NodeName(value),
+                DemoFieldKind.ProbeName => pseudonyms.ProbeName(value),
                 DemoFieldKind.EgressLabel => pseudonyms.EgressLabel(value),
                 DemoFieldKind.Username => pseudonyms.Username(value),
                 DemoFieldKind.Host => pseudonyms.Host(value),
@@ -644,6 +646,7 @@ internal enum DemoFieldKind
 {
     Person,
     NodeName,
+    ProbeName,
     EgressLabel,
     Username,
     Host,

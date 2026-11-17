@@ -53,6 +53,7 @@ public sealed class AvailabilityRepository(Database database)
         // are writing alongside it. A deferred transaction that had to upgrade mid-way is the one
         // thing busy_timeout does not retry under WAL.
         using var transaction = connection.BeginTransaction(deferred: false);
+        var recordedAt = DateTimeOffset.UtcNow;
 
         foreach (var assessment in assessments)
         {
@@ -78,7 +79,12 @@ public sealed class AvailabilityRepository(Database database)
                 ("$now", now));
 
             upsert.Transaction = transaction;
-            upsert.ExecuteNonQuery();
+            if (upsert.ExecuteNonQuery() > 0)
+            {
+                AvailabilityCheckRepository.Insert(connection, transaction, new AvailabilityCheck(
+                    Guid.NewGuid().ToString("N"), assessment.NodeId, null, at, assessment.State,
+                    assessment.Source, null, null, null, assessment.Reason, recordedAt));
+            }
         }
 
         transaction.Commit();
@@ -134,7 +140,12 @@ public sealed class AvailabilityRepository(Database database)
             ("$now", HistoryWindows.Key(at)));
 
         upsert.Transaction = transaction;
-        upsert.ExecuteNonQuery();
+        if (upsert.ExecuteNonQuery() > 0)
+        {
+            AvailabilityCheckRepository.Insert(connection, transaction, new AvailabilityCheck(
+                Guid.NewGuid().ToString("N"), result.NodeId, probeId, at, result.Outcome,
+                null, result.Address, result.Handshake, result.LatencyMs, result.Detail, DateTimeOffset.UtcNow));
+        }
     }
 
     /// <summary>
@@ -317,11 +328,7 @@ public sealed class AvailabilityRepository(Database database)
     /// inside the settling window is not recorded at all - but a record already holding one has no
     /// other way out.
     ///
-    /// None of that can be mended sample by sample - a bucket holds counts, not the rounds behind
-    /// them - so the only honest repair is to stop claiming it. Deleted rather than hidden for the
-    /// same reason: a bucket kept out of sight is still a number every share would have to decide
-    /// whether to divide by, and that distinction is already carrying "no evidence" versus "not
-    /// healthy".
+    /// Clear both the individual checks and the summary counts so that the two views agree.
     ///
     /// Panel bookkeeping throughout, like the traffic history: nothing here reaches a node, so no
     /// revision moves and no node re-applies anything.
@@ -334,10 +341,8 @@ public sealed class AvailabilityRepository(Database database)
         using var transaction = connection.BeginTransaction();
 
         var dropped = 0;
-        foreach (var table in (string[])["node_availability", "probe_availability"])
+        foreach (var table in (string[])["node_availability", "probe_availability", "availability_checks"])
         {
-            // Both tables inside the one transaction: dropping the node rows and then failing on
-            // the probe rows would leave the page still naming a block in half the vocabulary.
             using var delete = nodeId is null
                 ? connection.Sql($"DELETE FROM {table}")
                 : connection.Sql($"DELETE FROM {table} WHERE node_id = $nodeId", ("$nodeId", nodeId));
@@ -354,8 +359,16 @@ public sealed class AvailabilityRepository(Database database)
     public void ForgetProbe(string probeId)
     {
         using var connection = database.Open();
-        using var command = connection.Sql("DELETE FROM probe_availability WHERE probe_id = $probeId", ("$probeId", probeId));
+        using var command = connection.Sql(
+            """
+            DELETE FROM probe_availability WHERE probe_id = $probeId;
+            DELETE FROM availability_checks WHERE probe_id = $probeId;
+            """,
+            ("$probeId", probeId));
+        using var transaction = connection.BeginTransaction();
+        command.Transaction = transaction;
         command.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     /// <summary>
@@ -369,10 +382,15 @@ public sealed class AvailabilityRepository(Database database)
         using var transaction = connection.BeginTransaction();
 
         var dropped = 0;
-        foreach (var table in (string[])["node_availability", "probe_availability"])
+        foreach (var (table, timeColumn) in new[]
+        {
+            ("node_availability", "bucket_start"),
+            ("probe_availability", "bucket_start"),
+            ("availability_checks", "checked_at")
+        })
         {
             using var expired = connection.Sql(
-                $"DELETE FROM {table} WHERE bucket_start < $before",
+                $"DELETE FROM {table} WHERE {timeColumn} < $before",
                 ("$before", HistoryWindows.Key(before)));
 
             expired.Transaction = transaction;
@@ -383,8 +401,9 @@ public sealed class AvailabilityRepository(Database database)
             dropped += orphans.ExecuteNonQuery();
         }
 
-        using (var goneProbes = connection.Sql("DELETE FROM probe_availability WHERE probe_id NOT IN (SELECT id FROM probes)"))
+        foreach (var table in (string[])["probe_availability", "availability_checks"])
         {
+            using var goneProbes = connection.Sql($"DELETE FROM {table} WHERE probe_id NOT IN (SELECT id FROM probes)");
             goneProbes.Transaction = transaction;
             dropped += goneProbes.ExecuteNonQuery();
         }

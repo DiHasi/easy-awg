@@ -590,6 +590,27 @@ public sealed record AvailabilitySummaryResponse(
     int RetentionDays,
     DateTimeOffset? RecordingSince);
 
+/// <summary>A page of individual availability checks, newest first.</summary>
+public sealed record AvailabilityChecksResponse(
+    AvailabilityCheckResponse[] Items,
+    string? NextCursor,
+    int RetentionDays);
+
+/// <summary>One historical panel verdict or one historical result from a probe.</summary>
+public sealed record AvailabilityCheckResponse(
+    string Id,
+    DateTimeOffset CheckedAt,
+    string NodeId,
+    string NodeName,
+    string? ProbeId,
+    string? ProbeName,
+    string Outcome,
+    string? HealthSource,
+    string? Address,
+    bool? Handshake,
+    int? LatencyMs,
+    string? Detail);
+
 /// <summary>
 /// What a cleared availability history left behind.
 /// </summary>

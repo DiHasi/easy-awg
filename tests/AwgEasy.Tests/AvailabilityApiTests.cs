@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using AwgEasy.Contracts;
 using AwgEasy.Control;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace AwgEasy.Tests;
 
@@ -74,6 +75,61 @@ public class AvailabilityApiTests(ControlPlaneFixture fixture) : FleetScenario(f
         // a blocked address - and the number is what lets the page say which it was.
         Assert.Equal(1, about.Handshakes);
         Assert.Equal(0, about.Reachability);
+    }
+
+    [Fact]
+    public async Task The_journal_keeps_a_failed_probe_check_after_the_probe_recovers()
+    {
+        using var admin = await AdminAsync();
+        var node = await NodeAsync(admin, "check-history-node", "203.0.113.65");
+        var (client, probe) = await ProbeAsync(admin, "check-history-probe");
+        var failed = Result(node, ProbeOutcomes.Unreachable, handshake: true) with { Detail = "No traffic returned" };
+
+        (await ReportProbeAsync(client, probe, failed)).EnsureSuccessStatusCode();
+        (await ReportProbeAsync(client, probe, Result(node, ProbeOutcomes.Reachable))).EnsureSuccessStatusCode();
+        await EvaluateAsync(admin);
+
+        var url = $"/api/nodes/availability/checks?nodeId={node.Id}";
+        var checks = (await admin.GetFromJsonAsync<AvailabilityChecksResponse>(url))!.Items;
+        var probeChecks = checks.Where(check => check.ProbeId == probe.NodeId).ToArray();
+        var failure = Assert.Single(probeChecks, check => check.Outcome == ProbeOutcomes.Unreachable);
+        Assert.Equal(40, Assert.Single(probeChecks, check => check.Outcome == ProbeOutcomes.Reachable).LatencyMs);
+        Assert.Equal(failed.Detail, failure.Detail);
+        Assert.True(failure.Handshake);
+        Assert.Equal(node.PublicIp, failure.Address);
+        Assert.Contains(checks, check => check.ProbeId is null && check.HealthSource == NodeHealthEvaluator.ProbeSource);
+
+        var issues = (await admin.GetFromJsonAsync<AvailabilityChecksResponse>($"{url}&kind=probe&issuesOnly=true"))!.Items;
+        Assert.Equal(failure, Assert.Single(issues));
+
+        (await admin.PostAsync($"/api/nodes/{node.Id}/availability/reset", null)).EnsureSuccessStatusCode();
+        Assert.Empty((await admin.GetFromJsonAsync<AvailabilityChecksResponse>($"{url}&kind=probe"))!.Items);
+    }
+
+    [Fact]
+    public async Task Pages_do_not_skip_checks_with_the_same_timestamp()
+    {
+        using var admin = await AdminAsync();
+        var node = await NodeAsync(admin, "check-history-pagination", "203.0.113.66");
+        var availability = Fixture.Services.GetRequiredService<AvailabilityRepository>();
+        var at = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var assessment = new NodeAssessment(node.Id, NodeHealthStates.Healthy, "Tunnel up", NodeHealthEvaluator.AgentSource,
+            at, null, 0, 0);
+        for (var i = 0; i < 53; i++)
+        {
+            availability.Accrue([assessment], at);
+        }
+
+        var url = $"/api/nodes/availability/checks?nodeId={node.Id}&until={Uri.EscapeDataString(at.AddMinutes(1).ToString("O"))}";
+        var first = (await admin.GetFromJsonAsync<AvailabilityChecksResponse>(url))!;
+        Assert.Equal(50, first.Items.Length);
+        Assert.NotNull(first.NextCursor);
+
+        var second = (await admin.GetFromJsonAsync<AvailabilityChecksResponse>($"{url}&cursor={Uri.EscapeDataString(first.NextCursor)}"))!;
+        Assert.Equal(3, second.Items.Length);
+        Assert.Null(second.NextCursor);
+        Assert.Empty(first.Items.Select(check => check.Id).Intersect(second.Items.Select(check => check.Id)));
+        Assert.All(first.Items.Concat(second.Items), check => Assert.Equal(at, check.CheckedAt));
     }
 
     [Fact]

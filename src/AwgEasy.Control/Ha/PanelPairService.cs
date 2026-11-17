@@ -389,7 +389,7 @@ public sealed class PanelPairService(
         }
 
         snapshots.ApplyStream(live);
-        store.SetCursors(live.Usage.Cursor, live.NodeAvailability.Cursor, live.ProbeAvailability.Cursor);
+        store.SetCursors(live.Usage.Cursor, live.NodeAvailability.Cursor, live.ProbeAvailability.Cursor, live.AvailabilityChecks?.Cursor);
         store.RecordSync(now, appliedAt, snapshotFetch.NotModified ? null : snapshotFetch.Etag);
         context.Reload();
 

@@ -223,7 +223,10 @@ public sealed class PanelSnapshotRepository(Database database)
                     reader.GetInt32("errors"),
                     reader.GetInt32("handshakes"),
                     reader.GetTimestamp("updated_at")),
-                (rows, cursor, more) => new PanelProbeAvailabilityBatch(rows, cursor, more)));
+                (rows, cursor, more) => new PanelProbeAvailabilityBatch(rows, cursor, more)),
+            ReadHistory(connection, "availability_checks", cursors.AvailabilityChecks, batchSize,
+                AvailabilityCheckRepository.Read,
+                (rows, cursor, more) => new PanelAvailabilityCheckBatch(rows, cursor, more)));
     }
 
     /// <summary>
@@ -247,42 +250,29 @@ public sealed class PanelSnapshotRepository(Database database)
     {
         var from = cursor ?? string.Empty;
 
-        string? boundary;
-        using (var probe = connection.Sql(
-            $"SELECT updated_at FROM {table} WHERE updated_at > $from ORDER BY updated_at LIMIT 1 OFFSET $skip",
-            ("$from", from),
-            ("$skip", batchSize - 1)))
-        {
-            boundary = probe.ExecuteScalar() as string;
-        }
-
+        // Read the boundary and rows in one SQLite snapshot. A concurrent writer must not
+        // advance the returned cursor past a row this read has not actually returned.
+        var next = cursor;
         var rows = Query(
             connection,
             $"""
              SELECT * FROM {table}
               WHERE updated_at > $from
-                AND ($boundary IS NULL OR updated_at <= $boundary)
+                AND updated_at <= COALESCE((
+                    SELECT updated_at FROM {table} WHERE updated_at > $from
+                     ORDER BY updated_at LIMIT 1 OFFSET $skip
+                ), '~')
               ORDER BY updated_at
              """,
-            read,
+            reader =>
+            {
+                next = reader.GetString("updated_at");
+                return read(reader);
+            },
             ("$from", from),
-            ("$boundary", boundary)).ToArray();
+            ("$skip", batchSize - 1)).ToArray();
 
-        // The boundary is only set when at least batchSize rows were waiting, so it doubles as
-        // the "there is more" answer. Without one, this batch reached the end of the table.
-        var next = boundary ?? LastStamp(connection, table, from) ?? cursor;
-        return batch(rows, next, boundary is not null);
-    }
-
-    /// <summary>The newest stamp at or after the cursor, so a batch that emptied the table leaves
-    /// the cursor at the end rather than re-reading the last rows forever.</summary>
-    private static string? LastStamp(SqliteConnection connection, string table, string from)
-    {
-        using var command = connection.Sql(
-            $"SELECT MAX(updated_at) FROM {table} WHERE updated_at > $from",
-            ("$from", from));
-
-        return command.ExecuteScalar() as string;
+        return batch(rows, next, rows.Length >= batchSize);
     }
 
     // ------------------------------------------------------------------------ apply: the standby
@@ -692,6 +682,11 @@ public sealed class PanelSnapshotRepository(Database database)
                 ("$updatedAt", row.UpdatedAt.ToStorage()));
         }
 
+        foreach (var check in stream.AvailabilityChecks?.Rows ?? [])
+        {
+            AvailabilityCheckRepository.Insert(connection, transaction, check);
+        }
+
         transaction.Commit();
     }
 
@@ -816,10 +811,11 @@ public sealed class PanelSnapshotRepository(Database database)
 }
 
 /// <summary>Where a standby's history left off, one cursor per append-mostly table.</summary>
-public sealed record PanelStreamCursors(string? Usage, string? NodeAvailability, string? ProbeAvailability)
+public sealed record PanelStreamCursors(
+    string? Usage, string? NodeAvailability, string? ProbeAvailability, string? AvailabilityChecks = null)
 {
     public static readonly PanelStreamCursors Beginning = new(null, null, null);
 
     public static PanelStreamCursors From(PanelLocalState state)
-        => new(state.UsageCursor, state.NodeAvailabilityCursor, state.ProbeAvailabilityCursor);
+        => new(state.UsageCursor, state.NodeAvailabilityCursor, state.ProbeAvailabilityCursor, state.AvailabilityChecksCursor);
 }

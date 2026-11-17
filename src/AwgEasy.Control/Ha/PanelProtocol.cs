@@ -309,7 +309,10 @@ public sealed record PanelStream(
     PanelProbeResultRow[] ProbeResults,
     PanelUsageBatch Usage,
     PanelNodeAvailabilityBatch NodeAvailability,
-    PanelProbeAvailabilityBatch ProbeAvailability);
+    PanelProbeAvailabilityBatch ProbeAvailability,
+    PanelAvailabilityCheckBatch? AvailabilityChecks = null);
+
+public sealed record PanelAvailabilityCheckBatch(AvailabilityCheck[] Rows, string? Cursor, bool More);
 
 public sealed record PanelNodeStateRow(
     string Id,

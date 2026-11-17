@@ -77,6 +77,7 @@ builder.Services.AddSingleton<ClientGroupRepository>();
 builder.Services.AddSingleton<NodeRepository>();
 builder.Services.AddSingleton<UsageRepository>();
 builder.Services.AddSingleton<AvailabilityRepository>();
+builder.Services.AddSingleton<AvailabilityCheckRepository>();
 builder.Services.AddSingleton<EventLog>();
 builder.Services.AddSingleton<ShareRepository>();
 builder.Services.AddSingleton<IAwgKeyGenerator, AwgToolKeyGenerator>();

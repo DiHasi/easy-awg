@@ -26,6 +26,8 @@ const windows: { value: UsageWindowKey, label: string }[] = [
   { value: '90d', label: '90 days' }
 ]
 
+const view = ref<'checks' | 'summary'>('checks')
+const checks = useTemplateRef('checks')
 const span = ref<UsageWindowKey>('24h')
 const history = ref<AvailabilitySummary | null>(null)
 const loading = ref(true)
@@ -33,19 +35,34 @@ const errorMessage = ref<string | null>(null)
 const clearing = ref<string | null>(null)
 
 async function load() {
+  if (view.value !== 'summary') {
+    return
+  }
+
+  const selected = span.value
   try {
-    history.value = await api.get<AvailabilitySummary>(`/nodes/availability?window=${span.value}&offset=${utcOffsetMinutes()}`)
+    const summary = await api.get<AvailabilitySummary>(`/nodes/availability?window=${selected}&offset=${utcOffsetMinutes()}`)
+    if (selected !== span.value) {
+      return
+    }
+    history.value = summary
     errorMessage.value = null
   } catch (error) {
-    errorMessage.value = describeError(error, 'Failed to read the availability history.')
+    if (selected === span.value) {
+      errorMessage.value = describeError(error, 'Failed to read the availability history.')
+    }
   } finally {
-    loading.value = false
+    if (selected === span.value) {
+      loading.value = false
+    }
   }
 }
 
-watch(span, async () => {
-  loading.value = true
-  await load()
+watch([view, span], () => {
+  if (view.value === 'summary') {
+    loading.value = true
+    void load()
+  }
 })
 
 const recording = computed(() => (history.value?.retentionDays ?? 0) > 0)
@@ -93,8 +110,8 @@ async function clearHistory(node?: NodeAvailability) {
   const confirmed = await confirm({
     title: node ? `Clear the history for ${node.name}?` : 'Clear the whole availability history?',
     description: node
-      ? `Drops every hour recorded about ${node.name}, and what each probe saw of it. The node keeps running and its state above is unaffected; recording starts again on the next check.`
-      : 'Drops every hour recorded about every node, and what each probe saw of them. The fleet keeps running and the states above are unaffected; recording starts again on the next check.',
+      ? `Deletes recorded checks and summaries for ${node.name}. Recording starts again on the next check.`
+      : 'Deletes recorded checks and summaries for every node and probe. Recording starts again on the next check.',
     confirmLabel: 'Clear',
     danger: true
   })
@@ -107,7 +124,11 @@ async function clearHistory(node?: NodeAvailability) {
   try {
     const path = node ? `/nodes/${node.nodeId}/availability/reset` : '/nodes/availability/reset'
     const result = await api.post<AvailabilityReset>(path)
-    await load()
+    if (view.value === 'checks') {
+      await checks.value?.refresh()
+    } else {
+      await load()
+    }
     toast.add({
       title: node ? `History cleared for ${node.name}` : 'Availability history cleared',
       description: `${result.dropped} ${result.dropped === 1 ? 'row' : 'rows'} dropped. Recording starts again on the next check.`,
@@ -144,13 +165,36 @@ usePolling(load, 60000)
   <AppCard
     title="Availability"
     icon="i-lucide-activity"
-    :description="history
-      ? `How each node has stood over the last ${windows.find(option => option.value === span)?.label}`
-      : 'Reading how the fleet has stood'"
+    :description="view === 'checks'
+      ? 'Results from each probe and each panel assessment, newest first.'
+      : history
+        ? `How each node has stood over the last ${windows.find(option => option.value === span)?.label}`
+        : 'Reading how the fleet has stood'"
   >
     <template #actions>
-      <div class="flex items-center gap-2">
-        <div class="max-w-full overflow-x-auto">
+      <div class="flex flex-wrap items-center gap-2">
+        <UFieldGroup aria-label="Availability view">
+          <UButton
+            color="neutral"
+            :variant="view === 'checks' ? 'solid' : 'outline'"
+            :aria-pressed="view === 'checks'"
+            @click="view = 'checks'"
+          >
+            Checks
+          </UButton>
+          <UButton
+            color="neutral"
+            :variant="view === 'summary' ? 'solid' : 'outline'"
+            :aria-pressed="view === 'summary'"
+            @click="view = 'summary'"
+          >
+            Summary
+          </UButton>
+        </UFieldGroup>
+        <div
+          v-if="view === 'summary'"
+          class="max-w-full overflow-x-auto"
+        >
           <UFieldGroup>
             <UButton
               v-for="option in windows"
@@ -173,7 +217,7 @@ usePolling(load, 60000)
           variant="ghost"
           icon="i-lucide-eraser"
           :loading="clearing === 'fleet'"
-          :disabled="clearing !== null || rows.length === 0"
+          :disabled="clearing !== null || nodes.length === 0"
           @click="clearHistory()"
         >
           Clear
@@ -181,8 +225,13 @@ usePolling(load, 60000)
       </div>
     </template>
 
+    <AvailabilityChecks
+      v-if="view === 'checks'"
+      ref="checks"
+    />
+
     <UAlert
-      v-if="errorMessage"
+      v-else-if="errorMessage"
       class="mb-4"
       color="error"
       variant="subtle"

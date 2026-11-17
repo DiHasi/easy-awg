@@ -30,7 +30,8 @@ public sealed record PanelLocalState(
     bool Hold,
     string? UsageCursor,
     string? NodeAvailabilityCursor,
-    string? ProbeAvailabilityCursor)
+    string? ProbeAvailabilityCursor,
+    string? AvailabilityChecksCursor = null)
 {
     public bool IsActive => Role == PanelRoles.Active;
 
@@ -126,7 +127,8 @@ public sealed class PanelLocalStore(Database database)
             reader.GetBoolean("hold"),
             reader.GetStringOrNull("usage_cursor"),
             reader.GetStringOrNull("node_availability_cursor"),
-            reader.GetStringOrNull("probe_availability_cursor"));
+            reader.GetStringOrNull("probe_availability_cursor"),
+            reader.GetStringOrNull("availability_checks_cursor"));
     }
 
     /// <summary>
@@ -215,19 +217,21 @@ public sealed class PanelLocalStore(Database database)
             "UPDATE panel_local SET sync_error = $error, updated_at = $now WHERE id = 1",
             ("$error", error));
 
-    public void SetCursors(string? usage, string? nodeAvailability, string? probeAvailability)
+    public void SetCursors(string? usage, string? nodeAvailability, string? probeAvailability, string? availabilityChecks)
         => Update(
             """
             UPDATE panel_local
                SET usage_cursor              = COALESCE($usage, usage_cursor),
                    node_availability_cursor  = COALESCE($nodes, node_availability_cursor),
                    probe_availability_cursor = COALESCE($probes, probe_availability_cursor),
+                   availability_checks_cursor = COALESCE($checks, availability_checks_cursor),
                    updated_at                = $now
              WHERE id = 1
             """,
             ("$usage", usage),
             ("$nodes", nodeAvailability),
-            ("$probes", probeAvailability));
+            ("$probes", probeAvailability),
+            ("$checks", availabilityChecks));
 
     public void SetHold(bool held)
         => Update("UPDATE panel_local SET hold = $hold, updated_at = $now WHERE id = 1", ("$hold", held ? 1 : 0));

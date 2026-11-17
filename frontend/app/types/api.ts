@@ -500,6 +500,27 @@ export type AvailabilitySummary = {
   recordingSince?: string | null
 }
 
+export type AvailabilityCheck = {
+  id: string
+  checkedAt: string
+  nodeId: string
+  nodeName: string
+  probeId?: string | null
+  probeName?: string | null
+  outcome: NodeHealth | 'reachable' | 'unreachable' | 'error'
+  healthSource?: 'agent' | 'probes' | null
+  address?: string | null
+  handshake?: boolean | null
+  latencyMs?: number | null
+  detail?: string | null
+}
+
+export type AvailabilityChecks = {
+  items: AvailabilityCheck[]
+  nextCursor?: string | null
+  retentionDays: number
+}
+
 /** What clearing the availability history dropped. `nodeId` is null when the whole fleet went. */
 export type AvailabilityReset = {
   nodeId?: string | null

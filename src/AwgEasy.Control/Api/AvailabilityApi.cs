@@ -1,4 +1,6 @@
+using System.Globalization;
 using AwgEasy.Contracts;
+using Microsoft.AspNetCore.Http.HttpResults;
 
 namespace AwgEasy.Control;
 
@@ -21,6 +23,10 @@ public static class AvailabilityApi
 
     public static void MapAvailability(this RouteGroupBuilder admin)
     {
+        admin.MapGet("/nodes/availability/checks", ListChecks)
+            .WithName("ListAvailabilityChecks")
+            .WithSummary("Read individual panel assessments and probe checks");
+
         // Under /nodes because it is the nodes page asking about its own nodes. A literal segment
         // beats the {id} routes beside it, so this is not one of them.
         admin.MapGet("/nodes/availability", (
@@ -78,10 +84,7 @@ public static class AvailabilityApi
                 availability.FirstRecordedAt()));
         });
 
-        // Clearing the record, for one node or for the fleet. A POST beside the GET that reads it,
-        // because the page showing a wrong number is where an operator reaches for this, and a
-        // bucket holds counts rather than the rounds behind them - there is nothing to correct in
-        // place, and no amount of waiting takes a block that never happened back out.
+        // Clear the journal and summaries together, for one node or for the fleet.
         //
         // Panel bookkeeping, like the traffic history: no revision moves and nothing reaches a
         // node. The states on the cards are judged from current evidence either way, so clearing
@@ -123,6 +126,66 @@ public static class AvailabilityApi
 
             return Results.Ok(new AvailabilityResetResponse(id, dropped));
         });
+    }
+
+    private static Results<Ok<AvailabilityChecksResponse>, BadRequest<ApiError>> ListChecks(
+        string? nodeId,
+        string? kind,
+        bool? issuesOnly,
+        DateTimeOffset? until,
+        string? cursor,
+        AvailabilityCheckRepository checks,
+        ControlOptions options)
+    {
+        if (kind is not (null or "panel" or "probe"))
+        {
+            return TypedResults.BadRequest(new ApiError("availability_kind_invalid", "Check kind must be panel or probe."));
+        }
+
+        const int pageSize = 50;
+        var now = DateTimeOffset.UtcNow;
+        var upper = until ?? DateTimeOffset.MaxValue;
+        string? beforeId = null;
+        if (cursor is not null)
+        {
+            var parts = cursor.Split('/', 2);
+            if (parts.Length != 2
+                || !DateTimeOffset.TryParseExact(parts[0], "O", CultureInfo.InvariantCulture, DateTimeStyles.None, out var at)
+                || !Guid.TryParseExact(parts[1], "N", out _)
+                || at >= upper)
+            {
+                return TypedResults.BadRequest(new ApiError("availability_cursor_invalid", "Invalid check cursor."));
+            }
+
+            upper = at;
+            beforeId = parts[1];
+        }
+
+        var retention = options.Availability.RetentionDays;
+        if (!options.Availability.Records)
+        {
+            return TypedResults.Ok(new AvailabilityChecksResponse([], null, retention));
+        }
+
+        var rows = checks.List(now.AddDays(-retention), upper, beforeId, nodeId, kind, issuesOnly ?? false, pageSize + 1);
+        var next = rows.Count > pageSize
+            ? $"{HistoryWindows.Key(rows[pageSize - 1].Check.CheckedAt)}/{rows[pageSize - 1].Check.Id}"
+            : null;
+        var items = rows.Take(pageSize).Select(row => new AvailabilityCheckResponse(
+            row.Check.Id,
+            row.Check.CheckedAt,
+            row.Check.NodeId,
+            row.NodeName,
+            row.Check.ProbeId,
+            row.ProbeName,
+            row.Check.Outcome,
+            row.Check.Source,
+            row.Check.Address,
+            row.Check.Handshake,
+            row.Check.LatencyMs,
+            row.Check.Detail)).ToArray();
+
+        return TypedResults.Ok(new AvailabilityChecksResponse(items, next, retention));
     }
 
     private static NodeAvailabilityResponse Describe(

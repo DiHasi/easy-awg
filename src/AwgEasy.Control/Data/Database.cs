@@ -131,6 +131,7 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
         // ask, so arming it is accepting that a network split can leave two panels believing they
         // are in charge.
         EnsureColumn(connection, "fleet", "panel_failover_mode", "TEXT NOT NULL DEFAULT 'manual'");
+        EnsureColumn(connection, "panel_local", "availability_checks_cursor", "TEXT NULL");
 
         // When it changed, which the monitor needs for a different reason: for up to one probe
         // round after a rotation the probes are still carrying the previous config, so nodes that
@@ -503,6 +504,24 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             PRIMARY KEY (probe_id, node_id, bucket_start)
         );
         CREATE INDEX IF NOT EXISTS ix_probe_availability_bucket ON probe_availability (bucket_start);
+
+        CREATE TABLE IF NOT EXISTS availability_checks (
+            id         TEXT    PRIMARY KEY,
+            node_id    TEXT    NOT NULL,
+            probe_id   TEXT    NULL,
+            checked_at TEXT    NOT NULL,
+            outcome    TEXT    NOT NULL,
+            source     TEXT    NULL,
+            address    TEXT    NULL,
+            handshake  INTEGER NULL,
+            latency_ms INTEGER NULL,
+            detail     TEXT    NULL,
+            updated_at TEXT    NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_availability_checks_time ON availability_checks (checked_at, id);
+        CREATE INDEX IF NOT EXISTS ix_availability_checks_node ON availability_checks (node_id, checked_at, id);
+        CREATE INDEX IF NOT EXISTS ix_availability_checks_probe ON availability_checks (probe_id);
+        CREATE INDEX IF NOT EXISTS ix_availability_checks_updated ON availability_checks (updated_at);
 
         CREATE TABLE IF NOT EXISTS events (
             id       INTEGER PRIMARY KEY AUTOINCREMENT,
