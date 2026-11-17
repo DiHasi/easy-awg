@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using AwgEasy.Contracts;
@@ -51,10 +52,17 @@ public sealed class HandshakeProbe(NodeOptions options, TunnelTrafficCheck traff
         var clock = Stopwatch.StartNew();
         try
         {
-            var up = await ProcessRunner.TryRunAsync("awg-quick", ["up", options.InterfaceConfigPath], input: null, cancellationToken);
-            if (up is null)
+            ProcessResult up;
+            try
             {
-                return Result(target, ProbeOutcomes.Error, null, "awg-quick is not available on the probe.");
+                up = await ProcessRunner.RunAsync("awg-quick", ["up", options.InterfaceConfigPath], input: null, cancellationToken);
+            }
+            catch (Exception exception) when (ProcessRunner.IsMissingExecutable(exception))
+            {
+                var code = exception is Win32Exception native
+                    ? $" (OS error {native.NativeErrorCode.ToString(CultureInfo.InvariantCulture)})"
+                    : string.Empty;
+                return Result(target, ProbeOutcomes.Error, null, $"Could not start awg-quick{code}: {Tail(exception.Message)}");
             }
 
             if (up.ExitCode != 0)
