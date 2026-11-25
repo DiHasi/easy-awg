@@ -137,7 +137,8 @@ public sealed record PanelSnapshot(
     PanelAdminRow[] Admins,
     PanelTokenRow[] Tokens,
     PanelShareRow[] Shares,
-    PanelBaselineRow[] Baselines);
+    PanelBaselineRow[] Baselines,
+    ProbeEgressPeer[]? EgressPeers = null);
 
 /// <summary>
 /// The fleet row as it stands, including the fleet private key and the bundle signing key pair: a
@@ -310,7 +311,8 @@ public sealed record PanelStream(
     PanelUsageBatch Usage,
     PanelNodeAvailabilityBatch NodeAvailability,
     PanelProbeAvailabilityBatch ProbeAvailability,
-    PanelAvailabilityCheckBatch? AvailabilityChecks = null);
+    PanelAvailabilityCheckBatch? AvailabilityChecks = null,
+    ProbeAddressObservation[]? AddressResults = null);
 
 public sealed record PanelAvailabilityCheckBatch(AvailabilityCheck[] Rows, string? Cursor, bool More);
 
@@ -326,7 +328,8 @@ public sealed record PanelNodeStateRow(
     DateTimeOffset? LastSeenAt,
     string? LastError,
     DateTimeOffset? LastUpAt,
-    string? EgressReport = null);
+    string? EgressReport = null,
+    string? IngressReport = null);
 
 public sealed record PanelProbeStateRow(string Id, string? AgentVersion, DateTimeOffset? LastSeenAt);
 

@@ -28,6 +28,7 @@ const emit = defineEmits<{
   settings: [node: Node]
   egress: [node: Node]
   peers: [node: Node]
+  addresses: [node: Node]
   newPeer: []
   enroll: []
 }>()
@@ -314,6 +315,7 @@ async function copyRecord() {
             @settings="emit('settings', node)"
             @egress="emit('egress', node)"
             @peers="emit('peers', node)"
+            @addresses="emit('addresses', node)"
           />
         </div>
 

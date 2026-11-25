@@ -137,6 +137,36 @@ Notifications go to a webhook (`AWG_NOTIFY_WEBHOOK_URL`, a JSON POST) and/or Tel
 (`AWG_NOTIFY_TELEGRAM_BOT_TOKEN` and `AWG_NOTIFY_TELEGRAM_CHAT_ID`): nodes becoming blocked, down,
 silent or recovering, switches, and a failover that is stuck or refused. **Test** sends one.
 
+## Every entry and exit address
+
+Open **Address checks** in a node's menu, on either the Nodes page or the overview. Entries are
+the node's primary public IP plus public IPv4 addresses discovered on all its interfaces, checked
+on the fleet's AWG port. Each check completes a real handshake and fetches through the tunnel.
+An address being present on the host does not mean its provider routes inbound traffic to it.
+
+Exits are the addresses reported on the node's egress interface. Each probe gets a separate hidden
+client per node and exit, pinned to that source address in the ordinary bundle. Checks start only
+after the node acknowledges the revision containing that peer and its SNAT rule. The probe fetches
+an IP echo service through the tunnel, showing the observed source and refusing success if it
+differs from the expected address. For a host behind NAT, the expected address is the agent's
+outside observation when available; without one, the check reports the observed address without
+claiming to verify the upstream translation.
+
+Every address shows its own results per probe. `traffic flows` means at least one current probe
+passed the check; `check failed` means all usable current checks failed. Old results, probe errors,
+and an exit whose entry could not handshake read as `no current evidence`. Failures and recoveries
+produce events and use the configured notification channels. These checks do not change pins or
+choose a different entry: automatic failover still judges the node's primary public IP.
+
+Upgrade both node agents and probes to discover and check all addresses. Each probe/exit needs a
+free address in the fleet subnet; a full subnet leaves unallocated exits waiting without disturbing
+existing clients. Checks run sequentially and publish immediately. With many failing addresses a
+scan takes longer; size `AWG_PROBE_STALE_SECONDS` to cover a full scan. Configs are refreshed before
+each check so a long scan does not keep using the identity from before a rotation. Entry checks
+do not need extra peers. `AWG_PROBE_EGRESS_CHECK_URLS=none` disables exit checks and removes their
+dedicated peers on the next assignment fetch. Per-address results are latest-state diagnostics;
+the availability history continues to describe the primary path.
+
 ## Availability history
 
 **Nodes → Availability → Checks** lists individual panel assessments and probe results, newest

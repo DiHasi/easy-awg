@@ -99,6 +99,10 @@ builder.Services.AddSingleton<DemoPseudonyms>();
 builder.Services.AddSingleton<DemoMask>();
 builder.Services.AddSingleton<EnrollmentService>();
 builder.Services.AddSingleton<ProbeRepository>();
+builder.Services.AddSingleton<ProbePathRepository>();
+builder.Services.AddSingleton<ProbeAddressRepository>();
+builder.Services.AddSingleton<AddressCheckService>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<AddressCheckService>());
 builder.Services.AddSingleton<ProbeService>();
 builder.Services.AddNotifications(options.Notifications);
 // Registered once and handed to the host as the same instance, so the API reads the rounds the

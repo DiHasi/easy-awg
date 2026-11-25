@@ -16,13 +16,18 @@ namespace AwgEasy.Contracts;
 /// traffic flows. Empty checks the handshake alone, which misses the most common block.
 /// </param>
 /// <param name="TrafficTimeoutSeconds">How long each of <paramref name="CheckUrls"/> has to answer.</param>
+/// <param name="AddressTargets">Additional entry and pinned exit checks. Kept separate so older
+/// probes continue checking only the primary paths used by node health and failover.</param>
+/// <param name="EgressCheckUrls">Source-address echo services for exit checks: plain IPv4 or an ip= line.</param>
 public sealed record ProbeAssignment(
     string ProbeId,
     int IntervalSeconds,
     int HandshakeTimeoutSeconds,
     ProbeTarget[] Targets,
     string[]? CheckUrls = null,
-    int TrafficTimeoutSeconds = 0);
+    int TrafficTimeoutSeconds = 0,
+    ProbeTarget[]? AddressTargets = null,
+    string[]? EgressCheckUrls = null);
 
 /// <param name="Address">The node's public address, exactly as the panel would point DNS at it.</param>
 /// <param name="Config">
@@ -30,11 +35,15 @@ public sealed record ProbeAssignment(
 /// wire format, the node's address as the endpoint, AllowedIPs 0.0.0.0/0 and no routes. Rendered
 /// by the panel so the probe never has to agree with it on how obfuscation settings are written.
 /// </param>
+/// <param name="EgressAddress">The pinned exit being tested, or null for an entry check.</param>
+/// <param name="ExpectedEgressAddress">Expected outside source, or null when upstream NAT is unknown.</param>
 public sealed record ProbeTarget(
     string NodeId,
     string Address,
     int Port,
-    string Config);
+    string Config,
+    string? EgressAddress = null,
+    string? ExpectedEgressAddress = null);
 
 public sealed record ProbeReport(
     string AgentVersion,
@@ -50,6 +59,8 @@ public sealed record ProbeReport(
 /// <see cref="ProbeOutcomes.Unreachable"/> is the signature of DPI blocking: the handshake gets
 /// through and every packet after it is dropped. Null when the probe could not tell.
 /// </param>
+/// <param name="EgressAddress">Which exit was tested; Address still names the entry used to reach it.</param>
+/// <param name="ObservedAddress">The echo service's source-address answer, when one was received.</param>
 public sealed record ProbeResult(
     string NodeId,
     string Address,
@@ -57,7 +68,9 @@ public sealed record ProbeResult(
     DateTimeOffset CheckedAt,
     int? LatencyMs,
     string? Detail,
-    bool? Handshake = null);
+    bool? Handshake = null,
+    string? EgressAddress = null,
+    string? ObservedAddress = null);
 
 public static class ProbeOutcomes
 {

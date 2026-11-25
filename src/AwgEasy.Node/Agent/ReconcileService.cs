@@ -20,6 +20,7 @@ public sealed class ReconcileService(
     ControlPlaneClient controlPlane,
     PublicIpResolver publicIp,
     EgressAddressReporter egressAddresses,
+    EgressAddressResolver addressResolver,
     NodeHealth health,
     ILogger<ReconcileService> logger) : BackgroundService
 {
@@ -240,7 +241,8 @@ public sealed class ReconcileService(
             health.LastError,
             DesiredStateBundle.CurrentSchemaVersion,
             address,
-            egress);
+            egress,
+            await addressResolver.ListIngressAsync(cancellationToken));
 
         await controlPlane.ReportStatusAsync(identity, report, cancellationToken);
     }

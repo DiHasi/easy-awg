@@ -194,6 +194,7 @@ async function copyRecord() {
           @settings="nodeActions.editSettings(node)"
           @egress="nodeActions.editEgress(node)"
           @peers="nodeActions.showPeers(node)"
+          @addresses="nodeActions.showAddresses(node)"
         />
       </div>
     </AppCard>

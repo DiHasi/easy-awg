@@ -65,6 +65,7 @@ public sealed class NodeRepository(Database database, ControlOptions options)
                    agent_version    = $agentVersion,
                    public_ip        = COALESCE($publicIp, public_ip),
                    egress_report    = COALESCE($egressReport, egress_report),
+                   ingress_report   = COALESCE($ingressReport, ingress_report),
                    last_seen_at     = $seenAt,
                    -- What says how long a node has been failing when no probe is watching it.
                    last_up_at       = CASE WHEN $interfaceUp = 1 THEN $seenAt ELSE last_up_at END,
@@ -82,6 +83,8 @@ public sealed class NodeRepository(Database database, ControlOptions options)
             // reports null, and forgetting the address it had would drop it out of the failover
             // rotation over a hiccup at an echo service.
             ("$publicIp", report.PublicIp),
+            ("$ingressReport", report.IngressAddresses is null ? null
+                : JsonSerializer.Serialize(report.IngressAddresses, ContractsJsonContext.Default.StringArray)),
             // Same reason, and the distinction the agent is careful to make: a round that could
             // not read the interface reports null and the last known list stands, while a round
             // that read it and found nothing reports an empty one and is believed.
@@ -401,7 +404,8 @@ public sealed class NodeRepository(Database database, ControlOptions options)
                 reader.GetInt32("failover_priority"),
                 reader.GetBoolean("auto_failover"),
                 reader.GetStringOrNull("egress_plan"),
-                reader.GetStringOrNull("egress_report")));
+                reader.GetStringOrNull("egress_report"),
+                reader.GetStringOrNull("ingress_report")));
         }
 
         return nodes;

@@ -28,6 +28,7 @@ NODE_B_IP="172.28.0.12"
 # A second address for node-a, added to its container below. The whole point of per-peer egress is
 # a server that carries more than one, which no compose network hands out by itself.
 NODE_A_SPARE="172.28.0.111"
+NODE_A_PUBLIC="203.0.113.11"
 TUNNEL_PORT="51820"
 METRICS_TOKEN="e2e-scrape-token"
 # A waiting step gives up after this many seconds. Probe rounds are 10s apart and a handshake is
@@ -69,6 +70,16 @@ two_agents_converged() { [ "$(nodes_matching '.interfaceUp and .inSync')" -ge 2 
 two_nodes_probed() { [ "$(nodes_matching '.healthSource == "probes" and .probesReachable > 0')" -ge 2 ]; }
 health_is() { [ "$(node "$1" .health)" = "$2" ]; }
 node_a_reports_both_addresses() { [ "$(node node-a '.egressAddresses | length')" -ge 2 ]; }
+address_has_outcome() {
+    api GET "/api/nodes/$NODE_A_ID/addresses" \
+        | jq -e --arg direction "$1" --arg address "$2" --arg outcome "$3" \
+            '.[$direction][] | select(.address == $address and .outcome == $outcome)' >/dev/null
+}
+exit_uses_own_address() {
+    api GET "/api/nodes/$NODE_A_ID/addresses" \
+        | jq -e --arg address "$1" \
+            '.egress[] | select(.address == $address) | .probes[] | select(.fresh and .outcome == "reachable" and .observedAddress == $address)' >/dev/null
+}
 # The rule the probe's own traffic has to pass through once node-a has a default of its own.
 egress_default_carried_traffic() {
     $COMPOSE exec -T node-a iptables -t nat -L AWG_EGRESS -n -v -x \
@@ -104,7 +115,7 @@ say "building the images"
 $COMPOSE build
 
 say "starting the panel"
-$COMPOSE up -d control
+$COMPOSE up -d control echo
 wait_for "the panel to answer" panel_answers
 
 say "signing in and issuing tokens"
@@ -195,6 +206,38 @@ POSTROUTING="$($COMPOSE exec -T node-a iptables -t nat -S POSTROUTING)"
 # traffic is unpinned, so it is the default rule it has to pass through.
 wait_for "traffic through the tunnel to pass through the egress chain" egress_default_carried_traffic
 health_is node-a healthy || fail "node-a stopped serving traffic once it had a default egress address"
+
+say "checking every exit through a peer pinned to it, against the local source-address echo"
+wait_for "node-a's primary exit to pass traffic" address_has_outcome egress 172.28.0.11 reachable
+wait_for "node-a's spare exit to pass traffic" address_has_outcome egress "$NODE_A_SPARE" reachable
+exit_uses_own_address 172.28.0.11 || fail "the primary exit check left as another address"
+exit_uses_own_address "$NODE_A_SPARE" || fail "the spare exit check left as another address"
+
+say "a second public entry, routed only inside this test network"
+$COMPOSE exec -T node-a ip addr add "$NODE_A_PUBLIC/32" dev eth0
+$COMPOSE exec -T probe ip route add "$NODE_A_PUBLIC/32" via 172.28.0.11
+wait_for "the second entry to complete a handshake and carry traffic" address_has_outcome ingress "$NODE_A_PUBLIC" reachable
+wait_for "the additional exit to present its own address" address_has_outcome egress "$NODE_A_PUBLIC" reachable
+$COMPOSE exec -T probe iptables -I OUTPUT 1 -d "$NODE_A_PUBLIC" -p udp --dport "$TUNNEL_PORT" -j DROP
+wait_for "only the additional entry to fail" address_has_outcome ingress "$NODE_A_PUBLIC" unreachable
+health_is node-a healthy || fail "a failed secondary entry changed primary node health"
+$COMPOSE exec -T probe iptables -D OUTPUT -d "$NODE_A_PUBLIC" -p udp --dport "$TUNNEL_PORT" -j DROP
+wait_for "the additional entry to recover" address_has_outcome ingress "$NODE_A_PUBLIC" reachable
+
+say "breaking one exit's dedicated peer while the default path still works"
+# No default so every dedicated exit peer has its own SNAT rule, including the spare one.
+api PUT "/api/nodes/$NODE_A_ID/egress" \
+    -d '{"defaultAddress":null,"labels":[{"address":"172.28.0.11","label":"home"}]}' >/dev/null
+wait_for "the updated rules to be applied" two_agents_converged
+EXIT_PEER="$($COMPOSE exec -T node-a iptables -t nat -S AWG_EGRESS \
+    | awk -v address="$NODE_A_SPARE" '$NF == address { for (i=1; i<NF; i++) if ($i == "-s") print $(i+1) }')"
+[ -n "$EXIT_PEER" ] || fail "no dedicated peer is pinned to the spare exit"
+$COMPOSE exec -T node-a iptables -I FORWARD 1 -i awg0 -s "$EXIT_PEER" -j DROP
+wait_for "the spare exit check to fail" address_has_outcome egress "$NODE_A_SPARE" unreachable
+health_is node-a healthy || fail "a failed dedicated exit check changed primary node health"
+address_has_outcome egress 172.28.0.11 reachable || fail "the other exit stopped passing traffic"
+$COMPOSE exec -T node-a iptables -D FORWARD -i awg0 -s "$EXIT_PEER" -j DROP
+wait_for "the spare exit to recover" address_has_outcome egress "$NODE_A_SPARE" reachable
 
 # The block that reads as perfectly healthy from the inside, and the reason the traffic check
 # exists at all: the handshake completes and nothing after it does. Arranged by dropping

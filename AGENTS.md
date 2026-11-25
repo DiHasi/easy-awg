@@ -850,17 +850,16 @@ never assert on a specific allocated address — assert on what the API returned
   it again once it is in charge.
 - `/api/metrics` answers on either panel, from that panel's own copy of the data, so scraping both
   double-counts every series. Scrape one, or the panel record.
-- Nothing verifies that a node's egress addresses still work. A probe checks the address clients
-  connect *to*, so an address the provider has stopped routing outbound leaves the node healthy
-  while the peers pinned to it reach nothing. The per-address observation in the status report is
-  the closest thing - what that address looked like from outside the last time the node asked -
-  and it is a diagnostic, not a check. A probe per egress address would be the real answer and is
-  a much larger thing: a probe's config is rendered by the panel and tied to one node, not to one
-  source address on it.
-- `e2e.sh` can cover a node's default egress address but not a per-peer pin: there is no client
-  container to pin, and the probe's peer is not reachable through the client endpoints by design.
-  What it asserts is the chain's contents and that traffic through the tunnel moves the default
-  rule's counter.
+- Per-address checks are diagnostic: they never select a secondary entry or change a peer's pin.
+  The primary `probe_results` alone feeds node health and availability totals. Additional entry
+  checks and dedicated exit checks live in `probe_address_results`; a failed entry handshake makes
+  its exit unknown. Each probe/exit has its own hidden client in `probe_egress_peers`, carried in
+  snapshots and backups; results and discovered entry addresses travel on the live stream. The
+  node must acknowledge the peer's revision before it can be checked. Never reuse one peer across
+  probes: WireGuard roaming would make simultaneous checks steal one another's endpoint. A full
+  subnet leaves exits without peers untested, and a long sequential scan needs a suitable stale
+  window. Configs are refreshed before each check so rotation settling still bounds use of an old
+  identity. `e2e.sh` checks both secondary entries and pinned exits, including isolated failures.
 - Egress addresses are IPv4 only, like the rest of the tunnel, and a changed pin applies to new
   connections: conntrack keeps the translation of the ones already established. Flushing it per
   peer would make a change immediate at the cost of dropping that person's live connections, and

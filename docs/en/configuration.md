@@ -32,6 +32,7 @@
 | `AWG_PROBE_HANDSHAKE_TIMEOUT_SECONDS` | How long a probe waits for one node's handshake. Default 15. |
 | `AWG_PROBE_CHECK_URLS` | What probes fetch through the tunnel, comma-separated; any answer counts. Default `http://1.1.1.1/cdn-cgi/trace`, `http://connectivitycheck.gstatic.com/generate_204`. `none` checks the handshake alone. |
 | `AWG_PROBE_TRAFFIC_TIMEOUT_SECONDS` | How long each of those has to answer. Default 8. |
+| `AWG_PROBE_EGRESS_CHECK_URLS` | Source-address echo services for exit checks, comma-separated. Plain IPv4 or Cloudflare `ip=` output; default `https://1.1.1.1/cdn-cgi/trace`, `https://api.ipify.org`. `none` disables exit checks. Uses the traffic timeout. |
 | `AWG_PANEL_ROLE` | `active` or `standby`, and only on an empty database: the live role is stored, so a promotion survives a restart. Default `active`. |
 | `AWG_PANEL_URL` | This panel's own base URL, as the other panel reaches it. Required to enroll a standby and required on one - without it a superseded panel can never be told. |
 | `AWG_PANEL_PUBLIC_IP` | What the panel record is pointed at when this panel takes over. |

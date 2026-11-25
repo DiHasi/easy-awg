@@ -89,7 +89,7 @@ public sealed class HandshakeProbe(NodeOptions options, TunnelTrafficCheck traff
 
             return Result(
                 target,
-                ProbeOutcomes.Unreachable,
+                target.EgressAddress is null ? ProbeOutcomes.Unreachable : ProbeOutcomes.Error,
                 null,
                 $"No handshake from {target.Address}:{target.Port.ToString(CultureInfo.InvariantCulture)} within "
                 + $"{((int)timeout.TotalSeconds).ToString(CultureInfo.InvariantCulture)}s.",
@@ -155,27 +155,32 @@ public sealed class HandshakeProbe(NodeOptions options, TunnelTrafficCheck traff
         // off as the full check.
         if (checkUrls.Count == 0)
         {
+            if (target.EgressAddress is not null)
+                return Result(target, ProbeOutcomes.Error, null, "Egress was not checked: no traffic check URL configured.", handshake: true);
             return Result(target, ProbeOutcomes.Reachable, handshakeMs, "Handshake only: no check URL configured.", handshake: true);
         }
 
-        var result = await traffic.CheckAsync(options.InterfaceName, checkUrls, trafficTimeout, cancellationToken);
+        var result = await traffic.CheckAsync(options.InterfaceName, checkUrls, trafficTimeout, cancellationToken,
+            checkSource: target.EgressAddress is not null, expectedSource: target.ExpectedEgressAddress);
         if (result.ProbeFault)
         {
             return Result(target, ProbeOutcomes.Error, null, result.Detail, handshake: true);
         }
 
-        return result.Passed
+        var checkedResult = result.Passed
             ? Result(target, ProbeOutcomes.Reachable, result.LatencyMs, result.Detail, handshake: true)
             : Result(
                 target,
                 ProbeOutcomes.Unreachable,
                 null,
-                $"Handshake completed, but no traffic came back through the tunnel ({result.Detail}).",
+                target.EgressAddress is not null && result.ObservedAddress is not null
+                    ? result.Detail : $"Handshake completed, but no traffic came back through the tunnel ({result.Detail}).",
                 handshake: true);
+        return checkedResult with { ObservedAddress = result.ObservedAddress };
     }
 
     private static ProbeResult Result(ProbeTarget target, string outcome, int? latencyMs, string? detail, bool? handshake = null)
-        => new(target.NodeId, target.Address, outcome, DateTimeOffset.UtcNow, latencyMs, detail, handshake);
+        => new(target.NodeId, target.Address, outcome, DateTimeOffset.UtcNow, latencyMs, detail, handshake, target.EgressAddress);
 
     private static string Tail(string? error)
     {

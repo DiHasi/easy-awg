@@ -136,10 +136,24 @@ public sealed class ProbeLoop(
 
         // One at a time: they share one interface name, and checking nodes in parallel from one
         // host would measure the host's uplink as much as the nodes.
-        var results = new List<ProbeResult>(assignment.Targets.Length);
-        foreach (var target in assignment.Targets)
+        var targets = assignment.Targets.Concat(assignment.AddressTargets ?? []).ToArray();
+        var results = new List<ProbeResult>(targets.Length);
+        foreach (var scheduled in targets)
         {
-            var result = await probe.CheckAsync(target, timeout, checkUrls, trafficTimeout, cancellationToken);
+            // A pass over many addresses can outlast rotation settling. Refresh the config
+            // before each check so a long scan never keeps speaking a retired identity.
+            var (refreshOutcome, fresh) = await controlPlane.FetchAssignmentAsync(identity, cancellationToken);
+            if (fresh is null || refreshOutcome == FetchOutcome.IdentityRejected)
+            {
+                status.RecordError("Could not refresh the assignment before the next address check.");
+                return null;
+            }
+            var target = fresh.Targets.Concat(fresh.AddressTargets ?? []).FirstOrDefault(candidate =>
+                candidate.NodeId == scheduled.NodeId && candidate.EgressAddress == scheduled.EgressAddress
+                && (candidate.EgressAddress is not null || candidate.Address == scheduled.Address));
+            if (target is null) continue;
+            var urls = target.EgressAddress is null ? fresh.CheckUrls ?? checkUrls : fresh.EgressCheckUrls ?? [];
+            var result = await probe.CheckAsync(target, timeout, urls, trafficTimeout, cancellationToken);
             logger.LogInformation(
                 "{Address}:{Port} {Outcome}{Detail}",
                 target.Address,
@@ -147,10 +161,13 @@ public sealed class ProbeLoop(
                 result.Outcome,
                 result.LatencyMs is { } latency ? $" in {latency} ms" : result.Detail is null ? string.Empty : $" - {result.Detail}");
             results.Add(result);
+            // Publish as we go: many failing addresses must not hold a working node's primary
+            // check hostage until the last handshake timeout of the whole fleet has elapsed.
+            await controlPlane.ReportProbeAsync(identity,
+                new ProbeReport(AgentVersion.Current, DateTimeOffset.UtcNow, [result]), cancellationToken);
         }
 
         var report = new ProbeReport(AgentVersion.Current, DateTimeOffset.UtcNow, [.. results]);
-        await controlPlane.ReportProbeAsync(identity, report, cancellationToken);
         status.RecordRound(assignment.ProbeId, report.Results);
 
         return TimeSpan.FromSeconds(Math.Clamp(assignment.IntervalSeconds, 10, 3600));

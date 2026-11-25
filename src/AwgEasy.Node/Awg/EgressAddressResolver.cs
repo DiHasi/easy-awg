@@ -30,6 +30,15 @@ public sealed class EgressAddressResolver(ILogger<EgressAddressResolver> logger)
     /// </summary>
     private const string OutboundProbe = "1.1.1.1";
 
+    /// <summary>Public IPv4 addresses on every interface, including secondary addresses.</summary>
+    public async Task<string[]?> ListIngressAsync(CancellationToken cancellationToken)
+    {
+        var shown = await ProcessRunner.TryRunAsync("ip", ["-4", "addr", "show"], input: null, cancellationToken);
+        return shown is { ExitCode: 0 }
+            ? ParseAddresses(shown.Output).Where(address => PublicIpAddress.TryParse(address, out _)).ToArray()
+            : null;
+    }
+
     public async Task<EgressAddressSet?> ListAsync(string egressInterface, CancellationToken cancellationToken)
     {
         var shown = await ProcessRunner.TryRunAsync("ip", ["-4", "addr", "show", "dev", egressInterface], input: null, cancellationToken);

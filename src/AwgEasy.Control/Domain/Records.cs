@@ -121,7 +121,8 @@ public sealed record NodeRecord(
     int FailoverPriority = NodeRecord.DefaultFailoverPriority,
     bool AutoFailover = true,
     string? EgressPlan = null,
-    string? EgressReport = null)
+    string? EgressReport = null,
+    string? IngressReport = null)
 {
     /// <summary>Lower goes first. Left at this, nodes are tried in the order they enrolled.</summary>
     public const int DefaultFailoverPriority = 100;

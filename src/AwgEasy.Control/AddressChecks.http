@@ -1,0 +1,14 @@
+@baseUrl = http://localhost:8080
+
+### Sign in; keep the returned session cookie for the reads below.
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{"username":"admin","password":"replace-with-your-password"}
+
+### Read discovered entry and exit addresses with individual probe evidence.
+@nodeId = replace-with-a-node-id
+GET {{baseUrl}}/api/nodes/{{nodeId}}/addresses
+
+### An unknown node returns node_not_found.
+GET {{baseUrl}}/api/nodes/missing-node/addresses

@@ -1,4 +1,5 @@
 import NodeEgressModal from '~/components/NodeEgressModal.vue'
+import NodeAddressesModal from '~/components/NodeAddressesModal.vue'
 import NodeFailoverModal from '~/components/NodeFailoverModal.vue'
 import NodePeersModal from '~/components/NodePeersModal.vue'
 import NodeSettingsModal from '~/components/NodeSettingsModal.vue'
@@ -17,6 +18,7 @@ export function useNodeActions() {
   const settingsDialog = overlay.create(NodeSettingsModal)
   const egressDialog = overlay.create(NodeEgressModal)
   const peersDialog = overlay.create(NodePeersModal)
+  const addressesDialog = overlay.create(NodeAddressesModal)
   const { dns, refresh } = useFleetState()
 
   const busyId = ref<string | null>(null)
@@ -148,5 +150,9 @@ export function useNodeActions() {
     await peersDialog.open({ node })
   }
 
-  return { busyId, activate, revoke, remove, editFailover, editSettings, editEgress, showPeers }
+  async function showAddresses(node: Node) {
+    await addressesDialog.open({ node })
+  }
+
+  return { busyId, activate, revoke, remove, editFailover, editSettings, editEgress, showPeers, showAddresses }
 }

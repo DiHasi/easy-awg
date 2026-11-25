@@ -133,7 +133,8 @@ public sealed class PanelSnapshotRepository(Database database)
                 reader.GetString("public_key"),
                 reader.GetInt64("received_bytes"),
                 reader.GetInt64("transmitted_bytes"),
-                reader.GetTimestamp("reset_at")))]);
+                reader.GetTimestamp("reset_at")))],
+            [..Query(connection, "SELECT * FROM probe_egress_peers ORDER BY probe_id, node_id, address", ProbePathRepository.Read)]);
     }
 
     // ------------------------------------------------------------------------ build: the stream
@@ -163,7 +164,8 @@ public sealed class PanelSnapshotRepository(Database database)
                 reader.GetTimestampOrNull("last_seen_at"),
                 reader.GetStringOrNull("last_error"),
                 reader.GetTimestampOrNull("last_up_at"),
-                reader.GetStringOrNull("egress_report")))],
+                reader.GetStringOrNull("egress_report"),
+                reader.GetStringOrNull("ingress_report")))],
             [..Query(connection, "SELECT id, agent_version, last_seen_at FROM probes", reader => new PanelProbeStateRow(
                 reader.GetString("id"),
                 reader.GetStringOrNull("agent_version"),
@@ -226,7 +228,8 @@ public sealed class PanelSnapshotRepository(Database database)
                 (rows, cursor, more) => new PanelProbeAvailabilityBatch(rows, cursor, more)),
             ReadHistory(connection, "availability_checks", cursors.AvailabilityChecks, batchSize,
                 AvailabilityCheckRepository.Read,
-                (rows, cursor, more) => new PanelAvailabilityCheckBatch(rows, cursor, more)));
+                (rows, cursor, more) => new PanelAvailabilityCheckBatch(rows, cursor, more)),
+            [..Query(connection, "SELECT * FROM probe_address_results", ProbeAddressRepository.Read)]);
     }
 
     /// <summary>
@@ -535,6 +538,10 @@ public sealed class PanelSnapshotRepository(Database database)
                 ("$enrolledAt", panel.EnrolledAt.ToStorage()));
         }
 
+        ReplaceAll(connection, transaction, "probe_egress_peers", snapshot.EgressPeers ?? [],
+            "INSERT INTO probe_egress_peers VALUES ($probe, $node, $address, $client, $revision)",
+            row => [("$probe", row.ProbeId), ("$node", row.NodeId), ("$address", row.Address),
+                ("$client", row.ClientId), ("$revision", row.Revision)]);
         transaction.Commit();
     }
 
@@ -559,14 +566,14 @@ public sealed class PanelSnapshotRepository(Database database)
                 UPDATE nodes
                    SET agent_version = $version, status = $status, applied_revision = $revision,
                        interface_up = $up, backend = $backend, bundle_schema_version = $schema,
-                       public_ip = $publicIp, egress_report = $egressReport,
+                       public_ip = $publicIp, egress_report = $egressReport, ingress_report = $ingressReport,
                        last_seen_at = $lastSeen, last_error = $error, last_up_at = $lastUp
                  WHERE id = $id
                 """,
                 ("$id", node.Id), ("$version", node.AgentVersion), ("$status", node.Status),
                 ("$revision", node.AppliedRevision), ("$up", node.InterfaceUp ? 1 : 0),
                 ("$backend", node.Backend), ("$schema", node.BundleSchemaVersion),
-                ("$publicIp", node.PublicIp), ("$egressReport", node.EgressReport),
+                ("$publicIp", node.PublicIp), ("$egressReport", node.EgressReport), ("$ingressReport", node.IngressReport),
                 ("$lastSeen", node.LastSeenAt.ToStorage()),
                 ("$error", node.LastError), ("$lastUp", node.LastUpAt.ToStorage()));
         }
@@ -626,6 +633,17 @@ public sealed class PanelSnapshotRepository(Database database)
                 ("$handshake", row.Handshake is null ? null : row.Handshake.Value ? 1 : 0),
                 ("$latency", row.LatencyMs), ("$detail", row.Detail)
             ]);
+
+        ReplaceAll(connection, transaction, "probe_address_results", stream.AddressResults ?? [],
+            """
+            INSERT INTO probe_address_results
+                (probe_id, node_id, direction, address, ingress_address, outcome, checked_at, handshake, latency_ms, detail, observed_address)
+            VALUES ($probe, $node, $direction, $address, $ingress, $outcome, $at, $handshake, $latency, $detail, $observed)
+            """,
+            row => [("$probe", row.ProbeId), ("$node", row.NodeId), ("$direction", row.Direction),
+                ("$address", row.Address), ("$ingress", row.IngressAddress), ("$outcome", row.Outcome),
+                ("$at", row.CheckedAt.ToStorage()), ("$handshake", row.Handshake is { } handshake ? handshake ? 1 : 0 : null),
+                ("$latency", row.LatencyMs), ("$detail", row.Detail), ("$observed", row.ObservedAddress)]);
 
         foreach (var row in stream.Usage.Rows)
         {

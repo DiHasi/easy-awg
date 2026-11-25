@@ -69,7 +69,9 @@ public static class ProbeApi
             string probeId,
             HttpContext context,
             AgentAuthenticator authenticator,
-            ProbeRepository repository) =>
+            ProbeRepository repository,
+            ProbeAddressRepository addressChecks,
+            NodeRepository nodes) =>
         {
             var probe = await authenticator.AuthenticateProbeAsync(context);
             if (probe is null)
@@ -101,10 +103,14 @@ public static class ProbeApi
             // The panel's clock, not the probe's: staleness is judged here, and a probe with a
             // wandering clock must not be able to keep its results fresh forever.
             var now = DateTimeOffset.UtcNow;
+            var stamped = report.Results.Select(result => result with { CheckedAt = now }).ToArray();
+            addressChecks.Record(probe.Id, stamped, now);
+            var primary = nodes.List().ToDictionary(node => node.Id, node => node.PublicIp);
             repository.RecordRound(
                 probe.Id,
                 report.AgentVersion,
-                report.Results.Select(result => result with { CheckedAt = now }),
+                stamped.Where(result => result.EgressAddress is null
+                    && primary.TryGetValue(result.NodeId, out var address) && result.Address == address),
                 now);
 
             return Results.NoContent();

@@ -26,6 +26,7 @@ const emit = defineEmits<{
   settings: []
   egress: []
   peers: []
+  addresses: []
 }>()
 
 const state = computed(() => describeNode(props.node))
@@ -68,6 +69,7 @@ const reachability = computed(() => {
 
 const menu = computed(() => {
   const groups: DropdownMenuItem[][] = []
+  groups.push([{ label: 'Address checks', icon: 'i-lucide-radar', onSelect: () => emit('addresses') }])
   if (!props.node.revoked) {
     groups.push([
       { label: 'Peers on this node', icon: 'i-lucide-users', onSelect: () => emit('peers') },

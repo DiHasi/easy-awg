@@ -15,6 +15,8 @@ namespace AwgEasy.Control;
 /// </summary>
 public sealed class ProbeService(
     ProbeRepository probes,
+    ProbePathRepository paths,
+    ProbeAddressRepository addressChecks,
     ClientRepository clients,
     NodeRepository nodes,
     AvailabilityRepository availability,
@@ -63,12 +65,18 @@ public sealed class ProbeService(
     {
         var current = fleet.Current;
         var client = clients.FindProbeClient(probe.ClientId);
+        var fleetNodes = nodes.List();
+        var exitChecks = options.Failover.ProbeEgressCheckUrls ?? FailoverOptions.DefaultEgressCheckUrls;
+        var exits = client is { Enabled: true } ? paths.Ensure(probe, current, exitChecks.Count > 0 ? fleetNodes : []) : [];
+        // Ensure may have added peers. Configs use the unchanged identity, but assignments must
+        // wait for the node to apply the revision containing the extra peer and its SNAT rule.
+        current = fleet.Current;
 
         // Every node that could carry traffic: not revoked, and with an address to aim at. The
         // active one and the standbys alike - a standby nobody has checked is not a standby.
         var targets = client is null || !client.Enabled
             ? []
-            : nodes.List()
+            : fleetNodes
                 .Where(node => !node.Revoked && !string.IsNullOrWhiteSpace(node.PublicIp))
                 .Select(node => new ProbeTarget(
                     node.Id,
@@ -77,13 +85,45 @@ public sealed class ProbeService(
                     ClientConfigRenderer.RenderProbe(current, client, node.PublicIp!)))
                 .ToArray();
 
+        var additional = new List<ProbeTarget>();
+        if (client is { Enabled: true })
+        {
+            var observations = addressChecks.List();
+            foreach (var node in fleetNodes.Where(node => !node.Revoked))
+            {
+                var entries = NodeIngress.Addresses(node);
+                foreach (var entry in entries.Where(entry => entry != node.PublicIp))
+                    additional.Add(new(node.Id, entry, current.ListenPort, ClientConfigRenderer.RenderProbe(current, client, entry)));
+
+                // Prefer an entry the probe has actually reached. An entry that cannot handshake
+                // makes the exit unknown, never failed: it did not get as far as checking it.
+                var ingress = observations.Where(row => row.ProbeId == probe.Id && row.NodeId == node.Id
+                        && row.Direction == "ingress" && row.Outcome == ProbeOutcomes.Reachable
+                        && DateTimeOffset.UtcNow - row.CheckedAt <= options.Failover.ProbeStaleAfter
+                        && entries.Contains(row.Address, StringComparer.Ordinal))
+                    .OrderByDescending(row => row.CheckedAt).Select(row => row.Address).FirstOrDefault()
+                    ?? entries.FirstOrDefault();
+                if (ingress is null) continue;
+                foreach (var path in exits.Where(path => path.NodeId == node.Id && path.Revision <= node.AppliedRevision))
+                {
+                    if (clients.FindProbeClient(path.ClientId) is not { Enabled: true } peer) continue;
+                    var observed = ReportedEgress.Read(node.EgressReport).First(address => address.Address == path.Address).Observed;
+                    var expected = observed ?? (PublicIpAddress.TryParse(path.Address, out _) ? path.Address : null);
+                    additional.Add(new(node.Id, ingress, current.ListenPort,
+                        ClientConfigRenderer.RenderProbe(current, peer, ingress), path.Address, expected));
+                }
+            }
+        }
+
         return new ProbeAssignment(
             probe.Id,
             (int)options.Failover.ProbeInterval.TotalSeconds,
             (int)options.Failover.ProbeHandshakeTimeout.TotalSeconds,
             targets,
             [.. options.Failover.ProbeCheckUrls],
-            (int)options.Failover.ProbeTrafficTimeout.TotalSeconds);
+            (int)options.Failover.ProbeTrafficTimeout.TotalSeconds,
+            [.. additional],
+            [.. options.Failover.ProbeEgressCheckUrls ?? FailoverOptions.DefaultEgressCheckUrls]);
     }
 
     /// <summary>
@@ -103,6 +143,8 @@ public sealed class ProbeService(
             fleet.BumpRevision($"probe {probe.Name} revoked");
         }
 
+        if (paths.Remove(probeId: id)) fleet.BumpRevision($"probe {probe.Name} egress peers revoked");
+
         events.Record("probe.revoked", $"Probe '{probe.Name}' revoked.", actor: actor);
         return true;
     }
@@ -116,6 +158,7 @@ public sealed class ProbeService(
         }
 
         availability.ForgetProbe(id);
+        if (paths.Remove(probeId: id)) fleet.BumpRevision($"probe {probe.Name} egress peers deleted");
 
         var client = clients.FindProbeClient(probe.ClientId);
         if (client is not null && clients.Delete(client.Id))

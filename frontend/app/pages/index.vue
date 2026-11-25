@@ -654,6 +654,7 @@ usePolling(refresh, 10000)
         @settings="nodeActions.editSettings"
         @egress="nodeActions.editEgress"
         @peers="nodeActions.showPeers"
+        @addresses="nodeActions.showAddresses"
         @new-peer="openCreate()"
         @enroll="enrollOpen = true"
       />

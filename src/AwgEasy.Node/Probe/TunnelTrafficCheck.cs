@@ -3,12 +3,13 @@ using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using AwgEasy.Contracts;
 
 namespace AwgEasy.Node;
 
 /// <param name="Passed">Something answered through the tunnel.</param>
 /// <param name="ProbeFault">The probe could not run the check at all; says nothing about the node.</param>
-public sealed record TrafficResult(bool Passed, bool ProbeFault, int? LatencyMs, string? Detail);
+public sealed record TrafficResult(bool Passed, bool ProbeFault, int? LatencyMs, string? Detail, string? ObservedAddress = null);
 
 /// <summary>
 /// Fetches a resource through the probe's tunnel, after the handshake has completed.
@@ -34,16 +35,21 @@ public sealed class TunnelTrafficCheck(ILogger<TunnelTrafficCheck> logger)
         string interfaceName,
         IReadOnlyList<string> urls,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool checkSource = false,
+        string? expectedSource = null)
     {
         string? lastFailure = null;
+        string? observed = null;
+        string? mismatch = null;
+        var invalidEcho = false;
 
         // Any one answering is enough: the point is whether traffic flows, not whether a given
         // site is up, so a second address keeps one outage from reading as a blocked node.
         foreach (var url in urls)
         {
             using var handler = CreateHandler(interfaceName);
-            using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+            using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan, MaxResponseContentBufferSize = 4096 };
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             deadline.CancelAfter(timeout);
 
@@ -52,6 +58,29 @@ public sealed class TunnelTrafficCheck(ILogger<TunnelTrafficCheck> logger)
             {
                 // Any status at all: a 404 or a redirect still came back through the tunnel.
                 using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+                if (checkSource)
+                {
+                    // Echo bodies are small. Loading with a limit also bounds a service that
+                    // accidentally returns a page instead of an address.
+                    await response.Content.LoadIntoBufferAsync(4096, deadline.Token);
+                    var body = await response.Content.ReadAsStringAsync(deadline.Token);
+                    var seen = ObservedAddress(body);
+                    if (!response.IsSuccessStatusCode || seen is null)
+                    {
+                        invalidEcho = true;
+                        lastFailure = $"{url}: did not return a source IPv4 address.";
+                        continue;
+                    }
+                    observed = seen;
+                    if (expectedSource is not null && observed != expectedSource)
+                    {
+                        mismatch = $"Traffic left as {observed}, expected {expectedSource}.";
+                        lastFailure = mismatch;
+                        continue;
+                    }
+                    return new TrafficResult(true, false, (int)clock.ElapsedMilliseconds,
+                        $"Traffic passed through the tunnel; seen from outside as {observed}.", observed);
+                }
                 return new TrafficResult(true, false, (int)clock.ElapsedMilliseconds, $"{url} answered {(int)response.StatusCode}.");
             }
             catch (Exception exception) when (FindProbeFault(exception) is { } fault)
@@ -70,7 +99,15 @@ public sealed class TunnelTrafficCheck(ILogger<TunnelTrafficCheck> logger)
             logger.LogDebug("Nothing came back through {InterfaceName}: {Failure}", interfaceName, lastFailure);
         }
 
-        return new TrafficResult(false, false, null, lastFailure);
+        return new TrafficResult(false, invalidEcho && observed is null, null, mismatch ?? lastFailure, observed);
+    }
+
+    internal static string? ObservedAddress(string body)
+    {
+        if (EgressAddress.TryParse(body.Trim(), out var address)) return address;
+        foreach (var line in body.Split('\n', StringSplitOptions.TrimEntries))
+            if (line.StartsWith("ip=", StringComparison.Ordinal) && EgressAddress.TryParse(line[3..], out address)) return address;
+        return null;
     }
 
     /// <summary>

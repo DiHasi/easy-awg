@@ -144,6 +144,7 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
         // node that answered and carries nothing.
         EnsureColumn(connection, "nodes", "egress_plan", "TEXT NULL");
         EnsureColumn(connection, "nodes", "egress_report", "TEXT NULL");
+        EnsureColumn(connection, "nodes", "ingress_report", "TEXT NULL");
 
         // And NULL here is a peer that leaves through whatever its node's default is, which is
         // every peer that existed before the column did.
@@ -620,6 +621,30 @@ public sealed class Database(ControlOptions options, ILogger<Database> logger)
             probe_availability_cursor TEXT NULL,
             created_at            TEXT    NOT NULL,
             updated_at            TEXT    NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS probe_egress_peers (
+            probe_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            address TEXT NOT NULL,
+            client_id TEXT NOT NULL UNIQUE,
+            revision INTEGER NOT NULL,
+            PRIMARY KEY (probe_id, node_id, address)
+        );
+
+        CREATE TABLE IF NOT EXISTS probe_address_results (
+            probe_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            address TEXT NOT NULL,
+            ingress_address TEXT NOT NULL,
+            observed_address TEXT NULL,
+            outcome TEXT NOT NULL,
+            checked_at TEXT NOT NULL,
+            handshake INTEGER NULL,
+            latency_ms INTEGER NULL,
+            detail TEXT NULL,
+            PRIMARY KEY (probe_id, node_id, direction, address)
         );
 
         CREATE TABLE IF NOT EXISTS probe_results (

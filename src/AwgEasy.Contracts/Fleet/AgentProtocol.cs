@@ -37,6 +37,10 @@ public sealed record EnrollResponse(
 /// two are not the same thing, and conflating them would forget a node's addresses over one
 /// failed lookup.
 /// </param>
+/// <param name="IngressAddresses">
+/// Public IPv4 addresses discovered on all host interfaces. The panel adds PublicIp, including
+/// an explicitly configured NAT address. Null preserves the last discovery; empty withdraws it.
+/// </param>
 public sealed record NodeStatusReport(
     long AppliedRevision,
     bool InterfaceUp,
@@ -48,7 +52,8 @@ public sealed record NodeStatusReport(
     string? LastError,
     int BundleSchemaVersion = 0,
     string? PublicIp = null,
-    ReportedEgressAddress[]? EgressAddresses = null);
+    ReportedEgressAddress[]? EgressAddresses = null,
+    string[]? IngressAddresses = null);
 
 /// <summary>
 /// One address the node's egress interface carries, and what the outside makes of it.
@@ -113,6 +118,9 @@ public static class BundleSchema
     /// fact serving it perfectly well.
     /// </summary>
     public const int Schema3ObfuscationVersion = 2;
+
+    /// <summary>The schema that added source-address pins and node egress defaults.</summary>
+    public const int EgressVersion = 3;
 
     public static int Normalize(int reported)
         => reported <= 0

@@ -157,7 +157,8 @@ public sealed record FailoverOptions(
     TimeSpan ProbeInterval,
     TimeSpan ProbeHandshakeTimeout,
     IReadOnlyList<string> ProbeCheckUrls,
-    TimeSpan ProbeTrafficTimeout)
+    TimeSpan ProbeTrafficTimeout,
+    IReadOnlyList<string>? ProbeEgressCheckUrls = null)
 {
     /// <summary>
     /// Plain HTTP, and an address literal first: nothing to resolve and no certificate to trust,
@@ -168,6 +169,9 @@ public sealed record FailoverOptions(
         "http://1.1.1.1/cdn-cgi/trace",
         "http://connectivitycheck.gstatic.com/generate_204"
     ];
+
+    public static readonly string[] DefaultEgressCheckUrls =
+    ["https://1.1.1.1/cdn-cgi/trace", "https://api.ipify.org"];
 
     public static FailoverOptions FromEnvironment(Func<string, string?> value, Func<string, int, int> readInt)
         => new(
@@ -181,7 +185,8 @@ public sealed record FailoverOptions(
             // WireGuard retries a handshake every five seconds; this is three attempts.
             TimeSpan.FromSeconds(readInt("AWG_PROBE_HANDSHAKE_TIMEOUT_SECONDS", 15)),
             ReadUrls(value("AWG_PROBE_CHECK_URLS")),
-            TimeSpan.FromSeconds(readInt("AWG_PROBE_TRAFFIC_TIMEOUT_SECONDS", 8)));
+            TimeSpan.FromSeconds(readInt("AWG_PROBE_TRAFFIC_TIMEOUT_SECONDS", 8)),
+            value("AWG_PROBE_EGRESS_CHECK_URLS") is { } urls ? ReadUrls(urls) : DefaultEgressCheckUrls);
 
     /// <summary>Unset uses the defaults. "none" switches the traffic check off, leaving the handshake alone.</summary>
     private static string[] ReadUrls(string? raw)

@@ -332,6 +332,33 @@ export type EgressLabel = {
  * Which source addresses one node hands out. A peer picks a label, never an address: addresses
  * belong to a node, and a peer has to keep what it was given when failover moves it elsewhere.
  */
+export type NodeAddresses = {
+  nodeId: string
+  port: number
+  ingress: AddressStatus[]
+  egress: AddressStatus[]
+}
+
+export type AddressStatus = {
+  address: string
+  outcome: 'reachable' | 'unreachable' | 'unknown'
+  checkedAt: string | null
+  probes: AddressProbe[]
+}
+
+export type AddressProbe = {
+  probeId: string
+  probeName: string
+  ingressAddress: string
+  outcome: 'reachable' | 'unreachable' | 'error'
+  checkedAt: string
+  fresh: boolean
+  handshake: boolean | null
+  latencyMs: number | null
+  detail: string | null
+  observedAddress: string | null
+}
+
 export type NodeEgressPlan = {
   /** What everyone who asked for nothing else leaves with; null leaves the choice to the kernel. */
   defaultAddress?: string | null

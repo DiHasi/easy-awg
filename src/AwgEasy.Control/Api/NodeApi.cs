@@ -1,5 +1,6 @@
 using System.Globalization;
 using AwgEasy.Contracts;
+using Microsoft.AspNetCore.Http.HttpResults;
 
 namespace AwgEasy.Control;
 
@@ -9,6 +10,13 @@ public static class NodeApi
 {
     public static void MapNodes(this RouteGroupBuilder admin)
     {
+        admin.MapGet("/nodes/{id}/addresses", Results<Ok<NodeAddressesResponse>, NotFound<ApiError>> (
+            string id, NodeRepository nodes, AddressCheckService checks) =>
+                nodes.Find(id) is { } node
+                    ? TypedResults.Ok(checks.Describe(node, DateTimeOffset.UtcNow))
+                    : TypedResults.NotFound(new ApiError("node_not_found", "Node was not found.")))
+            .WithName("GetNodeAddressChecks")
+            .WithSummary("Read tunnel checks for every discovered entry and exit address");
         admin.MapGet("/nodes", (
             NodeRepository nodes,
             FleetService fleet,
@@ -310,6 +318,8 @@ public static class NodeApi
             string id,
             NodeRepository nodes,
             ProbeRepository probes,
+            ProbePathRepository paths,
+            FleetService fleet,
             AvailabilityRepository availability,
             DnsFailoverService failover,
             EventLog events,
@@ -321,6 +331,7 @@ public static class NodeApi
             }
 
             probes.ForgetNode(id);
+            if (paths.Remove(nodeId: id)) fleet.BumpRevision("node egress probe peers deleted");
             availability.ForgetNode(id);
 
             // The DNS record may still point here - the panel cannot unpoint it on the operator's

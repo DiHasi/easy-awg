@@ -10,6 +10,7 @@ public sealed class FleetService(
     FleetRepository fleet,
     ClientRepository clients,
     NodeRepository nodes,
+    ProbePathRepository probePaths,
     IAwgKeyGenerator keys,
     ControlOptions options,
     EventLog events,
@@ -144,7 +145,7 @@ public sealed class FleetService(
         // point of labelling them - after failover a peer keeps what it was given rather than an
         // address that only existed on the node it came from.
         var egress = NodeEgressPlan.Read(node.EgressPlan);
-        if (schemaVersion < DesiredStateBundle.CurrentSchemaVersion)
+        if (schemaVersion < BundleSchema.EgressVersion)
         {
             if (!egress.IsEmpty)
             {
@@ -160,12 +161,15 @@ public sealed class FleetService(
             egress = NodeEgressPlan.None;
         }
 
+        var paths = probePaths.List().ToDictionary(path => path.ClientId);
         var peers = clients.ListEnabled()
+            .Where(client => !paths.TryGetValue(client.Id, out var path) || path.NodeId == node.Id)
             .Select(client => new BundlePeer(
                 client.PublicKey,
                 client.PresharedKey,
                 client.Address,
-                egress.Resolve(client.EgressLabel)))
+                schemaVersion >= BundleSchema.EgressVersion && paths.TryGetValue(client.Id, out var path)
+                    ? path.Address : egress.Resolve(client.EgressLabel)))
             .ToArray();
 
         var bundle = new DesiredStateBundle(

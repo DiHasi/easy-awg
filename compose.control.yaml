@@ -59,6 +59,7 @@ services:
       # as the whole check, which reads the common block - first handshake through, everything
       # after it dropped - as a healthy node.
       AWG_PROBE_CHECK_URLS: "${AWG_PROBE_CHECK_URLS:-}"
+      AWG_PROBE_EGRESS_CHECK_URLS: "${AWG_PROBE_EGRESS_CHECK_URLS:-}"
       AWG_PROBE_TRAFFIC_TIMEOUT_SECONDS: "${AWG_PROBE_TRAFFIC_TIMEOUT_SECONDS:-}"
       # Where the panel says a node got blocked, went down or recovered, and that traffic moved.
       AWG_NOTIFY_WEBHOOK_URL: "${AWG_NOTIFY_WEBHOOK_URL:-}"
