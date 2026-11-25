@@ -42,6 +42,7 @@ public sealed class TunnelTrafficCheck(ILogger<TunnelTrafficCheck> logger)
         string? lastFailure = null;
         string? observed = null;
         string? mismatch = null;
+        int? mismatchLatency = null;
         var invalidEcho = false;
 
         // Any one answering is enough: the point is whether traffic flows, not whether a given
@@ -74,7 +75,8 @@ public sealed class TunnelTrafficCheck(ILogger<TunnelTrafficCheck> logger)
                     observed = seen;
                     if (expectedSource is not null && observed != expectedSource)
                     {
-                        mismatch = $"Traffic left as {observed}, expected {expectedSource}.";
+                        mismatch = $"Traffic passed through the tunnel; seen as {observed}. The node reported {expectedSource} for this source address; different routing or NAT may explain the difference.";
+                        mismatchLatency = (int)clock.ElapsedMilliseconds;
                         lastFailure = mismatch;
                         continue;
                     }
@@ -99,7 +101,9 @@ public sealed class TunnelTrafficCheck(ILogger<TunnelTrafficCheck> logger)
             logger.LogDebug("Nothing came back through {InterfaceName}: {Failure}", interfaceName, lastFailure);
         }
 
-        return new TrafficResult(false, invalidEcho && observed is null, null, mismatch ?? lastFailure, observed);
+        if (mismatch is not null)
+            return new TrafficResult(true, false, mismatchLatency, mismatch, observed);
+        return new TrafficResult(false, invalidEcho && observed is null, null, lastFailure, observed);
     }
 
     internal static string? ObservedAddress(string body)

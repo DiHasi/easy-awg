@@ -24,7 +24,7 @@ usePolling(load, 10000)
 const sections = computed(() => checks.value
   ? [
       { title: 'Entry addresses', direction: 'ingress', addresses: checks.value.ingress, description: `AWG handshake and traffic on port ${checks.value.port}. The primary address still decides node failover.` },
-      { title: 'Exit addresses', direction: 'egress', addresses: checks.value.egress, description: 'Traffic through a dedicated tunnel peer pinned to each source address, checked against an IP echo service.' }
+      { title: 'Exit addresses', direction: 'egress', addresses: checks.value.egress, description: 'Traffic through a dedicated tunnel peer pinned to each source address, checked against an IP echo service. The outside IP may differ because of routing or NAT.' }
     ]
   : [])
 

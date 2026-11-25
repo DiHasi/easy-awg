@@ -112,6 +112,7 @@ public sealed class EgressAddressReporter(
 
         using var handler = new SocketsHttpHandler
         {
+            UseProxy = false,
             ConnectCallback = async (context, token) =>
             {
                 var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
