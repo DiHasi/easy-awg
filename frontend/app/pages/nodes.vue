@@ -199,8 +199,6 @@ async function copyRecord() {
       </div>
     </AppCard>
 
-    <AvailabilityCard />
-
     <FailoverCard />
 
     <PanelsCard />

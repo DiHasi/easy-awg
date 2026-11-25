@@ -5,7 +5,7 @@ import type { AvailabilityReset, AvailabilitySummary, NodeAvailability, UsageWin
 /**
  * How the fleet has stood, rather than how it stands.
  *
- * The node cards above answer what is wrong right now, which is what matters while something is
+ * The node cards answer what is wrong right now, which is what matters while something is
  * burning. This answers the slower questions: whether the node that just recovered has been
  * flapping all week, and - from the probe rows - which network a block is actually in. That second
  * one is the only place in the panel where "blocked" gets an answer naming a vantage point, and it
@@ -67,7 +67,7 @@ watch([view, span], () => {
 
 const recording = computed(() => (history.value?.retentionDays ?? 0) > 0)
 
-/** Nodes in the order the cards above read them, so the two lists line up. */
+/** Keep the history in the same order as the node list. */
 const rows = computed(() => {
   const order = new Map(nodes.value.map((node, index) => [node.id, index]))
   return [...(history.value?.nodes ?? [])]
@@ -103,7 +103,7 @@ function share(value?: number | null) {
  * round out wrote a block across the whole fleet. What a bucket holds is a count, so there is
  * nothing to edit - only the whole claim to withdraw.
  *
- * It touches nothing but the panel's own record: the states on the cards above are judged from
+ * It touches nothing but the panel's own record: the node states are judged from
  * current evidence, no node hears about it, and the next check starts the history again.
  */
 async function clearHistory(node?: NodeAvailability) {
@@ -248,7 +248,7 @@ usePolling(load, 60000)
       icon="i-lucide-eye-off"
       title="The panel is not recording a history"
       description="AWG_AVAILABILITY_RETENTION_DAYS is 0, so no record is kept of how nodes stood.
-        The states on the cards above are judged live and keep working. Set it to a number of days
+        The states on the Nodes page are judged live and keep working. Set it to a number of days
         and restart the panel to record one."
     />
 
